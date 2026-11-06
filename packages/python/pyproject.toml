@@ -34,7 +34,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 guardian = "odingard_guardian.hermes:register"
 
 [project.urls]
-Homepage = "https://guardian.odingard.com"
+Homepage = "https://odingard.com/guardian"
 Source = "https://github.com/Odingard/guardian-sdk/tree/main/packages/python"
 Issues = "https://github.com/Odingard/guardian-sdk/issues"
 
