@@ -1,0 +1,55 @@
+{
+  "name": "@odingard/guardian-steel",
+  "version": "0.1.0",
+  "description": "Guardian for Steel — govern a Steel browser agent's checkout through Guardian: ALLOW/ASK/DENY before the order is placed, a portable receipt after.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:zod --external:@odingard/guardian-sdk --outfile=dist/index.js && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "peerDependencies": {
+    "@odingard/guardian-sdk": "^0.2.0 || ^0.3.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "guardian",
+    "steel",
+    "browser-agent",
+    "authorization",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/steel"
+  },
+  "homepage": "https://guardian.odingard.com"
+}

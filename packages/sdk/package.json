@@ -1,0 +1,59 @@
+{
+  "name": "@odingard/guardian-sdk",
+  "version": "0.3.7",
+  "description": "Guardian agent SDK — Human Authority Infrastructure for Autonomous AI. Request governed capabilities and execute consequential actions under human authority.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist-dts/contracts-entry.d.ts",
+      "default": "./dist/contracts.js"
+    },
+    "./catalog.json": "./dist/public-catalog.v1.json"
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/index.js && esbuild src/contracts-entry.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/contracts.js && cp src/catalog/public-catalog.v1.json dist/ && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "guardian",
+    "ai-agents",
+    "authorization",
+    "authority",
+    "mcp",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://guardian.odingard.com"
+}

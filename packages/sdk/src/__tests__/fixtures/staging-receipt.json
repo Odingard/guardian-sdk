@@ -1,0 +1,497 @@
+{
+  "format": "greceipt.v1",
+  "schemaVersion": 1,
+  "receiptId": "rcp_9564d41e58abb5a1c0809a3e58fb310e",
+  "issuedAtEpochMs": 1793728561631,
+  "subject": {
+    "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+    "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+    "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+    "requestId": "req_probe_w20_fix1",
+    "correlationId": "cor_probe_fix1"
+  },
+  "runtime": {
+    "interface": "rest",
+    "requestedAdapterId": "adp_00000002",
+    "adapterId": "adp_00000002"
+  },
+  "action": {
+    "schemaVersion": 1,
+    "requestId": "req_probe_w20_fix1",
+    "correlationId": "cor_probe_fix1",
+    "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+    "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+    "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+    "action": "api.request",
+    "resource": "api:endpoint:pcn_550334e72fb8650b558476c98a56bafd",
+    "interface": "rest",
+    "uses": 1,
+    "materialParameters": {
+      "url": "https://httpbin.org/anything/guardian-demo",
+      "method": "GET",
+      "schema": "odingard.guardian.api.request.v1",
+      "headers": [
+        {
+          "name": "accept",
+          "value": "application/json"
+        }
+      ],
+      "connectionId": "pcn_550334e72fb8650b558476c98a56bafd"
+    },
+    "initiatingContext": "agent",
+    "authority": {
+      "policy": {
+        "id": "pol_6a3855d6bc06e199e31850312e733582",
+        "version": 1
+      },
+      "evaluatedGrants": [
+        {
+          "id": "grt_bd27f746280f50a8aaffefe05938fd55",
+          "version": 1
+        }
+      ]
+    },
+    "issuedAtEpochMs": 1793482978146,
+    "expiresAtEpochMs": 1793483098146,
+    "nonce": "nce_tCKwD6ev_WFhXbGDFQ1izAua",
+    "requestedAdapterId": "adp_00000002",
+    "purpose": "probe",
+    "materialDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332"
+  },
+  "delegationChain": [
+    {
+      "grantId": "grt_bd27f746280f50a8aaffefe05938fd55",
+      "version": 1
+    }
+  ],
+  "decision": {
+    "decision": "ALLOW",
+    "reasonCode": "AUTHORIZED",
+    "actionDecisionDigest": "e3914a957a070812a2149da03efa749a1f5f8364310c0cba21cada1361342d5b",
+    "decidedAtEpochMs": 1793483010740
+  },
+  "approval": null,
+  "capability": {
+    "capabilityId": "cap_FM2WXpUIpuj_CbGIl_SDf4ND",
+    "claims": {
+      "schemaVersion": 1,
+      "capabilityId": "cap_FM2WXpUIpuj_CbGIl_SDf4ND",
+      "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+      "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+      "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+      "requestId": "req_probe_w20_fix1",
+      "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+      "actionNonce": "nce_tCKwD6ev_WFhXbGDFQ1izAua",
+      "audience": "adp_00000002",
+      "policy": {
+        "id": "pol_6a3855d6bc06e199e31850312e733582",
+        "version": 1
+      },
+      "evaluatedGrants": [
+        {
+          "id": "grt_bd27f746280f50a8aaffefe05938fd55",
+          "version": 1
+        }
+      ],
+      "issuedAtEpochMs": 1793482978261,
+      "expiresAtEpochMs": 1793483098146,
+      "maxUses": 1,
+      "keyId": "key_00000001",
+      "algorithm": "HS256"
+    },
+    "claimsDigest": "14b6a92e178615e7e40a13185f73751eafaf6a4822cd19084a22f93e9a45a1f2",
+    "state": "used"
+  },
+  "execution": {
+    "schemaVersion": 1,
+    "attemptId": "att_a5c9c23a82a539e2f0d92442c685a965",
+    "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+    "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+    "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+    "requestId": "req_probe_w20_fix1",
+    "correlationId": "cor_probe_fix1",
+    "capabilityId": "cap_FM2WXpUIpuj_CbGIl_SDf4ND",
+    "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+    "adapterId": "adp_00000002",
+    "connectionId": "pcn_550334e72fb8650b558476c98a56bafd",
+    "provider": "api",
+    "profile": "api-bearer-request",
+    "effectKey": "8b487ced364686e23894d88de78675ddb38dee1a54c2e014f77d3d8c4eb39690",
+    "expectedProjectionDigest": "2cda4bea40273529c3c817437fdd2448610d52b5bded9795431dbd08509fe7a0",
+    "expectedEnvelopeDigest": "2cda4bea40273529c3c817437fdd2448610d52b5bded9795431dbd08509fe7a0",
+    "state": "verified",
+    "version": 8,
+    "reservedAtEpochMs": 1793483010063,
+    "updatedAtEpochMs": 1793483011176,
+    "commitDeadlineEpochMs": 1793483070063,
+    "commitLeaseDeadlineEpochMs": 1793483040805,
+    "reconcileDeadlineEpochMs": 1793483910805,
+    "lateReconcileDeadlineEpochMs": 1793569410805,
+    "commitLeaseIssued": true,
+    "providerObjectRef": {
+      "kind": "api-request",
+      "requestDigest": "2cda4bea40273529c3c817437fdd2448610d52b5bded9795431dbd08509fe7a0"
+    },
+    "sentRef": {
+      "kind": "api-response",
+      "status": 200,
+      "bodyBytes": 435,
+      "headersDigest": "4151806c78b9c25e40c5a010eca7de88ba807fe49100a60b54bf5df3d2e358f0",
+      "bodyDigest": "1a95a219e820f9a82619791132856e8eb32a0017c2c0d7f73492a3ef60dfea45",
+      "bodyPreview": "{\n  \"args\": {},\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Accept-Encoding\": \"br, gzip, deflate\",\n    \"Accept-Language\": \"*\",\n    \"Authorization\": \"Bearer demo-bearer-token\",\n    \"Host\": \"httpbin.org\",\n    \"Sec-Fetch-Mode\": \"cors\",\n    \"User-Age",
+      "truncated": false
+    },
+    "orphanDraftPossible": false,
+    "pendingOutcome": null,
+    "outcome": {
+      "kind": "verified",
+      "sentRef": {
+        "kind": "api-response",
+        "status": 200,
+        "bodyBytes": 435,
+        "headersDigest": "4151806c78b9c25e40c5a010eca7de88ba807fe49100a60b54bf5df3d2e358f0",
+        "bodyDigest": "1a95a219e820f9a82619791132856e8eb32a0017c2c0d7f73492a3ef60dfea45",
+        "bodyPreview": "{\n  \"args\": {},\n  \"headers\": {\n    \"Accept\": \"application/json\",\n    \"Accept-Encoding\": \"br, gzip, deflate\",\n    \"Accept-Language\": \"*\",\n    \"Authorization\": \"Bearer demo-bearer-token\",\n    \"Host\": \"httpbin.org\",\n    \"Sec-Fetch-Mode\": \"cors\",\n    \"User-Age",
+        "truncated": false
+      },
+      "observedDigest": "2cda4bea40273529c3c817437fdd2448610d52b5bded9795431dbd08509fe7a0",
+      "effectDigest": "0e4c407ea445bc7233e29729f43657b15433bf6e268c1855622d9dbd387679a0",
+      "level": "post-commit-content",
+      "observedAtEpochMs": 1793483011106
+    }
+  },
+  "effect": {
+    "kind": "verified",
+    "terminalEvent": "EFFECT_VERIFIED",
+    "failureCode": null,
+    "effectDigest": "0e4c407ea445bc7233e29729f43657b15433bf6e268c1855622d9dbd387679a0",
+    "failureDigest": null
+  },
+  "evidence": {
+    "chain": [
+      {
+        "schemaVersion": 1,
+        "id": "evd_2328623f68661c69f8690c2f841005e0",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793482978146,
+        "event": {
+          "eventType": "AUTHENTICATION_RECORDED",
+          "payload": {
+            "interface": "rest",
+            "outcome": "authenticated",
+            "credentialReference": "credential:agt_6a3855d6bc06e199e31850312e733582"
+          }
+        },
+        "sequence": 1,
+        "previousRecordHash": null,
+        "payloadDigest": "7b21633f42fb7dc7e25f399f92ecc85ffcc11ba1adbbfbe2be5cde969ad48ab8",
+        "recordHash": "fe7ac9009ee0280b65918caa5b61d5de9eb20c47f830d7effc9f7dccba87cb7e"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_f5253703165aad829515fea999f29675",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793482978146,
+        "event": {
+          "eventType": "REQUEST_RECEIVED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332"
+          }
+        },
+        "sequence": 2,
+        "previousRecordHash": "fe7ac9009ee0280b65918caa5b61d5de9eb20c47f830d7effc9f7dccba87cb7e",
+        "payloadDigest": "060225ef778c388f6c33a7242a5f3b72ccc9d3b852508bfe978025dde315cc5b",
+        "recordHash": "7aabea99d5ea8325b71bdd1fcf755fbba78cc36209f9072a80db8bde058bad78"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_6fa03025c8dc2d8922c7621e84773594",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793482978146,
+        "event": {
+          "eventType": "ACTION_NORMALIZED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332"
+          }
+        },
+        "sequence": 3,
+        "previousRecordHash": "7aabea99d5ea8325b71bdd1fcf755fbba78cc36209f9072a80db8bde058bad78",
+        "payloadDigest": "7a03d909d7cb84f4a18c0a3e22448c464574d9556df8d63be57c8445c8f688aa",
+        "recordHash": "851dd87db35067579176fbc52f08d53a75cde1cc841c0b1d90ce2e991c3673a2"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_4c6ce63f2b173a266fb021517ac4b75e",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793482978240,
+        "event": {
+          "eventType": "DECISION_RECORDED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "actionDecisionDigest": "f08b0fafd1d049f266c9eb3e8713754b03e62fbb5d1aa0e736956275ca39b848",
+            "decision": "ALLOW",
+            "reasonCode": "AUTHORIZED"
+          }
+        },
+        "sequence": 4,
+        "previousRecordHash": "851dd87db35067579176fbc52f08d53a75cde1cc841c0b1d90ce2e991c3673a2",
+        "payloadDigest": "a9e8ac26f59a8b60d2c20c0f9b453c2893bf990f34b00095dc4b12d9f182c50e",
+        "recordHash": "f8430a185650040ff84b0026b90814c955e0cd868e63fb89477dfae5e952ebec"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_23dae1304afaefdb3cfe83a1d4d839ec",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793482978279,
+        "event": {
+          "eventType": "CAPABILITY_STATE_REFERENCED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "capabilityId": "cap_FM2WXpUIpuj_CbGIl_SDf4ND",
+            "state": "issued",
+            "capabilityDigest": "14b6a92e178615e7e40a13185f73751eafaf6a4822cd19084a22f93e9a45a1f2"
+          }
+        },
+        "sequence": 5,
+        "previousRecordHash": "f8430a185650040ff84b0026b90814c955e0cd868e63fb89477dfae5e952ebec",
+        "payloadDigest": "86be7e1fc91c0d3ec665ed64737cc6ffb77b98d3ccfcfd823df9d00df36d0e4f",
+        "recordHash": "39b5f45dd83117de068d6e3c8b08ef9dd1c654135f259a2ca1c0f8c3a25b5699"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_acaa8261ffdb001f2a27953386527321",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483009966,
+        "event": {
+          "eventType": "AUTHENTICATION_RECORDED",
+          "payload": {
+            "interface": "rest",
+            "outcome": "authenticated",
+            "credentialReference": "credential:agt_6a3855d6bc06e199e31850312e733582"
+          }
+        },
+        "sequence": 6,
+        "previousRecordHash": "39b5f45dd83117de068d6e3c8b08ef9dd1c654135f259a2ca1c0f8c3a25b5699",
+        "payloadDigest": "7b21633f42fb7dc7e25f399f92ecc85ffcc11ba1adbbfbe2be5cde969ad48ab8",
+        "recordHash": "a9f48231afa282cc1813eb04554dd02f2a3c24ce52cee678991cdee788731bf6"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_7935a316b9919de4b9d3eb59cfccaff5",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010020,
+        "event": {
+          "eventType": "ADAPTER_AUTHENTICATION_RECORDED",
+          "payload": {
+            "adapterId": "adp_00000002",
+            "outcome": "authenticated",
+            "credentialReference": "adc_adp_00000002"
+          }
+        },
+        "sequence": 7,
+        "previousRecordHash": "a9f48231afa282cc1813eb04554dd02f2a3c24ce52cee678991cdee788731bf6",
+        "payloadDigest": "675d126183b7753d389dccd2b4856c8d7a269ed3f16829d9e1b23cd74b7ab734",
+        "recordHash": "790589680f3669e0f06198d6e1ca82284e10c7c29dcbf00549a6fad7dc5ec365"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_e0dca712570061c407d5193230081a87",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010102,
+        "event": {
+          "eventType": "DECISION_RECORDED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "actionDecisionDigest": "5497d301b42ceb87cd12a074bec2d235e8c2eb1ac2b6ccb11c341c4b7dadea93",
+            "decision": "ALLOW",
+            "reasonCode": "AUTHORIZED"
+          }
+        },
+        "sequence": 8,
+        "previousRecordHash": "790589680f3669e0f06198d6e1ca82284e10c7c29dcbf00549a6fad7dc5ec365",
+        "payloadDigest": "94134532744f7fcef0e50926a6d3d35d4ba73cf9b5975f7c6ec5adf3aa169088",
+        "recordHash": "537d620232a6f09c58b709b33a63ad6f2c42ca5c99915bcc299347f2f2c46a2a"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_c878f6bfd5fdc22e0c52ac1da8273f40",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010143,
+        "event": {
+          "eventType": "CAPABILITY_STATE_REFERENCED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "capabilityId": "cap_FM2WXpUIpuj_CbGIl_SDf4ND",
+            "state": "used",
+            "capabilityDigest": "14b6a92e178615e7e40a13185f73751eafaf6a4822cd19084a22f93e9a45a1f2"
+          }
+        },
+        "sequence": 9,
+        "previousRecordHash": "537d620232a6f09c58b709b33a63ad6f2c42ca5c99915bcc299347f2f2c46a2a",
+        "payloadDigest": "5ed18e665e83af88a573748ed48c2f0bff927d09eb5b8184095e5f9e8f1ad952",
+        "recordHash": "c94c69ac63b8f22e08069fcf95ac74eca2ad3a06927b7744b8f598db449bc79d"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_572058639917b8a3de89e67d162c227c",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010165,
+        "event": {
+          "eventType": "EXECUTION_ATTEMPTED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "adapterId": "adp_00000002",
+            "attemptReference": "att_a5c9c23a82a539e2f0d92442c685a965",
+            "idempotencyDigest": "8b487ced364686e23894d88de78675ddb38dee1a54c2e014f77d3d8c4eb39690"
+          }
+        },
+        "sequence": 10,
+        "previousRecordHash": "c94c69ac63b8f22e08069fcf95ac74eca2ad3a06927b7744b8f598db449bc79d",
+        "payloadDigest": "9d66185572814c9bd548866b1d7afa898910c3c474e10fdfc65c45512a4cf862",
+        "recordHash": "5a27b2a5a2ad0d6e6e79533807c035d6250fb2e46afa1237e39716f267fe5960"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_e38899c03f9768870eb16def58a335e8",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010626,
+        "event": {
+          "eventType": "EFFECT_PREPARED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "adapterId": "adp_00000002",
+            "attemptReference": "att_a5c9c23a82a539e2f0d92442c685a965",
+            "preparedDigest": "2cda4bea40273529c3c817437fdd2448610d52b5bded9795431dbd08509fe7a0"
+          }
+        },
+        "sequence": 11,
+        "previousRecordHash": "5a27b2a5a2ad0d6e6e79533807c035d6250fb2e46afa1237e39716f267fe5960",
+        "payloadDigest": "abb41a0c542987ea0076cdb464785abe7b5052de0cae2870fc035609582bcc46",
+        "recordHash": "b35b2850d21e6763381df760b045142164e7a9cc452be20c900f5afb5c771ead"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_c18043a1a0a9450be4d990b828e384c0",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010740,
+        "event": {
+          "eventType": "DECISION_RECORDED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "actionDecisionDigest": "e3914a957a070812a2149da03efa749a1f5f8364310c0cba21cada1361342d5b",
+            "decision": "ALLOW",
+            "reasonCode": "AUTHORIZED"
+          }
+        },
+        "sequence": 12,
+        "previousRecordHash": "b35b2850d21e6763381df760b045142164e7a9cc452be20c900f5afb5c771ead",
+        "payloadDigest": "e492dc12cfb45ceea62464fa21ab993504a09799de8e9a643dc3a43be24735aa",
+        "recordHash": "1d943922120e7b80979d14cce67712001937e4ccecd4586789a1bc14ba71ff93"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_38dc909d1497e624a27b90bfb78e929f",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483010769,
+        "event": {
+          "eventType": "EFFECT_COMMIT_AUTHORIZED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "adapterId": "adp_00000002",
+            "attemptReference": "att_a5c9c23a82a539e2f0d92442c685a965",
+            "actionDecisionDigest": "e3914a957a070812a2149da03efa749a1f5f8364310c0cba21cada1361342d5b"
+          }
+        },
+        "sequence": 13,
+        "previousRecordHash": "1d943922120e7b80979d14cce67712001937e4ccecd4586789a1bc14ba71ff93",
+        "payloadDigest": "d390c4a856ac4aff1c969e32fe77c817a0c71a9c8989f7531b876688d62e3fba",
+        "recordHash": "c2048a8d0a349e6eacf07763b88314b116ed9e76dd4da363a6701178aa9ac327"
+      },
+      {
+        "schemaVersion": 1,
+        "id": "evd_5cbc85f6e74693a414a31f885949d5b9",
+        "tenantId": "ten_39bfa66919336db210f70fe30b3941ce",
+        "principalId": "pri_d7086ca79f7a90bfcc076fe0cfadf36a",
+        "agentId": "agt_6a3855d6bc06e199e31850312e733582",
+        "requestId": "req_probe_w20_fix1",
+        "correlationId": "cor_probe_fix1",
+        "eventTimeEpochMs": 1793483011145,
+        "event": {
+          "eventType": "EFFECT_VERIFIED",
+          "payload": {
+            "actionDigest": "1dde270efeb49f53e708793e4379d12d4a5335fe44bef69f1009a0618de14332",
+            "adapterId": "adp_00000002",
+            "attemptReference": "att_a5c9c23a82a539e2f0d92442c685a965",
+            "effectDigest": "0e4c407ea445bc7233e29729f43657b15433bf6e268c1855622d9dbd387679a0"
+          }
+        },
+        "sequence": 14,
+        "previousRecordHash": "c2048a8d0a349e6eacf07763b88314b116ed9e76dd4da363a6701178aa9ac327",
+        "payloadDigest": "f76e4e2ba94830ae9a3038a8bfc50e86c6d5a7d74efff97462465f67525b61fd",
+        "recordHash": "1f85345b4654c7aa93a2b8a767609520e4a7662bc5326c5473ecf174b7ae004a"
+      }
+    ],
+    "recordCount": 14,
+    "headRecordHash": "1f85345b4654c7aa93a2b8a767609520e4a7662bc5326c5473ecf174b7ae004a"
+  },
+  "generatedBy": "guardian-control-plane",
+  "proof": {
+    "algorithm": "Ed25519",
+    "canonicalization": "guardian-canonical-json.v1",
+    "domain": "odingard.guardian.receipt.v1",
+    "keyId": "rkey_3738e9ecd697bd93c579ae3c6a9e7255",
+    "signature": "lyIsXgQ0xl5w7lGwsh4FG4GlILyR8d-nTk-C8uYpUixdXTyUuhU6NYZ-F-A1lZf6qDuyJrLOrhq3WRsmAYPGDw"
+  }
+}

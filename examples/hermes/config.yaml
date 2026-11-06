@@ -1,0 +1,43 @@
+# Guardian for Hermes Agent: merge this into Hermes' config.yaml
+# (~/.hermes/config.yaml, or $HERMES_HOME/config.yaml; on Maritime's hermes
+# template that is /opt/data/config.yaml).
+#
+# Needs `pip install odingard-guardian` in the Python environment Hermes runs
+# from, and GUARDIAN_AGENT_CREDENTIAL, GUARDIAN_CONNECTION_ID and
+# GUARDIAN_HOOK_ASK_CONNECTION_ID in Hermes' environment (or its .env file).
+
+plugins:
+  enabled:
+    - guardian # the pre_tool_call hook shipped by odingard-guardian
+  # Hermes blocks the tool call when a pre_tool_call hook runs longer than this
+  # (default 30 s, which leaves about 12 s for an approval: the hook keeps room
+  # for its last check and the redeem, up to 8 s each). 130 s lets the hook wait
+  # about 1m50s. Below 17 s every governed call is blocked.
+  hook_callback_timeout: 130
+
+# Optional, MCP tools: put each stdio MCP server behind guardian-mcp instead of
+# (not as well as) the hook. Then set GUARDIAN_HERMES_MCP=proxy so the hook
+# leaves mcp__* tools to the proxy and each call is decided once.
+# Hermes passes a stdio server only PATH, HOME and a few basics plus its own
+# `env`, so the Guardian settings must be listed here. ${VAR} is read from
+# Hermes' environment / .env; an unset one is dropped and guardian-mcp then
+# refuses every call (fail closed). The hook moves GUARDIAN_AGENT_CREDENTIAL
+# out of Hermes' environment, so the proxy reads its own copy,
+# GUARDIAN_MCP_AGENT_CREDENTIAL, which tools can read (see the README).
+mcp_servers:
+  github:
+    command: npx
+    args:
+      [
+        "-y",
+        "@odingard/guardian-mcp",
+        "proxy",
+        "--",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github",
+      ]
+    env:
+      GUARDIAN_AGENT_CREDENTIAL: "${GUARDIAN_MCP_AGENT_CREDENTIAL}"
+      GUARDIAN_CONNECTION_ID: "${GUARDIAN_MCP_CONNECTION_ID}"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"

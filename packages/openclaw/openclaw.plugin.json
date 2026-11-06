@@ -1,0 +1,49 @@
+{
+  "id": "guardian",
+  "name": "Guardian",
+  "description": "Sends every consequential tool call to Guardian for an ALLOW / ASK / DENY decision before it runs. Deploys, destructive commands, messages and MCP calls wait for a person. Fails closed.",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "connectionId": {
+        "type": "string",
+        "description": "Guardian record-only connection for everyday tools (Allow). Falls back to GUARDIAN_CONNECTION_ID."
+      },
+      "askConnectionId": {
+        "type": "string",
+        "description": "Guardian record-only connection for tools that need a person (Ask). Falls back to GUARDIAN_HOOK_ASK_CONNECTION_ID."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Guardian API base URL (https). Default https://guardian-api.odingard.com."
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Label approvers see. Default \"OpenClaw\"."
+      },
+      "approvalTimeoutMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 300000,
+        "description": "How long an ASK waits for a person. Default and maximum 300000."
+      },
+      "allowTierTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Extra Guardian tool names (e.g. openclaw.tool_call) to send to the everyday connection."
+      }
+    }
+  },
+  "uiHints": {
+    "connectionId": {
+      "label": "Everyday connection id",
+      "placeholder": "pcn_..."
+    },
+    "askConnectionId": {
+      "label": "Needs-approval connection id",
+      "placeholder": "pcn_..."
+    }
+  }
+}

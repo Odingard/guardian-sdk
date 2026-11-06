@@ -1,0 +1,18 @@
+{
+  "description": "Guardian decides Codex shell commands, apply_patch file edits and MCP calls before they run.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch)$|^mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "guardian-hook codex || { s=$?; [ $s -eq 2 ] || echo \"Guardian hook failed to run. Nothing ran.\" >&2; exit 2; }",
+            "timeout": 600,
+            "statusMessage": "Guardian is checking this action"
+          }
+        ]
+      }
+    ]
+  }
+}

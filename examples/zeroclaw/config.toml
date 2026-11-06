@@ -1,0 +1,66 @@
+# ZeroClaw + Guardian. Merge into your ZeroClaw config.toml.
+#
+# Status: LIVE recipe, not yet proven on a running ZeroClaw. The fields below
+# come from ZeroClaw's own docs (docs/book/src/tools/mcp.md, tools/overview.md,
+# security/autonomy.md at zeroclaw-labs/zeroclaw master a66cc98).
+#
+# Replace "assistant" with your agent's alias, and "assistant_risk" with the
+# risk profile that agent uses (agents.<alias>.risk_profile).
+
+# --- 1. Every MCP server goes through guardian-mcp -------------------------
+#
+# A remote server (Composio, Maritime Computers …): do NOT use ZeroClaw's own
+# transport = "http"/"sse" for it, because that path reaches the server
+# directly and Guardian never sees the call. Use a stdio entry that runs
+# guardian-mcp with --url instead. The API key stays in guardian-mcp's env;
+# ZeroClaw stores `env` encrypted.
+[[mcp.servers]]
+name = "composio"
+transport = "stdio"
+# Absolute paths: see README "Node in the ZeroClaw image".
+command = "/usr/local/bin/node"
+args = [
+  "/opt/guardian-mcp/node_modules/@odingard/guardian-mcp/dist/index.js",
+  "proxy",
+  # The URL Composio's generate step returned (Composio says not to build it
+  # yourself). Maritime Computers: "https://mcp.maritime.sh/mcp" with
+  # "Authorization: Bearer ${MARITIME_API_KEY}".
+  "--url", "<COMPOSIO_MCP_URL>",
+  "--header", "x-api-key: ${COMPOSIO_API_KEY}",
+]
+env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gac1.…", GUARDIAN_CONNECTION_ID = "pcn_…", COMPOSIO_API_KEY = "…" }
+
+# A local stdio server: put guardian-mcp in front of the original command.
+[[mcp.servers]]
+name = "files"
+transport = "stdio"
+command = "/usr/local/bin/node"
+args = [
+  "/opt/guardian-mcp/node_modules/@odingard/guardian-mcp/dist/index.js",
+  "proxy", "--",
+  "/usr/local/bin/node", "/opt/servers/filesystem/dist/index.js", "/zeroclaw-data/workspace",
+]
+env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gac1.…", GUARDIAN_CONNECTION_ID = "pcn_…" }
+
+# Grant ONLY the wrapped servers to the agent. A server left out of every
+# bundle is never connected (ZeroClaw: "omission is not a grant").
+[mcp_bundles.governed]
+servers = ["composio", "files"]
+
+[agents.assistant]
+mcp_bundles = ["governed"]
+risk_profile = "assistant_risk"
+
+# --- 2. Switch off the built-ins Guardian cannot see -----------------------
+#
+# A non-empty allowed_tools is a closed set for built-ins; MCP tools
+# (<server>__<tool>) are still auto-admitted, which is why step 1 must wrap
+# every granted server. Keep only read-only built-ins. shell, file_write,
+# file_edit, http_request, web_fetch, browser, cron_*, schedule, delegate /
+# spawn_subagent, memory_store and skill tools are then unavailable.
+[risk_profiles.assistant_risk]
+allowed_tools = ["file_read", "glob_search", "content_search", "memory_recall"]
+# Belt and braces: if allowed_tools is ever emptied (which ZeroClaw reads as
+# "no restriction"), these still prompt, and on a surface with no approver
+# (Maritime's headless gateway) a prompt fails closed.
+always_ask = ["shell", "file_write", "file_edit", "http_request", "web_fetch", "browser", "cron_add", "schedule"]

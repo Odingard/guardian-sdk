@@ -1,0 +1,28 @@
+# Optional: deliver the Guardian hook as a managed hook, trusted by policy,
+# so it runs without /hooks review or --dangerously-bypass-hook-trust and
+# user/project hooks cannot replace it. Codex reads requirements.toml from
+# its managed config location (see Codex's "Managed configuration" docs);
+# the Linux path is not confirmed here. Install the hook binary at the
+# absolute path below with your image or device management.
+
+allow_managed_hooks_only = true
+
+[features]
+hooks = true
+# Turn off unified exec so exec_command runs one-shot and write_stdin is not
+# offered: Codex runs no PreToolUse hook for write_stdin, so input sent to an
+# open session would never reach Guardian. Per Codex's source only managed
+# requirements can keep this off (spec_plan.rs add_shell_tools).
+unified_exec = false
+
+[hooks]
+managed_dir = "/opt/guardian"
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch)$|^mcp__.*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = '/opt/guardian/guardian-hook codex || { s=$?; [ $s -eq 2 ] || echo "Guardian hook failed to run. Nothing ran." >&2; exit 2; }'
+timeout = 600
+statusMessage = "Guardian is checking this action"

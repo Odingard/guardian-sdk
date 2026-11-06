@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch)$|^mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "guardian-hook dsh || { s=$?; [ $s -eq 2 ] || echo \"Guardian hook failed to run. Nothing ran.\" >&2; exit 2; }",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

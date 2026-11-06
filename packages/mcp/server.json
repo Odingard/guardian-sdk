@@ -1,0 +1,58 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.Odingard/guardian-mcp",
+  "description": "Routes agent tool calls through Guardian for ALLOW/ASK/DENY before execution.",
+  "version": "0.3.2",
+  "tools": [
+    {
+      "name": "guardian_invoke_tool",
+      "description": "Propose a tool call for authority evaluation. ALLOW executes and returns the receipt; ASK returns a requestId held for human approval; DENY refuses with a reason code."
+    },
+    {
+      "name": "guardian_claim",
+      "description": "Claim an approved ASK by requestId, execute it, and return the receipt."
+    },
+    {
+      "name": "guardian_receipt",
+      "description": "Fetch the machine-readable evidence receipts for a request."
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/Odingard/guardian-sdk",
+    "source": "github",
+    "subfolder": "packages/mcp"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@odingard/guardian-mcp",
+      "version": "0.3.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GUARDIAN_BASE_URL",
+          "description": "Guardian control-plane base URL",
+          "isRequired": true
+        },
+        {
+          "name": "GUARDIAN_AGENT_CREDENTIAL",
+          "description": "Agent credential (gak_…)",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "GUARDIAN_CONNECTION_ID",
+          "description": "Default tool connection id for invocations",
+          "isRequired": true
+        },
+        {
+          "name": "GUARDIAN_ADAPTER_ID",
+          "description": "Optional adapter override",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

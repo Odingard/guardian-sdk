@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odingard-guardian"
+version = "0.1.4"
+description = "Guardian SDK for Python — Human Authority Infrastructure for Autonomous AI. Deterministic ALLOW/ASK/DENY before your agent's actions run, human approval for ASK, and offline-verifiable receipts."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.9.2"
+authors = [{ name = "Odingard" }]
+keywords = ["guardian", "ai-agents", "authorization", "authority", "human-in-the-loop", "mcp", "agentic-commerce"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.25,<1",
+  "cryptography>=41",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+# Hermes Agent discovers this as the plugin "guardian"; it stays off until
+# listed in Hermes' plugins.enabled.
+[project.entry-points."hermes_agent.plugins"]
+guardian = "odingard_guardian.hermes:register"
+
+[project.urls]
+Homepage = "https://guardian.odingard.com"
+Source = "https://github.com/Odingard/guardian-sdk/tree/main/packages/python"
+Issues = "https://github.com/Odingard/guardian-sdk/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/odingard_guardian"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

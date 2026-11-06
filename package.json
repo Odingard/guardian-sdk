@@ -1,0 +1,26 @@
+{
+  "name": "guardian-sdk-workspace",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/sdk",
+    "packages/mcp",
+    "packages/hook",
+    "packages/openclaw",
+    "packages/langchain",
+    "packages/vercel-ai",
+    "packages/steel",
+    "examples"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "fixtures:python": "esbuild packages/python/scripts/gen-fixtures.ts --bundle --platform=node --format=esm --target=node22 --external:zod --log-level=warning --outfile=packages/python/scripts/.gen-fixtures.mjs && node packages/python/scripts/.gen-fixtures.mjs && rm packages/python/scripts/.gen-fixtures.mjs && esbuild packages/python/scripts/gen-vba-fixtures.ts --bundle --platform=node --format=esm --target=node22 --external:zod --log-level=warning --outfile=packages/python/scripts/.gen-vba.mjs && node packages/python/scripts/.gen-vba.mjs && rm packages/python/scripts/.gen-vba.mjs",
+    "test:python": "cd packages/python && $( [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3 ) -m pytest -q"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "plugins": {
+    "entries": {
+      "guardian": {
+        "enabled": true,
+        "hooks": {
+          "timeouts": {
+            "before_tool_call": 330000
+          }
+        },
+        "config": {
+          "connectionId": "pcn_REPLACE_EVERYDAY",
+          "askConnectionId": "pcn_REPLACE_NEEDS_APPROVAL",
+          "agentName": "Maritime OpenClaw agent"
+        }
+      }
+    }
+  }
+}
