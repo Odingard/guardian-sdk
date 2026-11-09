@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -65,10 +66,7 @@ describe("npm config the Gateway's HOME would give npm", () => {
 
   it("the global config (<node prefix>/etc/npmrc, or npm_config_globalconfig / _prefix) is covered", () => {
     fx = protectedInstall();
-    const prefix = join(fx.root, "node");
-    mkdirSync(join(prefix, "etc"), { recursive: true, mode: 0o755 });
-    chmodSync(prefix, 0o755);
-    chmodSync(join(prefix, "etc"), 0o755);
+    const prefix = fx.nodePrefix;
     expect(problems(fx, { nodePrefix: prefix })).toEqual([]);
     chmodSync(join(prefix, "etc"), 0o777);
     expect(problems(fx, { nodePrefix: prefix }).join("\n")).toContain(
@@ -91,6 +89,33 @@ describe("npm config the Gateway's HOME would give npm", () => {
     expect(
       problems(fx, { env: env2, nodePrefix: prefix }).join("\n"),
     ).toContain(join(fx.root, "p", "etc", "npmrc"));
+  });
+
+  it("a writable global npm config location blocks", () => {
+    fx = protectedInstall();
+    const etc = join(fx.nodePrefix, "etc");
+    const global = join(etc, "npmrc");
+    expect(problems(fx)).toEqual([]);
+    // etc/ writable: npmrc could be created there.
+    chmodSync(etc, 0o777);
+    expect(problems(fx).join("\n")).toContain(
+      `${etc} (can create an npm config file ${global})`,
+    );
+    // The prefix itself writable: etc/ could be renamed and replaced.
+    chmodSync(etc, 0o755);
+    chmodSync(fx.nodePrefix, 0o777);
+    expect(problems(fx).join("\n")).toContain(
+      `${fx.nodePrefix} (can rename an npm config file)`,
+    );
+    // A group-writable prefix blocks for a member of its group only.
+    const gid = statSync(fx.nodePrefix).gid;
+    chmodSync(fx.nodePrefix, 0o775);
+    expect(checkInstallIntegrity({ ...fx.install, gids: [gid] }).ok).toBe(
+      false,
+    );
+    expect(checkInstallIntegrity({ ...fx.install, gids: [gid + 1] }).ok).toBe(
+      true,
+    );
   });
 
   it("npmConfigFiles follows npm 10's defaults", () => {

@@ -3,6 +3,7 @@ import {
   chownSync,
   mkdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -142,7 +143,8 @@ describe("install integrity: a writable install blocks every tool call", () => {
     fx = protectedInstall();
     const file = join(fx.pluginDir, "dist", "index.js");
     chmodSync(file, 0o664);
-    const gid = process.getgid?.() ?? 0;
+    // The file's own group (a setgid tmp dir may give it one other than ours).
+    const gid = statSync(file).gid;
     expect(checkInstallIntegrity({ ...fx.install, gids: [gid] }).ok).toBe(
       false,
     );
