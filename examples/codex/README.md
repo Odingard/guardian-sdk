@@ -15,6 +15,8 @@ Guardian before it runs (input typed into an already open session with
 Guardian sees the command, or for a patch only its target paths and
 operations plus a size and SHA-256 digest. It never sees file contents.
 
+Status: tested with simulated Codex payloads and a stand-in Guardian (the Codex tests in `packages/hook`, and `node agent-hooks.mjs codex`). **Not yet proven live:** no real Codex run against a real Guardian yet, locally or hosted.
+
 ## SIMULATED: see what Codex would receive (no account needed)
 
 ```bash

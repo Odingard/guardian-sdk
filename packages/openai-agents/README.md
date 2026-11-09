@@ -6,7 +6,7 @@ runs. The agent proposes; the human decides.
 
 **Tested, but not yet proven against a live Guardian and a live model.** The
 tests run the real Agents SDK runner with a scripted model and a stubbed
-Guardian client. Not yet published to npm.
+Guardian client.
 
 ## Install
 

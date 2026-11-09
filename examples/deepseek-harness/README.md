@@ -12,6 +12,8 @@ tools the matcher in `guardian-hooks.json` names, so keep it as shipped:
 - anything denied, or not approved within 5 minutes, does not run;
 - every allowed call leaves a receipt you can verify offline.
 
+Status: tested with simulated dsh payloads and a stand-in Guardian (the dsh tests in `packages/hook`, and `node agent-hooks.mjs dsh`). **Not yet proven live:** no real dsh agent run against a real Guardian yet, locally or hosted.
+
 ## SIMULATED: see what dsh would receive (no account needed)
 
 ```bash

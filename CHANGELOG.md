@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## sdk 0.3.8 / guardian-mcp 0.3.3 / guardian-hook 0.3.0 / guardian-langchain, guardian-vercel-ai 0.3.2 / guardian-openai-agents 0.1.0 / Python 0.1.5, released 2026-11-09
 
 ### Added: OpenAI Agents SDK
 
-- **`@odingard/guardian-openai-agents` 0.1.0** (new, unpublished): an adapter for the OpenAI Agents SDK (TypeScript, `@openai/agents` 0.21.x; tested against 0.21.0). `guardianTool` / `createGuardianTool` take the same options as the SDK's `tool()` and send every call to Guardian before `execute` runs.
+- **`@odingard/guardian-openai-agents` 0.1.0** (new; tested, not yet proven live): an adapter for the OpenAI Agents SDK (TypeScript, `@openai/agents` 0.21.x; tested against 0.21.0). `guardianTool` / `createGuardianTool` take the same options as the SDK's `tool()` and send every call to Guardian before `execute` runs.
   - ALLOW runs `execute` once with the arguments Guardian saw, then redeems the capability and records the receipt. ASK does not run the tool: by default the run ends with `GuardianApprovalPending` (found with `findApprovalPending`), and `pending.resume()` runs it once after a person approves; `onAsk: "result"` keeps the run going instead. DENY never runs the tool and tells the model plainly.
   - Fails closed: a Guardian error, network failure, timeout or cancelled call never runs the tool, and a late answer is ignored. Text the model writes is never read as a decision.
   - Two modes: `inProcess` (default, your `execute` runs after ALLOW) and `remote` (Guardian performs the call itself).

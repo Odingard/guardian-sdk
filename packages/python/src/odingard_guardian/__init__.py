@@ -39,7 +39,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 __all__ = [
     "DEFAULT_RECEIPT_MAX_AGE_MS",
