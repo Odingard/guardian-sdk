@@ -103,6 +103,48 @@ function unavailableMessage(toolName: string): string {
   return `Guardian could not check ${toolName}, so it did not run.`;
 }
 
+function executionFailedMessage(err: GuardianExecutionFailed): string {
+  if (err.localEffectRan) {
+    return (
+      `${err.toolName} ran, but Guardian could not record it ` +
+      `(${err.reasonCode}). Do not call it again; tell the user it ran ` +
+      `without a receipt.`
+    );
+  }
+  return (
+    `Guardian could not complete ${err.toolName} (${err.reasonCode}). ` +
+    `Do not call it again; tell the user so they can check.`
+  );
+}
+
+/**
+ * The Agents SDK renames tools: every character that is not a letter or a
+ * digit becomes "_" (its `toFunctionToolName`). Guardian sees that new
+ * name. A `modes` entry keyed by the name the developer wrote is moved to
+ * the new name so it still applies. Two entries that disagree are refused.
+ */
+function remapModes(
+  modes: GuardianAdapterOptions["modes"],
+  writtenName: string | undefined,
+  builtName: string,
+): GuardianAdapterOptions["modes"] {
+  if (!modes || !writtenName || writtenName === builtName) {
+    return modes;
+  }
+  if (!Object.prototype.hasOwnProperty.call(modes, writtenName)) {
+    return modes;
+  }
+  const written = modes[writtenName];
+  const hasBuilt = Object.prototype.hasOwnProperty.call(modes, builtName);
+  if (hasBuilt && modes[builtName] !== written) {
+    throw new Error(
+      `Guardian modes disagree for tool "${writtenName}" (the Agents SDK ` +
+        `names it "${builtName}"): set one entry`,
+    );
+  }
+  return { ...modes, [builtName]: written };
+}
+
 function buildTool(
   shared: Shared,
   toolOptions: ToolOptions<any, any, any>,
@@ -117,7 +159,7 @@ function buildTool(
   const timeoutMs = options.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
   // Every call is checked with the triad's own throw mode; this wrapper
   // decides what the model sees. DENY returns a refusal by default.
-  const coreOptions: GuardianAdapterOptions = {
+  let coreOptions: GuardianAdapterOptions = {
     ...options,
     mode: options.mode ?? "inProcess",
     installRecordTransport: options.installRecordTransport ?? false,
@@ -205,6 +247,11 @@ function buildTool(
     if (userErrorFunction === null || hasOutputSchema) {
       throw error;
     }
+    // Never tell the model to try again after Guardian was asked to run or
+    // record the call: the action may already have happened.
+    if (error instanceof GuardianExecutionFailed) {
+      return executionFailedMessage(error);
+    }
     return DEFAULT_TOOL_ERROR_MESSAGE;
   };
 
@@ -216,6 +263,10 @@ function buildTool(
     errorFunction,
   } as ToolOptions<any, any, any>) as FunctionTool<any, any, any>;
   toolName = built.name;
+  const modes = remapModes(options.modes, name, built.name);
+  if (modes !== options.modes) {
+    coreOptions = { ...coreOptions, ...(modes ? { modes } : {}) };
+  }
   return built;
 }
 

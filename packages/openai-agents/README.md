@@ -56,10 +56,26 @@ try {
 } catch (err) {
   const pending = findApprovalPending(err);
   if (!pending) throw err;
-  // pending.requestId: a person approves it in Guardian, then:
-  const { output, receipt } = await pending.resume();
+  // Show pending.requestId to a person. Poll until they decide or the
+  // request expires. The tool runs only after approval; a denial or expiry
+  // throws GuardianDenied.
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    try {
+      const { output, receipt } = await pending.resume();
+      console.log("approved", output, receipt);
+      break;
+    } catch (again) {
+      if (findApprovalPending(again)) continue;
+      console.log("not approved", again);
+      break;
+    }
+  }
 }
 ```
+
+`refund` stands for your own code. Nothing here has been run against a
+live Guardian or a live model.
 
 Register each tool once on the connection in the Guardian console
 (Connections → tool server → "My own code (record-only)") and allow it for
@@ -70,7 +86,9 @@ the agent.
 - `ALLOW` — Guardian issues a single-use capability. Your `execute` runs
   once with the call's arguments, then the capability is redeemed and a
   receipt recorded (`onReceipt` gets it). A failed redemption raises
-  `GuardianExecutionFailed` with `localEffectRan: true`.
+  `GuardianExecutionFailed` with `localEffectRan: true`. Without your own
+  `errorFunction`, the model is told the tool ran without a receipt and not
+  to call it again; it is never told to try again.
 - `ASK` — your `execute` does not run. By default the call throws
   `GuardianApprovalPending`; the Agents SDK ends the run with a
   `ToolCallError` that wraps it, and `findApprovalPending(err)` finds it.
@@ -111,7 +129,11 @@ ASK, DENY and Guardian failures are thrown to the tool's `errorFunction`
 In-process mode is decision-gated: `execute` runs after `ALLOW` and before
 the capability is redeemed, so a revocation at redemption lands after the
 effect. Use `mode: "remote"` where Guardian itself must hold the effect.
-`modes` sets the mode per tool name. `installRecordTransport: true` makes the
+`modes` sets the mode per tool name. The Agents SDK renames tools: every
+character that is not a letter or a digit becomes `_` (`refund-order`
+becomes `refund_order`), and Guardian sees the new name. A `modes` entry
+under the name you wrote is applied to the new name; two entries for the
+same tool that disagree are refused when the tool is built. `installRecordTransport: true` makes the
 adapter propose the record-only entry itself on first use (this needs a
 grant that allows it; production usually does not).
 

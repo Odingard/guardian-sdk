@@ -14,8 +14,7 @@
     "claude-agent-sdk": "node claude-agent-sdk.mjs",
     "remote-mcp": "node remote-mcp.mjs",
     "codex-hook": "node agent-hooks.mjs codex",
-    "dsh-hook": "node agent-hooks.mjs dsh",
-    "openai-agents": "node openai-agents.mjs"
+    "dsh-hook": "node agent-hooks.mjs dsh"
   },
   "dependencies": {
     "@odingard/guardian-sdk": "^0.3.0",
@@ -23,9 +22,6 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.318",
     "@odingard/guardian-hook": "^0.2.0",
     "@odingard/guardian-mcp": "^0.3.2",
-    "@modelcontextprotocol/sdk": "^1.32.2",
-    "@odingard/guardian-openai-agents": "^0.1.0",
-    "@openai/agents": "^0.21.0",
-    "zod": "^4.6.7"
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

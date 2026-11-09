@@ -2,16 +2,6 @@
 
 ## Unreleased
 
-### Added: OpenAI Agents SDK
-
-- **`@odingard/guardian-openai-agents` 0.1.0** (new, unpublished): `guardianTool` and `createGuardianTool`, drop-ins for the Agents SDK's `tool()` (`@openai/agents` 0.21) built on the shared triad in `@odingard/guardian-sdk`. Every call goes to Guardian before `execute` runs, with the arguments the SDK parsed from the call.
-  - ALLOW runs the tool once, then redeems the capability and records a receipt (in-process by default; `mode: "remote"` lets Guardian perform a registered call itself).
-  - ASK never runs the tool. By default the run ends with the pending approval (`findApprovalPending(err)` finds it inside the SDK's `ToolCallError`); `resume()` runs the tool once after a person approves, and never after a denial or expiry. `onAsk: "result"` tells the model it is waiting and hands the app the handle through `onApprovalPending`.
-  - DENY never runs the tool and returns a plain refusal to the model.
-  - A Guardian error, network failure, decision timeout (`decisionTimeoutMs`, default 30 s), the SDK's own tool timeout or a cancelled call never runs the tool, and a late ALLOW is ignored.
-  - Not yet proven live: tested against the real Agents SDK runner with a scripted model and a stubbed Guardian client. Hosted tools, computer, shell and apply-patch tools, handoffs and agents used as tools are not governed.
-- `examples/openai-agents.mjs` (LIVE: needs real keys).
-
 ### Added: Codex and DeepSeek Harness
 
 ### Not governed by the Codex and DeepSeek Harness hooks (read before relying on it)

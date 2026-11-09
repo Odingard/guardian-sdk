@@ -30,8 +30,10 @@ export class GuardianUnavailable extends Error {
  * good: the pending Guardian call is abandoned, and every later client call
  * and the tool itself are refused, so a late ALLOW can never run the tool.
  *
- * Once the tool starts (or Guardian is asked to execute it) the gate is
- * committed and stops interfering, so a started action is always recorded.
+ * Once the tool starts (or Guardian is asked to execute the tool call) the
+ * gate is committed and stops interfering, so a started action is always
+ * recorded. Executing a record-transport install does not commit the gate:
+ * the deadline and the abort signal still apply to the tool call after it.
  * Once the call has settled (for example an ASK handed back to the app),
  * the gate opens so `resume()` can claim the approval later.
  */
@@ -43,6 +45,7 @@ export class CallGate {
   #signal: AbortSignal | undefined;
   #onAbort: (() => void) | undefined;
   #rejecters = new Set<(err: unknown) => void>();
+  #installIds = new Set<string>();
 
   constructor(args: {
     client: GuardianClient;
@@ -88,13 +91,36 @@ export class CallGate {
           );
         });
       };
-    const request = decide((i: Parameters<GuardianClient["request"]>[0]) =>
-      client.request(i),
+    // Request ids of record-transport installs (mcp.install). Executing one
+    // of these only registers the tool; it is not the tool starting, so it
+    // keeps the deadline and the abort signal.
+    const installIds = this.#installIds;
+    const noteInstall = (result: unknown): void => {
+      const id = (result as { requestId?: unknown } | null)?.requestId;
+      if (typeof id === "string" && id.length > 0) installIds.add(id);
+    };
+    const request = decide(
+      async (i: Parameters<GuardianClient["request"]>[0]) => {
+        const result = await client.request(i);
+        if (i.action === "mcp.install") noteInstall(result);
+        return result;
+      },
     );
-    const claim = decide((id: string) => client.claim(id));
+    const claim = decide(async (id: string) => {
+      const result = await client.claim(id);
+      if (installIds.has(id)) noteInstall(result);
+      return result;
+    });
+    const executeInstall = decide(
+      (input: Parameters<GuardianClient["execute"]>[0]) =>
+        client.execute(input),
+    );
     const execute = (input: Parameters<GuardianClient["execute"]>[0]) => {
-      // Executing is the start of the action: refuse it if the gate closed,
-      // and never abandon it once sent.
+      if (installIds.has(input.requestId)) {
+        return executeInstall(input);
+      }
+      // Executing the tool call is the start of the action: refuse it if
+      // the gate closed, and never abandon it once sent.
       this.assertOpen();
       this.commit();
       return client.execute(input);

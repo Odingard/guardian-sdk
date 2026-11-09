@@ -214,8 +214,8 @@ describe("guardianTool: ALLOW", () => {
       connectionId: "con_1",
     });
     const tc = t as FunctionTool<any, any, any>;
-    // The default error handler gives the model a generic message; the
-    // tool ran exactly once and no success is reported.
+    // The default error handler tells the model the tool ran without a
+    // receipt; the tool ran exactly once and no success is reported.
     const out = await invoke(tc, { orderId: "o", amount: 1 });
     expect(run).toHaveBeenCalledOnce();
     expect(out).not.toBe("did work");
@@ -725,5 +725,211 @@ describe("in an Agents SDK run", () => {
     expect(toolOutputs(model.requests[1]!).call_1).toBe(
       "Guardian could not check deploy, so it did not run.",
     );
+  });
+});
+
+describe("review fixes", () => {
+  const installAllow = () => allow("req_install", "cap_install");
+
+  function hungInvoke() {
+    let answer!: (v: unknown) => void;
+    const request = vi.fn((input: { action: string }) =>
+      input.action === "mcp.install"
+        ? Promise.resolve(installAllow())
+        : new Promise((resolve) => {
+            answer = resolve;
+          }),
+    );
+    return { request, answer: (v: unknown) => answer(v) };
+  }
+
+  it("a record-transport install does not disarm the deadline: a late ALLOW never runs the tool", async () => {
+    const run = vi.fn();
+    const { request, answer } = hungInvoke();
+    const execute = vi.fn().mockResolvedValue(receipt());
+    const t = refundTool(run, {
+      client: stubClient({ request: request as never, execute }),
+      connectionId: "con_1",
+      installRecordTransport: true,
+      decisionTimeoutMs: 20,
+    });
+    const out = await invoke(t, { orderId: "o", amount: 1 });
+    expect(out).toBe(
+      "Guardian could not check refund_order, so it did not run.",
+    );
+    expect(request.mock.calls.map((c) => c[0].action)).toEqual([
+      "mcp.install",
+      "tool.invoke",
+    ]);
+    // Only the install was executed.
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith({
+      requestId: "req_install",
+      capabilityToken: "cap_install",
+    });
+    answer(allow());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("a record-transport install does not detach the abort signal: a cancelled call never runs the tool", async () => {
+    const run = vi.fn();
+    const { request, answer } = hungInvoke();
+    const execute = vi.fn().mockResolvedValue(receipt());
+    const controller = new AbortController();
+    const t = refundTool(run, {
+      client: stubClient({ request: request as never, execute }),
+      connectionId: "con_1",
+      installRecordTransport: true,
+    });
+    const pending = t.invoke(
+      new RunContext(),
+      JSON.stringify({ orderId: "o", amount: 1 }),
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    controller.abort(new Error("run cancelled"));
+    answer(allow());
+    await pending.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("the SDK's own tool timeout after an install cannot let a late ALLOW run the tool", async () => {
+    const run = vi.fn();
+    const { request, answer } = hungInvoke();
+    const execute = vi.fn().mockResolvedValue(receipt());
+    const t = guardianTool(
+      {
+        name: "deploy",
+        description: "Deploy",
+        parameters: z.object({ env: z.string() }),
+        execute: run,
+        timeoutMs: 20,
+      },
+      {
+        client: stubClient({ request: request as never, execute }),
+        connectionId: "con_1",
+        installRecordTransport: true,
+      },
+    );
+    const out = await invoke(t, { env: "prod" });
+    expect(String(out)).toMatch(/timed out/);
+    answer(allow());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("install ALLOW then invoke ALLOW runs the tool once and records it", async () => {
+    const run = vi.fn().mockResolvedValue("refunded");
+    const request = vi.fn((input: { action: string }) =>
+      Promise.resolve(
+        input.action === "mcp.install" ? installAllow() : allow(),
+      ),
+    );
+    const execute = vi.fn().mockResolvedValue(receipt());
+    const t = refundTool(run, {
+      client: stubClient({ request: request as never, execute }),
+      connectionId: "con_1",
+      installRecordTransport: true,
+    });
+    await expect(invoke(t, { orderId: "o", amount: 1 })).resolves.toBe(
+      "refunded",
+    );
+    expect(run).toHaveBeenCalledOnce();
+    expect(execute.mock.calls.map((c) => c[0].requestId)).toEqual([
+      "req_install",
+      "req_1",
+    ]);
+  });
+
+  it("a modes entry under the written name still applies after the SDK renames the tool", async () => {
+    const run = vi.fn();
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue(receipt("rcpt_r"));
+    const t = guardianTool(
+      {
+        name: "refund-order",
+        description: "Refund an order",
+        parameters: z.object({ orderId: z.string() }),
+        execute: run,
+      },
+      {
+        client: stubClient({ request, execute }),
+        connectionId: "con_1",
+        modes: { "refund-order": "remote" },
+      },
+    );
+    expect(t.name).toBe("refund_order");
+    const out = await invoke(t, { orderId: "o" });
+    expect(run).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "refund_order" }),
+    );
+    expect(out).toMatchObject({
+      guardian: { decision: "ALLOW", receipt: { id: "rcpt_r" } },
+    });
+  });
+
+  it("modes entries that disagree for one tool are refused", () => {
+    expect(() =>
+      guardianTool(
+        {
+          name: "refund-order",
+          description: "Refund an order",
+          parameters: z.object({ orderId: z.string() }),
+          execute: vi.fn(),
+        },
+        {
+          client: stubClient({}),
+          connectionId: "con_1",
+          modes: { "refund-order": "remote", refund_order: "inProcess" },
+        },
+      ),
+    ).toThrow(/modes disagree/);
+  });
+
+  it("after the tool ran but was not recorded, the model is never told to try again", async () => {
+    const run = vi.fn().mockResolvedValue("did work");
+    const t = refundTool(run, {
+      client: stubClient({
+        request: vi.fn().mockResolvedValue(allow()),
+        execute: vi
+          .fn()
+          .mockResolvedValue({ ok: false, reasonCode: "CAPABILITY_REVOKED" }),
+      }),
+      connectionId: "con_1",
+    });
+    const out = String(await invoke(t, { orderId: "o", amount: 1 }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(out).not.toMatch(/try again/i);
+    expect(out).toMatch(/ran, but Guardian could not record it/);
+    expect(out).toMatch(/Do not call it again/);
+  });
+
+  it("in a run, a localEffectRan failure tells the model not to retry", async () => {
+    const run = vi.fn().mockResolvedValue("did work");
+    const t = refundTool(run, {
+      client: stubClient({
+        request: vi.fn().mockResolvedValue(allow()),
+        execute: vi
+          .fn()
+          .mockResolvedValue({ ok: false, reasonCode: "CAPABILITY_REVOKED" }),
+      }),
+      connectionId: "con_1",
+    });
+    const model = new ScriptedModel([
+      [functionCall("call_1", "refund_order", { orderId: "o", amount: 1 })],
+      [assistantText("ok")],
+    ]);
+    const agent = new Agent({ name: "a", model, tools: [t] });
+    await runner().run(agent, "refund");
+    const seen = toolOutputs(model.requests[1]!)["call_1"] ?? "";
+    expect(seen).not.toMatch(/try again/i);
+    expect(seen).toMatch(/Do not call it again/);
+    expect(run).toHaveBeenCalledOnce();
   });
 });
