@@ -108,9 +108,9 @@ export type GuardianGovernedInvocation = Readonly<{
    * declare exactly the amount in its body, in the body's own content
    * type (form or JSON), or it is refused (INVALID_REQUEST), and so is one
    * whose amount cannot be read unambiguously. A request that moves no
-   * money must not declare it. Requires a Guardian deployment with the
-   * money-facts change; older deployments refuse any declared value
-   * on `api.request`.
+   * money must not declare it. Requires a Guardian deployment that
+   * derives `api.request` amounts; older deployments refuse any declared
+   * value on `api.request`.
    */
   valueCents?: number;
   /**

@@ -47,8 +47,8 @@ export type ExpectedAction = Readonly<{
    * receipt binds by digest; it must equal `valueCents`, and the action's
    * declared value when it has one (Guardian derives an `api.request`'s
    * value from the same body and refuses a mismatch). Without a declared
-   * value (e.g. a receipt from a Guardian deployment before the
-   * money-facts change) Guardian applied no cap to the amount, so it is
+   * value (e.g. a receipt from a Guardian deployment that did not yet
+   * derive `api.request` amounts) Guardian applied no cap to the amount, so it is
    * accepted only when a person approved the request (ASK approved).
    */
   amountField?: string;
