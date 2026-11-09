@@ -69,8 +69,8 @@ if (d.decision === "ALLOW") {
 ## Govern your own action code — `createGuard` (0.3)
 
 Guardian does not need to ship a connector for your provider. Wrap the
-function that performs the action (your Stripe call, WhatsApp send, robot
-command, database write). Guardian decides whether it may run, and records
+function that performs the action (your Stripe call, WhatsApp send, production
+deploy, database write). Guardian decides whether it may run, and records
 the receipt when it does. This works from any agent framework: OpenAI Agents
 SDK, Claude Agent SDK, Mastra, or plain code.
 
@@ -257,13 +257,15 @@ credentials can never approve, create grants or revoke.
 ## Catalog metadata (declarative)
 
 `guardianCatalog` (also `@odingard/guardian-sdk/catalog.json`) is generated from
-Guardian's canonical catalog: 62 verticals, 25 agent systems, 48 agent roles,
-221 entities, each vertical with its tier and maturity. It grants nothing:
-every action is still decided at runtime under a human's policy. Current
-honest status: 3 verticals `governed`, 58 `integration-ready` (governed
-decision path; external adapters declared, not built), 1
-`production-integrated` (recorded external-system proof). Maturity L1 = built-in
-governed, L2 = modeled/decidable, L3 = production-integrated with recorded proof.
+Guardian's canonical catalog: verticals, agent systems, agent roles and
+entities, each vertical with its tier and maturity. `guardianCatalog.counts`
+gives the current totals, and `guardianCatalog.tierLegend` explains each tier.
+It grants nothing: every action is still decided at runtime under a human's
+policy. Tiers: `governed` (built-in actions and existing adapters cover the
+vertical), `integration-ready` (governed decision path; external adapters
+declared, not built) and `production-integrated` (recorded external-system
+proof). Maturity L1 = built-in governed, L2 = modeled/decidable, L3 =
+production-integrated with recorded proof.
 `verticalsForAction("tool.invoke")` lists verticals using an action.
 
 ## Guardian for Steel — `@odingard/guardian-steel`

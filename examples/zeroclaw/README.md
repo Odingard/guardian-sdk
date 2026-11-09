@@ -4,8 +4,8 @@
 real ZeroClaw. Nothing here has run against ZeroClaw yet. The ZeroClaw settings are taken from
 ZeroClaw's own docs (`docs/book/src/tools/mcp.md`, `tools/overview.md`,
 `security/autonomy.md`, read at zeroclaw-labs/zeroclaw master `a66cc98`,
-2026-11-06). Maritime runs `v0.8.5`, and field names can differ between
-versions, so check them against `zeroclaw config list` on your build.
+2026-11-06). Hosted ZeroClaw builds may be older (for example `v0.8.5`), and
+field names can differ between versions, so check them against `zeroclaw config list` on your build.
 
 ZeroClaw is one Rust binary. Guardian can sit in front of the **MCP servers**
 it uses. It cannot sit in front of ZeroClaw's **built-in tools**, so the
@@ -19,15 +19,15 @@ recipe switches the risky built-ins off.
 | MCP servers configured with ZeroClaw's own `transport = "http"` or `"sse"`                                                                           | **No.** ZeroClaw reaches the server directly. Use a stdio entry that runs `guardian-mcp proxy --url …` instead.                                                                                                                                                                                                                                 |
 | Built-ins: `shell`, `file_write`, `file_edit`, `http_request`, `web_fetch`, `browser`, `cron_*`, `schedule`, delegation, `memory_store`, skill tools | **No.** They run inside the ZeroClaw binary with no hook Guardian can use from outside. ZeroClaw's `before_tool_call` hooks are compiled in; its `webhook_audit` hook only reports after the fact; WASM plugins cannot gate other tools. Governing them needs a change to ZeroClaw itself, which is out of scope. **Switch them off** (step 2). |
 
-On Maritime the ZeroClaw daemon runs at full autonomy with approvals off,
-so today every built-in runs without anyone deciding. Step 2 is not optional.
+A hosted ZeroClaw daemon may run at full autonomy with approvals off, and
+then every built-in runs without anyone deciding. Step 2 is not optional.
 
 ## 1. Wrap every MCP server
 
 See [`config.toml`](config.toml). Each `[[mcp.servers]]` entry runs
 guardian-mcp over stdio:
 
-- **Remote server** (Composio, Maritime Computers):
+- **Remote server** (such as Composio):
   `guardian-mcp proxy --url <url> --header 'x-api-key: ${COMPOSIO_API_KEY}'`.
   guardian-mcp expands `${…}` itself from the entry's `env`, which ZeroClaw
   stores encrypted. The key stays in the guardian-mcp process and is sent only
@@ -60,8 +60,8 @@ always_ask = ["shell", "file_write", "file_edit", "http_request", "web_fetch", "
   names contain `__` are still let in, which is why every granted server must
   be wrapped.
 - An empty `allowed_tools` means **no restriction** in ZeroClaw, not deny-all.
-  `always_ask` is the backstop. On a surface with no approver, such as
-  Maritime's headless gateway, an `always_ask` prompt fails closed.
+  `always_ask` is the backstop. On a surface with no approver, such as a
+  headless gateway, an `always_ask` prompt fails closed.
 - `excluded_tools` only applies to non-CLI channels; do not rely on it alone.
 - `deny_all_tools = true` is not used because it also denies MCP tools.
 - Unconfirmed, check on your build: whether `file_read`, `glob_search` and
@@ -99,7 +99,7 @@ COPY --from=guardian /opt/guardian-mcp /opt/guardian-mcp
 
 This image has **not been built or run** in this work (no Docker daemon was
 available). The Node binary needs glibc and `libstdc++`, which
-`bookworm-slim` provides. If your host (for example Maritime's ZeroClaw
+`bookworm-slim` provides. If your host (for example a hosted ZeroClaw
 template) does not let you change the image, this recipe cannot run there
 yet: use the bring-your-own-container path ([../byo](../byo/README.md))
 instead. Copying a Node binary onto `/data` at runtime has not been verified
@@ -108,9 +108,9 @@ and is not documented here.
 `--url` support ships in the next `@odingard/guardian-mcp` release (see the
 CHANGELOG); until it is published, build it from this repository.
 
-## Maritime: env-only configuration
+## Env-only configuration
 
-Maritime configures ZeroClaw through `ZEROCLAW_*` environment variables.
+Some hosts configure ZeroClaw only through `ZEROCLAW_*` environment variables.
 ZeroClaw maps `ZEROCLAW_<path with __ separators>` onto the same paths as
 `zeroclaw config set`, for example
 `zeroclaw config set mcp.servers.files.command /usr/local/bin/node`. Whether

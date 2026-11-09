@@ -11,7 +11,7 @@
         "config": {
           "connectionId": "pcn_REPLACE_EVERYDAY",
           "askConnectionId": "pcn_REPLACE_NEEDS_APPROVAL",
-          "agentName": "Maritime OpenClaw agent"
+          "agentName": "OpenClaw agent"
         }
       }
     }

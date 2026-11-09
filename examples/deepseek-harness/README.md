@@ -19,32 +19,31 @@ cd examples && npm install
 node agent-hooks.mjs dsh
 ```
 
-## LIVE: Maritime's dsh template, real Guardian
+## LIVE: a hosted dsh agent, real Guardian
 
 1. In the Guardian console, create the agent and its two connections and
    allow each tool by name (`guardian-hook dsh setup` lists them).
-2. Install the hook on the agent: in the Terminal tab,
+2. Install the hook on the agent: in a shell on the agent,
    `npm i -g @odingard/guardian-hook` (or bake it into a custom image). Do
    not use `npx -y` at hook time: a failed download is a failed hook.
 3. Copy [`guardian-hooks.json`](guardian-hooks.json) and
-   [`cordis.patch.yml`](cordis.patch.yml) to `/data/.dsh/` (dsh's
-   `DSH_HOME` on Maritime). If a `cordis.patch.yml` is already there, add the
+   [`cordis.patch.yml`](cordis.patch.yml) to dsh's `DSH_HOME` (for example
+   `/data/.dsh/`). If a `cordis.patch.yml` is already there, add the
    `insert` row to it.
 4. Set `GUARDIAN_AGENT_CREDENTIAL` (secret), `GUARDIAN_CONNECTION_ID` and
    `GUARDIAN_HOOK_ASK_CONNECTION_ID` in the agent's environment, then restart
    the agent (the bridge reads its config once at startup).
-5. Chat:
+5. Send the agent a chat message:
 
-   ```bash
-   maritime chat my-agent "List the files in the workspace, then run terraform apply -auto-approve in ./infra"
+   ```text
+   List the files in the workspace, then run terraform apply -auto-approve in ./infra
    ```
 
    `ls` runs; `terraform apply` waits for your approval. The hook waits for
-   the approval itself, so this works in Maritime's one-shot headless chats.
+   the approval itself, so this works in one-shot headless chats.
 
-Not yet confirmed live: that the bridge plugin is in Maritime's
-`dsh-agent:0.1.0-rc.7` image (if not, install it with `dsh plugin` or the
-Console), the tool names the bridge passes there (its source passes dsh's
+Not yet confirmed live: that the bridge plugin is in a host's prebuilt dsh
+image (if not, install it with `dsh plugin`), the tool names the bridge passes there (its source passes dsh's
 names unchanged; the matcher also lists Claude Code's), that the hook's environment keeps
 `GUARDIAN_AGENT_CREDENTIAL`, and that a headless run may wait 5 minutes.
 

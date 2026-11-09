@@ -19,15 +19,16 @@ tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Fre
 
 ## Packages
 
-| Package                                                                                      | Use it when                                                                                                                           | Docs                                     |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)             | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, receipts and approvals      | [packages/sdk](packages/sdk)             |
-| [`odingard-guardian`](packages/python) (PyPI)                                                | You build in Python (LangChain, CrewAI, OpenAI Agents, Claude Agent SDK, plain code), sync or async                                   | [packages/python](packages/python)       |
-| [`@odingard/guardian-mcp`](https://www.npmjs.com/package/@odingard/guardian-mcp)             | Your agent speaks MCP (Claude, Cursor, …), with no code needed. `guardian-mcp proxy` governs any existing MCP server, local or remote | [packages/mcp](packages/mcp)             |
-| [`@odingard/guardian-langchain`](https://www.npmjs.com/package/@odingard/guardian-langchain) | You build with LangChain.js / LangGraph                                                                                               | [packages/langchain](packages/langchain) |
-| [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai) | You build with the Vercel AI SDK                                                                                                      | [packages/vercel-ai](packages/vercel-ai) |
-| [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)         | Your browser agent checks out on Steel                                                                                                | [packages/steel](packages/steel)         |
-| `@odingard/guardian-openclaw` (not yet published)                                            | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools. Not yet proven live                      | [packages/openclaw](packages/openclaw)   |
+| Package                                                                                      | Use it when                                                                                                                                           | Docs                                             |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)             | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, receipts and approvals                      | [packages/sdk](packages/sdk)                     |
+| [`odingard-guardian`](packages/python) (PyPI)                                                | You build in Python (LangChain, CrewAI, OpenAI Agents, Claude Agent SDK, plain code), sync or async                                                   | [packages/python](packages/python)               |
+| [`@odingard/guardian-mcp`](https://www.npmjs.com/package/@odingard/guardian-mcp)             | Your agent speaks MCP (Claude, Cursor, …), with no code needed. `guardian-mcp proxy` governs any existing MCP server, local or remote                 | [packages/mcp](packages/mcp)                     |
+| [`@odingard/guardian-langchain`](https://www.npmjs.com/package/@odingard/guardian-langchain) | You build with LangChain.js / LangGraph                                                                                                               | [packages/langchain](packages/langchain)         |
+| [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai) | You build with the Vercel AI SDK                                                                                                                      | [packages/vercel-ai](packages/vercel-ai)         |
+| [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)         | Your browser agent checks out on Steel                                                                                                                | [packages/steel](packages/steel)                 |
+| `@odingard/guardian-openai-agents` (not yet published)                                       | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Not yet proven live | [packages/openai-agents](packages/openai-agents) |
+| `@odingard/guardian-openclaw` (not yet published)                                            | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools. Not yet proven live                                      | [packages/openclaw](packages/openclaw)           |
 
 ## Quickstart
 
@@ -140,14 +141,16 @@ Recipes (LIVE, not yet proven live): [ZeroClaw](examples/zeroclaw/README.md) ·
 ## Repository layout
 
 ```text
-packages/sdk        @odingard/guardian-sdk      core client
-packages/mcp        @odingard/guardian-mcp      MCP server
-packages/langchain  @odingard/guardian-langchain
-packages/vercel-ai  @odingard/guardian-vercel-ai
-packages/steel      @odingard/guardian-steel
-packages/openclaw   @odingard/guardian-openclaw OpenClaw plugin
-packages/python     odingard-guardian (PyPI)    Python SDK
-examples/           runnable demos
+packages/sdk            @odingard/guardian-sdk            core client
+packages/mcp            @odingard/guardian-mcp            MCP server
+packages/hook           @odingard/guardian-hook           coding-agent hooks
+packages/langchain      @odingard/guardian-langchain
+packages/vercel-ai      @odingard/guardian-vercel-ai
+packages/openai-agents  @odingard/guardian-openai-agents  OpenAI Agents SDK adapter
+packages/steel          @odingard/guardian-steel
+packages/openclaw       @odingard/guardian-openclaw       OpenClaw plugin
+packages/python         odingard-guardian (PyPI)          Python SDK
+examples/               runnable demos
 ```
 
 `packages/sdk/src/contracts`, `packages/sdk/src/evidence`, the SDK client,

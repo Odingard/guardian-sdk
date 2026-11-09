@@ -2,10 +2,10 @@
 
 Two ways to see `@odingard/guardian-openclaw` work:
 
-| What                             | Label         | Needs                                                |
-| -------------------------------- | ------------- | ---------------------------------------------------- |
-| `simulated-openclaw-runtime.mjs` | **SIMULATED** | Node 22. Nothing else: Guardian is a stand-in.       |
-| The Maritime recipe below        | **LIVE**      | A Maritime OpenClaw agent and a real Guardian agent. |
+| What                             | Label         | Needs                                                              |
+| -------------------------------- | ------------- | ------------------------------------------------------------------ |
+| `simulated-openclaw-runtime.mjs` | **SIMULATED** | Node 22. Nothing else: Guardian is a stand-in.                     |
+| The official-image recipe below  | **LIVE**      | An OpenClaw agent on the official image and a real Guardian agent. |
 
 **Not yet proven live.** The LIVE recipe has not been run end to end yet.
 
@@ -16,7 +16,7 @@ npm run build -w packages/openclaw     # from the repo root
 cd examples/openclaw && npm install && npm run simulated
 ```
 
-It installs OpenClaw 2026.7.1 (the version Maritime runs), registers the
+It installs OpenClaw 2026.7.1, registers the
 plugin's handler with OpenClaw's own hook runner, and calls tools through
 OpenClaw's own `before_tool_call` wrapper. Guardian is an in-memory stand-in
 (no signing, no receipts). Step 0 runs the plugin's real install-integrity check against this checkout,
@@ -35,12 +35,12 @@ output:
 5. Composio email via MCP                → blocked: NOT_AUTHORIZED
 ```
 
-## LIVE: Maritime's OpenClaw template
+## LIVE: the official OpenClaw image
 
-Maritime runs the official image `ghcr.io/openclaw/openclaw:2026.7.1`; the
-agent's config is `/data/.openclaw/openclaw.json`. Run the `openclaw`
-commands from the agent's **Console** tab with `HOME=/data`, or they write
-config the Gateway never reads.
+This recipe is for an agent on the official image
+`ghcr.io/openclaw/openclaw:2026.7.1`, where the agent's config is
+`/data/.openclaw/openclaw.json`. Run the `openclaw` commands in a shell in
+the container with `HOME=/data`, or they write config the Gateway never reads.
 
 1. **Guardian console.** Agents → Set up for Claude Code. It creates the agent
    and two connections, "Coding agent — everyday" (Allow) and "Coding agent —
@@ -50,13 +50,13 @@ config the Gateway never reads.
    `openclaw.message`, `openclaw.browser`, plus `mcp.composio.<tool>` for each
    Composio tool you expose (needs approval).
 
-2. **Maritime dashboard.** Add `GUARDIAN_AGENT_CREDENTIAL` to the agent as a
-   **secret** environment variable (the same way Maritime takes
-   `ANTHROPIC_API_KEY`). (The connection ids may go
+2. **Agent environment.** Add `GUARDIAN_AGENT_CREDENTIAL` to the agent as a
+   **secret** environment variable, the same way you pass its model API key.
+   (The connection ids may go
    here too, as `GUARDIAN_CONNECTION_ID` and
    `GUARDIAN_HOOK_ASK_CONNECTION_ID`, instead of in `openclaw.json`.)
 
-3. **Console tab.** Install and enable the plugin:
+3. **Container shell.** Install and enable the plugin:
 
    ```bash
    HOME=/data openclaw plugins install npm:@odingard/guardian-openclaw@0.1.0 --pin
@@ -74,7 +74,7 @@ config the Gateway never reads.
 
 5. **Protect the install** (required: until you do, every tool call is
    blocked). As root in the container, run the commands in the package
-   README, [Required: protect the install](../../packages/openclaw#maritime--the-official-openclaw-image):
+   README, [Required: protect the install](../../packages/openclaw#the-official-openclaw-image):
    `extensions/`, `npm/` (where `npm:` / `npm-pack:` installs put the
    plugin), `hooks/`, `mpm/`, `plugins/`, `openclaw.json`,
    `openclaw.json.bak`, the `.env` files and an empty `/data/.npmrc`
@@ -85,7 +85,7 @@ config the Gateway never reads.
    never `HOME=/data openclaw …` as root, and verify the installed plugin
    against the published tarball before re-locking.
 
-6. **Restart the agent** from its dashboard page, then check the hook:
+6. **Restart the agent**, then check the hook:
 
    ```bash
    HOME=/data openclaw plugins inspect guardian --runtime --json
@@ -99,13 +99,14 @@ config the Gateway never reads.
 7. **Prove it** (keep the receipt digests):
 
    ```bash
-   maritime chat <agent> "List the files in your workspace"                  # runs: shell, allowed
-   maritime chat <agent> "Run: rm -rf /data/scratch"                         # held; approve in Guardian; then runs
-   maritime chat <agent> "Run: terraform destroy -auto-approve"              # held; do not approve: never runs
+   # Send the agent each of these as a chat message:
+   #   "List the files in your workspace"       runs: shell, allowed
+   #   "Run: rm -rf /data/scratch"              held; approve in Guardian; then runs
+   #   "Run: terraform destroy -auto-approve"   held; do not approve: never runs
    ```
 
-   With Composio connected (Maritime's blog recipe: `HOME=/data openclaw mcp
-set composio …`, then restart), `composio__GMAIL_SEND_EMAIL` waits for a
+   With Composio connected (`HOME=/data openclaw mcp set composio …`, then
+   restart), `composio__GMAIL_SEND_EMAIL` waits for a
    person in the same way. Verify the receipts offline with
    `examples/verify-receipt.mjs`.
 
@@ -120,5 +121,5 @@ or the config (protect the install, step 5); whoever can still change them
 (root, the operator) can remove Guardian; read-only tools
 are not checked; the Gateway's start-up environment
 (`/proc/<pid>/environ`) still holds the credential for anything running as the
-same user; Maritime's own "Connect Gmail" integration has not been checked
-and may not reach the agent as a tool call.
+same user; a host's own built-in integrations (such as a "Connect Gmail"
+button) have not been checked and may not reach the agent as a tool call.

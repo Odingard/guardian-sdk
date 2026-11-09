@@ -6,13 +6,13 @@ APIs below were checked against the released source: `crewai` /
 `crewai-tools` 1.15.36, `langchain-mcp-adapters` 0.3.2 and `autogen-ext` 0.7.5
 (PyPI, 2026-11-06).
 
-Maritime's bring-your-own container only asks for `GET /health` and
+A bring-your-own agent container often only has to serve `GET /health` and
 `POST /chat` on `$PORT`. All tool calling happens inside the framework you
 ship, so Guardian goes where that framework calls tools. There are two ways in:
 
 1. **MCP tools: `guardian-mcp proxy`.** Change the MCP server's command to
    `guardian-mcp proxy -- <original command>`, or for a remote server
-   (Composio, Maritime Computers) to `guardian-mcp proxy --url <url> --header
+   (such as Composio) to `guardian-mcp proxy --url <url> --header
 'Authorization: Bearer ${KEY}'`. Every `tools/call` is decided by Guardian
    first.
 2. **Your own Python functions: `odingard-guardian`'s `Guard`.** Wrap the
@@ -43,7 +43,8 @@ still work. So keep one session open:
 | LangGraph | `MultiServerMCPClient(...).get_tools()`: a new `ClientSession` per tool call (the library's README says so)                    | `async with client.session("name") as s: tools = await load_mcp_tools(s)`  |
 | AutoGen   | `mcp_server_tools(params)` with no `session=` (each adapter opens its own session per call, `autogen_ext/tools/mcp/_base.py`)  | `async with McpWorkbench(params) as wb: AssistantAgent(..., workbench=wb)` |
 
-ASK returns at once, so Maritime's 30-second `/chat` limit is not hit. The
+ASK returns at once, so a host's short `/chat` reply limit (often about 30
+seconds) is not hit. The
 model, or your `/chat` handler on the next message, calls `guardian_claim`
 later.
 
@@ -52,7 +53,7 @@ later.
 Every recipe hands these to guardian-mcp's MCP entry and not to the agent's
 MCP view. They are still in the agent process's own environment, so any
 ungoverned code or tool in that container can read them, and with the
-upstream key call Composio or Maritime directly. Keep the container to the
+upstream key call the remote server directly. Keep the container to the
 governed MCP tools only, or start guardian-mcp from a separate user or
 container that holds the keys.
 
@@ -76,23 +77,22 @@ from crewai_tools import MCPServerAdapter
 
 guardian_env = {k: os.environ[k] for k in (
     "PATH", "GUARDIAN_BASE_URL", "GUARDIAN_AGENT_CREDENTIAL", "GUARDIAN_CONNECTION_ID",
-    "MARITIME_API_KEY",
+    "REMOTE_MCP_API_KEY",
 )}
-computers = StdioServerParameters(
+remote = StdioServerParameters(
     command="guardian-mcp",
-    args=["proxy", "--url", "https://mcp.maritime.sh/mcp",
-          "--header", "Authorization: Bearer ${MARITIME_API_KEY}"],
+    args=["proxy", "--url", os.environ["REMOTE_MCP_URL"],
+          "--header", "Authorization: Bearer ${REMOTE_MCP_API_KEY}"],
     env=guardian_env,
 )
 
-with MCPServerAdapter(computers) as tools:   # one guardian-mcp process for the crew
+with MCPServerAdapter(remote) as tools:   # one guardian-mcp process for the crew
     agent = Agent(role="Operator", goal="…", backstory="…", tools=tools)
     ...  # build the crew and kickoff() inside the with-block
 ```
 
-CrewAI's MCP adapter mostly passes on the text part of a tool result, so the
-screenshots that Maritime Computers' `computer` tool returns may not reach the
-model. That is CrewAI's behaviour with or without Guardian.
+CrewAI's MCP adapter mostly passes on the text part of a tool result, so
+screenshots that a computer-use tool returns may not reach the model. That is CrewAI's behaviour with or without Guardian.
 
 ## LangGraph (LangChain v1)
 
@@ -117,7 +117,7 @@ client = MultiServerMCPClient({
 
 async with client.session("composio") as session:   # one guardian-mcp process
     tools = await load_mcp_tools(session)
-    agent = create_agent("openai:gpt-4.1", tools)
+    agent = create_agent(os.environ["MODEL"], tools)   # "provider:model"
     ...
 ```
 
@@ -151,18 +151,18 @@ async with McpWorkbench(params) as workbench:   # one guardian-mcp process
   guardian-mcp, and every function you wrapped with `Guard` / `createGuard`.
 - **Not governed:** anything else the container can do. That includes tools
   you registered without a guard, MCP servers connected directly (including a
-  framework's own HTTP or SSE MCP client pointed straight at Composio or
-  Maritime Computers), plain code in your `/chat` handler, and hosted MCP
+  framework's own HTTP or SSE MCP client pointed straight at a remote
+  server), plain code in your `/chat` handler, and hosted MCP
   connectors where the model provider calls the server for you (OpenAI
   Responses `mcp` tool, Anthropic's MCP connector). Those never pass through
   your container, so Guardian cannot see them.
 - guardian-mcp is **decision-gated**: an allowed call runs upstream before the
   capability is redeemed. A refusal at redemption is reported as an incident,
   never as success.
-- Held calls live in the guardian-mcp process. A container restart or a
-  Maritime snapshot/resume that restarts it drops them, and nothing runs.
+- Held calls live in the guardian-mcp process. A container restart, or a
+  host snapshot/resume that restarts it, drops them, and nothing runs.
 - Hosted Guardian decides per tool today; it does not yet apply rules to
   argument values such as amounts.
 
 Claude Agent SDK containers are covered separately by
-[`@odingard/guardian-hook/agent-sdk`](../maritime-claude-code).
+[`@odingard/guardian-hook/agent-sdk`](../hosted-claude-code).

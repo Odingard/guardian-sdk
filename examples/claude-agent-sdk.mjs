@@ -11,6 +11,7 @@
  *   export GUARDIAN_AGENT_CREDENTIAL=...         (Guardian console → Agents)
  *   export GUARDIAN_CONNECTION_ID=pcn_...        ("Coding agent — everyday", Allow)
  *   export GUARDIAN_HOOK_ASK_CONNECTION_ID=pcn_...  ("Coding agent — needs approval", Ask)
+ *   export CLAUDE_MODEL=...                      (optional; the Agent SDK default otherwise)
  *   npm run claude-agent-sdk -- "List the files here, then run: terraform apply"
  *
  * The two connections are what "Set up for Claude Code" in the console
@@ -36,7 +37,7 @@ const prompt =
 for await (const message of query({
   prompt,
   options: {
-    model: "claude-opus-5-5",
+    ...(process.env.CLAUDE_MODEL ? { model: process.env.CLAUDE_MODEL } : {}),
     // Guardian decides every governed call before it runs. The matcher sets
     // onFailure: "block" (a crash blocks the call) and a timeout longer than
     // Guardian's 5-minute approval window.

@@ -2,11 +2,11 @@
  * SIMULATED: Guardian's OpenClaw plugin inside OpenClaw's real tool-hook
  * runtime, with a stand-in Guardian.
  *
- * What is real: OpenClaw 2026.7.1 (the version Maritime's template runs),
+ * What is real: OpenClaw 2026.7.1,
  * its before_tool_call hook runner and the wrapper it puts around every tool,
  * and this repo's plugin handler. What is simulated: Guardian itself (an
  * in-memory policy below, no signing, no receipts) and the tools (they only
- * print). For the LIVE run on Maritime, see README.md.
+ * print). For the LIVE run on the official image, see README.md.
  *
  * Step 0 runs the plugin's real install-integrity check against this
  * checkout, which the user running the demo can write (or which runs as

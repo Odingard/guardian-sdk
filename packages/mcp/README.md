@@ -91,12 +91,11 @@ message naming it instead of a stack trace.
 
 **Status: not yet proven live.** This is tested against local Streamable
 HTTP and SSE MCP servers and a fake Guardian only. Nothing has run against a
-real Guardian, real Composio or real Maritime Computers. Composio's
-`x-api-key` header and Maritime's `https://mcp.maritime.sh/mcp` URL and
-Bearer scheme are unconfirmed.
+real Guardian or a real hosted server such as Composio. Composio's
+`x-api-key` header is unconfirmed.
 
-The proxy can also front an MCP server that runs online, such as Composio or
-Maritime Computers. The agent still starts `guardian-mcp` over stdio like any
+The proxy can also front an MCP server that runs online, such as Composio.
+The agent still starts `guardian-mcp` over stdio like any
 local server; guardian-mcp connects to the remote server over **Streamable
 HTTP** (the default) or **SSE** (`--transport sse`).
 
@@ -123,8 +122,8 @@ HTTP** (the default) or **SSE** (`--transport sse`).
 }
 ```
 
-Maritime Computers: `--url https://mcp.maritime.sh/mcp --header
-'Authorization: Bearer ${MARITIME_API_KEY}'`.
+A server that takes a Bearer key: `--url https://mcp.example.com/mcp --header
+'Authorization: Bearer ${REMOTE_MCP_API_KEY}'`.
 
 - Every `tools/call` is decided by Guardian exactly as for a stdio server:
   ALLOW forwards it, ASK holds it for `guardian_claim`, DENY never sends it.

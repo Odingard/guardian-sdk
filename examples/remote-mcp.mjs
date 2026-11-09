@@ -2,7 +2,7 @@
  * remote-mcp.mjs — guardian-mcp in front of a REMOTE MCP server.
  *
  * Starts a small MCP server over Streamable HTTP on 127.0.0.1 that demands an
- * `x-api-key` (standing in for Composio or Maritime Computers), then runs the
+ * `x-api-key` (standing in for a hosted server such as Composio), then runs the
  * real `guardian-mcp proxy --url … --header 'x-api-key: ${KEY}'` CLI and talks
  * to it over stdio, the way an agent's MCP client would.
  *

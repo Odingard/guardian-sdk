@@ -14,10 +14,10 @@
     "L3": "Production integrated: requires recorded real external-system proof."
   },
   "counts": {
-    "verticals": 62,
+    "verticals": 40,
     "agentSystems": 25,
-    "agentRoles": 48,
-    "entities": 221
+    "agentRoles": 35,
+    "entities": 134
   },
   "verticals": [
     {
@@ -535,8 +535,8 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "bank",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         },
@@ -580,9 +580,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "shopify",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         },
         {
@@ -591,9 +591,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "shopify",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         },
         {
@@ -655,9 +655,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "stripe",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         },
         {
@@ -666,8 +666,8 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "stripe",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         },
@@ -688,9 +688,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "stripe",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         }
       ]
@@ -751,8 +751,8 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "insurer",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         }
@@ -794,9 +794,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "marketplace",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         },
         {
@@ -955,8 +955,8 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "procurement",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         }
@@ -986,8 +986,8 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "square",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         },
@@ -997,9 +997,9 @@
           "actionFamily": "commerce",
           "adapter": {
             "provider": "square",
-            "adapterId": "payment",
-            "status": "EXISTING",
-            "maturity": "L1"
+            "adapterId": "api",
+            "status": "ADAPTER_REQUIRED",
+            "maturity": "L2"
           }
         },
         {
@@ -1285,262 +1285,6 @@
             "provider": "social",
             "adapterId": "api",
             "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_communication.telecom",
-      "sector": "communication",
-      "title": "Telecom",
-      "description": "Voice and SMS — calls, texts and voicemail on declared phone numbers with recording evidence where lawful.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "autonomous.voice-agent",
-        "digital-resource.notification-endpoint",
-        "digital-resource.phone-number",
-        "digital-resource.push-device",
-        "digital-resource.sms-message"
-      ],
-      "actions": [
-        {
-          "actionId": "sms.send",
-          "label": "Send an SMS",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "twilio",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "call.place",
-          "label": "Place a call",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "twilio",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "call.transcribe",
-          "label": "Transcribe voicemail",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "twilio",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "number.provision",
-          "label": "Provision a number",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "twilio",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_consumer-family.elder-care",
-      "sector": "consumer-family",
-      "title": "Elder Care",
-      "description": "Care monitoring and check-ins — scheduled check-ins, alert escalation and home-safety signals for an elder under care.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "human-organizational.caregiver",
-        "human-organizational.patient",
-        "physical.alarm-system",
-        "physical.sensor",
-        "regulated-data.patient-record",
-        "travel-property.smart-home"
-      ],
-      "actions": [
-        {
-          "actionId": "checkin.perform",
-          "label": "Perform a check-in",
-          "actionFamily": "consumer",
-          "adapter": {
-            "provider": "care",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "alert.escalate",
-          "label": "Escalate an alert",
-          "actionFamily": "consumer",
-          "adapter": {
-            "provider": "care",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "sensor.read",
-          "label": "Read a safety sensor",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "contact.notify",
-          "label": "Notify a caregiver",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "messaging",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_consumer-family.family-ai",
-      "sector": "consumer-family",
-      "title": "Family AI",
-      "description": "Household coordination — shared calendars, lists and devices across declared member scopes.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "digital-resource.calendar-list",
-        "digital-resource.task-list",
-        "human-organizational.child",
-        "human-organizational.parent",
-        "human-organizational.spouse",
-        "travel-property.smart-home"
-      ],
-      "actions": [
-        {
-          "actionId": "calendar.create_event",
-          "label": "Create a family event",
-          "actionFamily": "scheduling",
-          "adapter": {
-            "provider": "gcalendar",
-            "adapterId": "gcalendar",
-            "status": "EXISTING",
-            "maturity": "L1"
-          }
-        },
-        {
-          "actionId": "list.manage",
-          "label": "Manage shared lists",
-          "actionFamily": "consumer",
-          "adapter": {
-            "provider": "tasks",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "message.send",
-          "label": "Message family members",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "messaging",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "device.control",
-          "label": "Control a household device",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_consumer-family.personal-assistants",
-      "sector": "consumer-family",
-      "title": "Personal Assistants",
-      "description": "Individual assistant agents — email, calendar, tasks and purchases inside daily caps.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "autonomous.assistant",
-        "autonomous.copilot",
-        "digital-resource.calendar",
-        "digital-resource.mailbox",
-        "digital-resource.task-list",
-        "financial-commerce.payment-card",
-        "human-organizational.individual-principal"
-      ],
-      "actions": [
-        {
-          "actionId": "email.send",
-          "label": "Send an email",
-          "actionFamily": "communication",
-          "adapter": {
-            "provider": "gmail",
-            "adapterId": "gmail",
-            "status": "EXISTING",
-            "maturity": "L1"
-          }
-        },
-        {
-          "actionId": "calendar.create_event",
-          "label": "Create an event",
-          "actionFamily": "scheduling",
-          "adapter": {
-            "provider": "gcalendar",
-            "adapterId": "gcalendar",
-            "status": "EXISTING",
-            "maturity": "L1"
-          }
-        },
-        {
-          "actionId": "task.manage",
-          "label": "Manage tasks",
-          "actionFamily": "consumer",
-          "adapter": {
-            "provider": "tasks",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "commerce.purchase",
-          "label": "Make a purchase",
-          "actionFamily": "commerce",
-          "adapter": {
-            "provider": "retail",
-            "adapterId": "payment",
-            "status": "GENERIC_API",
             "maturity": "L2"
           }
         }
@@ -1876,387 +1620,6 @@
       ]
     },
     {
-      "verticalId": "vpk_movement-property.fleet",
-      "sector": "movement-property",
-      "title": "Fleet",
-      "description": "Vehicle fleet operations — dispatch, telematics, maintenance and driver management.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "digital-resource.metric-stream",
-        "human-organizational.worker",
-        "physical.vehicle-asset",
-        "travel-property.vehicle",
-        "travel-property.vehicle-registration"
-      ],
-      "actions": [
-        {
-          "actionId": "dispatch.assign",
-          "label": "Dispatch a vehicle/driver",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "fleet",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "telematics.read",
-          "label": "Read telematics",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "fleet",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "maintenance.schedule",
-          "label": "Schedule maintenance",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "fleet",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "geofence.enforce",
-          "label": "Enforce a geofence",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "fleet",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_movement-property.hospitality",
-      "sector": "movement-property",
-      "title": "Hospitality",
-      "description": "Guest operations — reservations, check-in/out, room changes and service requests.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.customer-account",
-        "travel-property.access-grant",
-        "travel-property.hotel-booking",
-        "travel-property.reservation",
-        "travel-property.residence"
-      ],
-      "actions": [
-        {
-          "actionId": "reservation.manage",
-          "label": "Manage a reservation",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "guest.request",
-          "label": "Handle a guest request",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "key.issue",
-          "label": "Issue a room key",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "folio.adjust",
-          "label": "Adjust a folio",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_movement-property.logistics",
-      "sector": "movement-property",
-      "title": "Logistics",
-      "description": "Shipment lifecycle — labels, tracking, exceptions and carrier coordination.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.order",
-        "business-enterprise.shipment",
-        "business-enterprise.vendor",
-        "business-enterprise.warehouse",
-        "physical.package-container"
-      ],
-      "actions": [
-        {
-          "actionId": "shipment.create",
-          "label": "Create a shipment",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "carrier",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "shipment.track",
-          "label": "Track a shipment",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "carrier",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "exception.handle",
-          "label": "Handle a delivery exception",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "carrier",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "rate.shop",
-          "label": "Shop carrier rates",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "carrier",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_movement-property.property-management",
-      "sector": "movement-property",
-      "title": "Property Management",
-      "description": "Tenant and maintenance operations on declared properties — requests, vendors and access grants.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "human-organizational.tenant",
-        "travel-property.access-grant",
-        "travel-property.commercial-property",
-        "travel-property.property-lease",
-        "travel-property.property-maintenance",
-        "travel-property.residence"
-      ],
-      "actions": [
-        {
-          "actionId": "request.handle",
-          "label": "Handle a maintenance request",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "vendor.dispatch",
-          "label": "Dispatch a vendor",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "access.grant",
-          "label": "Grant property access",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "lease.manage",
-          "label": "Manage a lease",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "pms",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_movement-property.real-estate",
-      "sector": "movement-property",
-      "title": "Real Estate",
-      "description": "Listings, showings and transaction coordination on declared properties.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.contract",
-        "business-enterprise.deal",
-        "travel-property.commercial-property",
-        "travel-property.property-lease",
-        "travel-property.property-listing",
-        "travel-property.residence"
-      ],
-      "actions": [
-        {
-          "actionId": "listing.manage",
-          "label": "Manage a listing",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "mls",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "showing.schedule",
-          "label": "Schedule a showing",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "mls",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "offer.submit",
-          "label": "Submit an offer",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "mls",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "document.sign",
-          "label": "Coordinate document signing",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "docusign",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_movement-property.supply-chain",
-      "sector": "movement-property",
-      "title": "Supply Chain",
-      "description": "Multi-party order, stock and shipment coordination across suppliers and carriers.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.inventory-item",
-        "business-enterprise.order",
-        "business-enterprise.purchase-order",
-        "business-enterprise.shipment",
-        "business-enterprise.vendor",
-        "business-enterprise.warehouse"
-      ],
-      "actions": [
-        {
-          "actionId": "order.coordinate",
-          "label": "Coordinate an order",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "scm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "stock.rebalance",
-          "label": "Rebalance stock",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "scm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "exception.resolve",
-          "label": "Resolve a supply exception",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "scm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "forecast.update",
-          "label": "Update a demand forecast",
-          "actionFamily": "movement-property",
-          "adapter": {
-            "provider": "scm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
       "verticalId": "vpk_movement-property.travel",
       "sector": "movement-property",
       "title": "Travel",
@@ -2323,640 +1686,6 @@
       ]
     },
     {
-      "verticalId": "vpk_physical-world.autonomous-vehicles",
-      "sector": "physical-world",
-      "title": "Autonomous Vehicles",
-      "description": "Vehicle dispatch — route assignment and mission control on approved corridors under sealed runtime.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "autonomous.autonomous-vehicle",
-        "physical.sensor",
-        "physical.vehicle-asset",
-        "travel-property.vehicle",
-        "travel-property.vehicle-registration"
-      ],
-      "actions": [
-        {
-          "actionId": "vehicle.dispatch",
-          "label": "Dispatch a vehicle",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "av",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "route.assign",
-          "label": "Assign a route",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "av",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "vehicle.recall",
-          "label": "Recall a vehicle",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "av",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "telemetry.read",
-          "label": "Read vehicle telemetry",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "av",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.construction",
-      "sector": "physical-world",
-      "title": "Construction",
-      "description": "Site coordination — equipment telemetry, inspections and crew tasks on declared sites.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.asset",
-        "human-organizational.worker",
-        "physical.camera",
-        "physical.machine-tool",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "inspection.record",
-          "label": "Record an inspection",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "construction",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "equipment.command",
-          "label": "Command equipment",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "equipment",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "task.assign",
-          "label": "Assign a site task",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "construction",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "safety.alert",
-          "label": "Raise a safety alert",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "construction",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.drones",
-      "sector": "physical-world",
-      "title": "Drones",
-      "description": "Drone missions — geofenced flight plans, capture tasks and return-to-home under airspace rules.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "physical.camera",
-        "physical.drone",
-        "physical.package-container",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "mission.plan",
-          "label": "Plan a mission",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "drone",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "mission.launch",
-          "label": "Launch a mission",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "drone",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "mission.abort",
-          "label": "Abort/return home",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "drone",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "capture.collect",
-          "label": "Collect imagery",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "drone",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.energy-utilities",
-      "sector": "physical-world",
-      "title": "Energy & Utilities",
-      "description": "Grid and plant operations — metering, generation control and outage response under reliability rules.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "physical.actuator",
-        "physical.generator",
-        "physical.irrigation-system",
-        "physical.sensor",
-        "physical.utility-meter"
-      ],
-      "actions": [
-        {
-          "actionId": "meter.read",
-          "label": "Read meters",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "utility",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "generation.dispatch",
-          "label": "Dispatch generation",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "scada",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "outage.respond",
-          "label": "Respond to an outage",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "utility",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "load.adjust",
-          "label": "Adjust load",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "scada",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.field-service",
-      "sector": "physical-world",
-      "title": "Field Service",
-      "description": "Work-order dispatch and documentation — assign, route and close declared field jobs.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.asset",
-        "business-enterprise.shipment",
-        "business-enterprise.ticket",
-        "human-organizational.worker",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "workorder.dispatch",
-          "label": "Dispatch a work order",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "fsm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "workorder.update",
-          "label": "Update a work order",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "fsm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "route.optimize",
-          "label": "Optimize routes",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "fsm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "report.file",
-          "label": "File a service report",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "fsm",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.industrial-ops",
-      "sector": "physical-world",
-      "title": "Industrial Operations",
-      "description": "Plant telemetry and process control — monitor, adjust setpoints and raise alarms.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "digital-resource.metric-stream",
-        "physical.actuator",
-        "physical.generator",
-        "physical.hvac-system",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "telemetry.read",
-          "label": "Read telemetry",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "scada",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "setpoint.adjust",
-          "label": "Adjust a setpoint",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "scada",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "alarm.raise",
-          "label": "Raise an alarm",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "scada",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "maintenance.schedule",
-          "label": "Schedule maintenance",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "eams",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.manufacturing",
-      "sector": "physical-world",
-      "title": "Manufacturing",
-      "description": "Production-line operations — machine control, quality checks and scheduling inside a safety envelope.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.inventory-item",
-        "human-organizational.operator",
-        "physical.conveyor",
-        "physical.machine-tool",
-        "physical.robot-arm",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "machine.start",
-          "label": "Start a machine",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "mes",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "machine.stop",
-          "label": "Stop a machine",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "mes",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "quality.inspect",
-          "label": "Run a quality check",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "mes",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "schedule.adjust",
-          "label": "Adjust the line schedule",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "mes",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.robotics",
-      "sector": "physical-world",
-      "title": "Robotics",
-      "description": "Robot tasking — bounded motion, pickup/place and navigation inside declared zones.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "autonomous.device-controller",
-        "autonomous.physical-robot",
-        "physical.delivery-robot",
-        "physical.robot",
-        "physical.robot-arm",
-        "physical.sensor"
-      ],
-      "actions": [
-        {
-          "actionId": "robot.move",
-          "label": "Move a robot",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "robotics",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "robot.task",
-          "label": "Assign a robot task",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "robotics",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "robot.stop",
-          "label": "Stop a robot",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "robotics",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "telemetry.read",
-          "label": "Read robot telemetry",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "robotics",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.smart-home",
-      "sector": "physical-world",
-      "title": "Smart Home",
-      "description": "Home device control — locks, lights, climate and cameras within resident-approved scopes.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "autonomous.device-controller",
-        "physical.alarm-system",
-        "physical.camera",
-        "physical.door-lock",
-        "physical.hvac-system",
-        "physical.lighting-system",
-        "travel-property.access-grant",
-        "travel-property.smart-home"
-      ],
-      "actions": [
-        {
-          "actionId": "device.control",
-          "label": "Control a device",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "lock.operate",
-          "label": "Operate a lock",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "scene.activate",
-          "label": "Activate a scene",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "camera.view",
-          "label": "View a camera",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "home",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_physical-world.warehousing",
-      "sector": "physical-world",
-      "title": "Warehousing",
-      "description": "Warehouse robotics and inventory — tote routing, pick tasks and cycle counts inside zones.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "business-enterprise.inventory-item",
-        "business-enterprise.warehouse",
-        "physical.conveyor",
-        "physical.package-container",
-        "physical.warehouse-robot"
-      ],
-      "actions": [
-        {
-          "actionId": "pick.assign",
-          "label": "Assign a pick task",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "wms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "robot.route",
-          "label": "Route a warehouse robot",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "wms",
-            "adapterId": "api",
-            "status": "SANDBOX",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "inventory.count",
-          "label": "Run a cycle count",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "wms",
-            "adapterId": "api",
-            "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "zone.restrict",
-          "label": "Restrict a zone",
-          "actionFamily": "physical-operations",
-          "adapter": {
-            "provider": "wms",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
       "verticalId": "vpk_regulated-data.compliance",
       "sector": "regulated-data",
       "title": "Compliance",
@@ -3014,132 +1743,6 @@
             "provider": "grc",
             "adapterId": "api",
             "status": "GENERIC_API",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_regulated-data.education",
-      "sector": "regulated-data",
-      "title": "Education",
-      "description": "Student records and enrollment — registrar operations under FERPA scope.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "digital-resource.document",
-        "human-organizational.company",
-        "regulated-data.consent-record",
-        "regulated-data.employment-record",
-        "regulated-data.identity-document"
-      ],
-      "actions": [
-        {
-          "actionId": "record.release",
-          "label": "Release a student record",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "sis",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "enrollment.process",
-          "label": "Process enrollment",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "sis",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "transcript.issue",
-          "label": "Issue a transcript",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "sis",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "consent.record",
-          "label": "Record consent",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "sis",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        }
-      ]
-    },
-    {
-      "verticalId": "vpk_regulated-data.government",
-      "sector": "regulated-data",
-      "title": "Government",
-      "description": "Public-sector service delivery — permits, records and citizen requests under full audit lineage.",
-      "tier": "integration-ready",
-      "maturity": "L1",
-      "liveProofStatus": "none",
-      "demoReadiness": "framework-ready",
-      "resourceTypes": [
-        "digital-resource.document",
-        "human-organizational.government-agency",
-        "regulated-data.audit-log",
-        "regulated-data.identity-document",
-        "regulated-data.tax-record"
-      ],
-      "actions": [
-        {
-          "actionId": "request.process",
-          "label": "Process a service request",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "gov",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "permit.issue",
-          "label": "Issue a permit",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "gov",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "record.release",
-          "label": "Release a public record",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "gov",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
-            "maturity": "L2"
-          }
-        },
-        {
-          "actionId": "filing.receive",
-          "label": "Receive a filing",
-          "actionFamily": "regulated-data",
-          "adapter": {
-            "provider": "gov",
-            "adapterId": "api",
-            "status": "ADAPTER_REQUIRED",
             "maturity": "L2"
           }
         }
@@ -4684,12 +3287,6 @@
       "actionFamilies": ["files", "protected-data"]
     },
     {
-      "rolePackId": "arp_healthcare.patient-assistant",
-      "domain": "healthcare",
-      "humanLabel": "Patient assistant",
-      "actionFamilies": ["communication", "protected-data"]
-    },
-    {
       "rolePackId": "arp_healthcare.records-agent",
       "domain": "healthcare",
       "humanLabel": "Records agent",
@@ -4700,78 +3297,6 @@
       "domain": "healthcare",
       "humanLabel": "Scheduling agent",
       "actionFamilies": ["scheduling", "communication"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.dispatch-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Dispatch agent",
-      "actionFamilies": ["scheduling", "communication", "tooling"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.drone-controller",
-      "domain": "physical-ops",
-      "humanLabel": "Drone controller",
-      "actionFamilies": ["tooling"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.field-technician-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Field technician agent",
-      "actionFamilies": ["tooling", "communication", "files"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.fleet-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Fleet agent",
-      "actionFamilies": ["tooling", "scheduling"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.industrial-operations-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Industrial operations agent",
-      "actionFamilies": ["tooling", "agent-state"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.inspection-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Inspection agent",
-      "actionFamilies": ["files", "tooling"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.maintenance-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Maintenance agent",
-      "actionFamilies": ["tooling", "scheduling", "files"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.mission-planner",
-      "domain": "physical-ops",
-      "humanLabel": "Mission planner",
-      "actionFamilies": ["tooling", "agent-state"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.robot-controller",
-      "domain": "physical-ops",
-      "humanLabel": "Robot controller",
-      "actionFamilies": ["tooling"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.robot-coordinator",
-      "domain": "physical-ops",
-      "humanLabel": "Robot coordinator",
-      "actionFamilies": ["tooling", "agent-state", "delegation"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.safety-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Safety agent",
-      "actionFamilies": ["tooling", "agent-state"]
-    },
-    {
-      "rolePackId": "arp_physical-ops.warehouse-agent",
-      "domain": "physical-ops",
-      "humanLabel": "Warehouse agent",
-      "actionFamilies": ["tooling", "scheduling"]
     },
     {
       "rolePackId": "arp_software-infra.cicd-agent",
@@ -4844,24 +3369,10 @@
       "actionFamilies": ["agent-state", "agent-communication"]
     },
     {
-      "entityPackId": "epk_autonomous.assistant",
-      "class": "autonomous",
-      "canonicalType": "autonomous.assistant",
-      "humanLabel": "Assistant",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
       "entityPackId": "epk_autonomous.automation-script",
       "class": "autonomous",
       "canonicalType": "autonomous.automation-script",
       "humanLabel": "Automation script",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
-      "entityPackId": "epk_autonomous.autonomous-vehicle",
-      "class": "autonomous",
-      "canonicalType": "autonomous.autonomous-vehicle",
-      "humanLabel": "Autonomous vehicle",
       "actionFamilies": ["agent-state", "agent-communication"]
     },
     {
@@ -4872,59 +3383,10 @@
       "actionFamilies": ["scheduling"]
     },
     {
-      "entityPackId": "epk_autonomous.browser-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.browser-agent",
-      "humanLabel": "Browser agent",
-      "actionFamilies": ["local.browse"]
-    },
-    {
-      "entityPackId": "epk_autonomous.calendar-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.calendar-agent",
-      "humanLabel": "Calendar agent",
-      "actionFamilies": ["scheduling"]
-    },
-    {
-      "entityPackId": "epk_autonomous.cloud-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.cloud-agent",
-      "humanLabel": "Cloud agent",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
-      "entityPackId": "epk_autonomous.copilot",
-      "class": "autonomous",
-      "canonicalType": "autonomous.copilot",
-      "humanLabel": "Copilot",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
-      "entityPackId": "epk_autonomous.cron-task",
-      "class": "autonomous",
-      "canonicalType": "autonomous.cron-task",
-      "humanLabel": "Cron task",
-      "actionFamilies": ["scheduling"]
-    },
-    {
-      "entityPackId": "epk_autonomous.decision-support",
-      "class": "autonomous",
-      "canonicalType": "autonomous.decision-support",
-      "humanLabel": "Decision support system",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
       "entityPackId": "epk_autonomous.delegated-agent",
       "class": "autonomous",
       "canonicalType": "autonomous.delegated-agent",
       "humanLabel": "Delegated agent",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
-      "entityPackId": "epk_autonomous.device-controller",
-      "class": "autonomous",
-      "canonicalType": "autonomous.device-controller",
-      "humanLabel": "Device controller",
       "actionFamilies": ["agent-state", "agent-communication"]
     },
     {
@@ -4935,39 +3397,11 @@
       "actionFamilies": ["communication"]
     },
     {
-      "entityPackId": "epk_autonomous.embedded-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.embedded-agent",
-      "humanLabel": "Embedded agent",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
-      "entityPackId": "epk_autonomous.file-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.file-agent",
-      "humanLabel": "File agent",
-      "actionFamilies": ["files"]
-    },
-    {
-      "entityPackId": "epk_autonomous.inference-service",
-      "class": "autonomous",
-      "canonicalType": "network.endpoint-set",
-      "humanLabel": "Inference service",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
       "entityPackId": "epk_autonomous.integration-bot",
       "class": "autonomous",
       "canonicalType": "autonomous.integration-bot",
       "humanLabel": "Integration bot",
       "actionFamilies": ["networking"]
-    },
-    {
-      "entityPackId": "epk_autonomous.local-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.local-agent",
-      "humanLabel": "Local agent",
-      "actionFamilies": ["agent-state", "agent-communication"]
     },
     {
       "entityPackId": "epk_autonomous.multi-agent-system",
@@ -4984,13 +3418,6 @@
       "actionFamilies": ["communication"]
     },
     {
-      "entityPackId": "epk_autonomous.ops-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.ops-agent",
-      "humanLabel": "Ops agent",
-      "actionFamilies": ["agent-state", "agent-communication"]
-    },
-    {
       "entityPackId": "epk_autonomous.parent-agent",
       "class": "autonomous",
       "canonicalType": "autonomous.parent-agent",
@@ -5003,13 +3430,6 @@
       "canonicalType": "autonomous.payment-agent",
       "humanLabel": "Payment agent",
       "actionFamilies": ["commerce"]
-    },
-    {
-      "entityPackId": "epk_autonomous.physical-robot",
-      "class": "autonomous",
-      "canonicalType": "autonomous.physical-robot",
-      "humanLabel": "Physical robot",
-      "actionFamilies": ["delegation"]
     },
     {
       "entityPackId": "epk_autonomous.procurement-agent",
@@ -5075,13 +3495,6 @@
       "actionFamilies": ["tooling"]
     },
     {
-      "entityPackId": "epk_autonomous.voice-agent",
-      "class": "autonomous",
-      "canonicalType": "autonomous.voice-agent",
-      "humanLabel": "Voice agent",
-      "actionFamilies": ["communication"]
-    },
-    {
       "entityPackId": "epk_autonomous.workflow-orchestrator",
       "class": "autonomous",
       "canonicalType": "autonomous.workflow-orchestrator",
@@ -5135,13 +3548,6 @@
       "class": "business-enterprise",
       "canonicalType": "business.employee-record",
       "humanLabel": "Employee record",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_business-enterprise.expense-item",
-      "class": "business-enterprise",
-      "canonicalType": "business.expense-item",
-      "humanLabel": "Expense item",
       "actionFamilies": []
     },
     {
@@ -5229,13 +3635,6 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_business-enterprise.service-offering",
-      "class": "business-enterprise",
-      "canonicalType": "business.service-offering",
-      "humanLabel": "Service offering",
-      "actionFamilies": ["commerce"]
-    },
-    {
       "entityPackId": "epk_business-enterprise.shipment",
       "class": "business-enterprise",
       "canonicalType": "business.shipment",
@@ -5285,13 +3684,6 @@
       "actionFamilies": ["networking", "local.egress"]
     },
     {
-      "entityPackId": "epk_digital-resource.archive",
-      "class": "digital-resource",
-      "canonicalType": "digital.archive",
-      "humanLabel": "Archive",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_digital-resource.backup",
       "class": "digital-resource",
       "canonicalType": "digital.backup",
@@ -5306,24 +3698,10 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_digital-resource.calendar",
-      "class": "digital-resource",
-      "canonicalType": "calendar.calendar",
-      "humanLabel": "Calendar",
-      "actionFamilies": ["scheduling"]
-    },
-    {
       "entityPackId": "epk_digital-resource.calendar-event",
       "class": "digital-resource",
       "canonicalType": "digital.calendar-event",
       "humanLabel": "Calendar event",
-      "actionFamilies": ["scheduling"]
-    },
-    {
-      "entityPackId": "epk_digital-resource.calendar-list",
-      "class": "digital-resource",
-      "canonicalType": "digital.calendar-list",
-      "humanLabel": "Calendar list",
       "actionFamilies": ["scheduling"]
     },
     {
@@ -5411,24 +3789,10 @@
       "actionFamilies": ["communication"]
     },
     {
-      "entityPackId": "epk_digital-resource.file",
-      "class": "digital-resource",
-      "canonicalType": "digital.file",
-      "humanLabel": "File",
-      "actionFamilies": ["files"]
-    },
-    {
       "entityPackId": "epk_digital-resource.file-root",
       "class": "digital-resource",
       "canonicalType": "storage.file-root",
       "humanLabel": "File root",
-      "actionFamilies": ["files"]
-    },
-    {
-      "entityPackId": "epk_digital-resource.folder",
-      "class": "digital-resource",
-      "canonicalType": "digital.folder",
-      "humanLabel": "Folder",
       "actionFamilies": ["files"]
     },
     {
@@ -5488,25 +3852,11 @@
       "actionFamilies": ["files"]
     },
     {
-      "entityPackId": "epk_digital-resource.phone-number",
-      "class": "digital-resource",
-      "canonicalType": "digital.phone-number",
-      "humanLabel": "Phone number",
-      "actionFamilies": ["communication"]
-    },
-    {
       "entityPackId": "epk_digital-resource.pull-request",
       "class": "digital-resource",
       "canonicalType": "digital.pull-request",
       "humanLabel": "Pull request",
       "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_digital-resource.push-device",
-      "class": "digital-resource",
-      "canonicalType": "digital.push-device",
-      "humanLabel": "Push device",
-      "actionFamilies": ["communication"]
     },
     {
       "entityPackId": "epk_digital-resource.repository",
@@ -5523,31 +3873,10 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_digital-resource.sms-message",
-      "class": "digital-resource",
-      "canonicalType": "digital.sms-message",
-      "humanLabel": "SMS message",
-      "actionFamilies": ["communication"]
-    },
-    {
-      "entityPackId": "epk_digital-resource.spreadsheet",
-      "class": "digital-resource",
-      "canonicalType": "digital.spreadsheet",
-      "humanLabel": "Spreadsheet",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_digital-resource.task-item",
       "class": "digital-resource",
       "canonicalType": "digital.task-item",
       "humanLabel": "Task item",
-      "actionFamilies": ["scheduling"]
-    },
-    {
-      "entityPackId": "epk_digital-resource.task-list",
-      "class": "digital-resource",
-      "canonicalType": "digital.task-list",
-      "humanLabel": "Task list",
       "actionFamilies": ["scheduling"]
     },
     {
@@ -5586,13 +3915,6 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_digital-resource.website",
-      "class": "digital-resource",
-      "canonicalType": "digital.website",
-      "humanLabel": "Website",
-      "actionFamilies": ["local.browse"]
-    },
-    {
       "entityPackId": "epk_financial-commerce.bank-account",
       "class": "financial-commerce",
       "canonicalType": "financial.bank-account",
@@ -5604,13 +3926,6 @@
       "class": "financial-commerce",
       "canonicalType": "financial.budget",
       "humanLabel": "Budget",
-      "actionFamilies": ["commerce"]
-    },
-    {
-      "entityPackId": "epk_financial-commerce.card-token",
-      "class": "financial-commerce",
-      "canonicalType": "financial.card-token",
-      "humanLabel": "Card token",
       "actionFamilies": ["commerce"]
     },
     {
@@ -5684,13 +3999,6 @@
       "actionFamilies": ["commerce"]
     },
     {
-      "entityPackId": "epk_financial-commerce.loan-account",
-      "class": "financial-commerce",
-      "canonicalType": "financial.loan-account",
-      "humanLabel": "Loan account",
-      "actionFamilies": ["commerce"]
-    },
-    {
       "entityPackId": "epk_financial-commerce.merchant-account",
       "class": "financial-commerce",
       "canonicalType": "financial.merchant-account",
@@ -5733,20 +4041,6 @@
       "actionFamilies": ["commerce"]
     },
     {
-      "entityPackId": "epk_financial-commerce.savings-account",
-      "class": "financial-commerce",
-      "canonicalType": "financial.savings-account",
-      "humanLabel": "Savings account",
-      "actionFamilies": ["commerce"]
-    },
-    {
-      "entityPackId": "epk_financial-commerce.subscription",
-      "class": "financial-commerce",
-      "canonicalType": "financial.subscription",
-      "humanLabel": "Subscription",
-      "actionFamilies": ["commerce"]
-    },
-    {
       "entityPackId": "epk_financial-commerce.transaction",
       "class": "financial-commerce",
       "canonicalType": "financial.transaction",
@@ -5768,87 +4062,10 @@
       "actionFamilies": ["commerce"]
     },
     {
-      "entityPackId": "epk_human-organizational.account-holder",
-      "class": "human-organizational",
-      "canonicalType": "principal.account-holder",
-      "humanLabel": "Account holder",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.administrator",
-      "class": "human-organizational",
-      "canonicalType": "principal.administrator",
-      "humanLabel": "Administrator",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.approver",
-      "class": "human-organizational",
-      "canonicalType": "principal.approver",
-      "humanLabel": "Approver",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.business-unit",
-      "class": "human-organizational",
-      "canonicalType": "organization.business-unit",
-      "humanLabel": "Business unit",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.caregiver",
-      "class": "human-organizational",
-      "canonicalType": "principal.caregiver",
-      "humanLabel": "Caregiver",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.child",
-      "class": "human-organizational",
-      "canonicalType": "principal.child",
-      "humanLabel": "Child",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.company",
-      "class": "human-organizational",
-      "canonicalType": "organization.company",
-      "humanLabel": "Company",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.customer",
-      "class": "human-organizational",
-      "canonicalType": "principal.customer",
-      "humanLabel": "Customer",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.department",
-      "class": "human-organizational",
-      "canonicalType": "organization.department",
-      "humanLabel": "Department",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_human-organizational.employee",
       "class": "human-organizational",
       "canonicalType": "principal.employee",
       "humanLabel": "Employee",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.financial-institution",
-      "class": "human-organizational",
-      "canonicalType": "organization.financial-institution",
-      "humanLabel": "Financial institution",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.government-agency",
-      "class": "human-organizational",
-      "canonicalType": "organization.government-agency",
-      "humanLabel": "Government agency",
       "actionFamilies": []
     },
     {
@@ -5866,52 +4083,10 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_human-organizational.insured",
-      "class": "human-organizational",
-      "canonicalType": "principal.insured",
-      "humanLabel": "Insured",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_human-organizational.legal-entity",
       "class": "human-organizational",
       "canonicalType": "organization.legal-entity",
       "humanLabel": "Legal entity",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.manager",
-      "class": "human-organizational",
-      "canonicalType": "principal.manager",
-      "humanLabel": "Manager",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.merchant",
-      "class": "human-organizational",
-      "canonicalType": "organization.merchant",
-      "humanLabel": "Merchant",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.officer",
-      "class": "human-organizational",
-      "canonicalType": "principal.officer",
-      "humanLabel": "Officer",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.operator",
-      "class": "human-organizational",
-      "canonicalType": "principal.operator",
-      "humanLabel": "Operator",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.parent",
-      "class": "human-organizational",
-      "canonicalType": "principal.parent",
-      "humanLabel": "Parent",
       "actionFamilies": []
     },
     {
@@ -5929,52 +4104,10 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_human-organizational.provider-organization",
-      "class": "human-organizational",
-      "canonicalType": "organization.provider-organization",
-      "humanLabel": "Provider organization",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.spouse",
-      "class": "human-organizational",
-      "canonicalType": "principal.spouse",
-      "humanLabel": "Spouse",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.team",
-      "class": "human-organizational",
-      "canonicalType": "organization.team",
-      "humanLabel": "Team",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.tenant",
-      "class": "human-organizational",
-      "canonicalType": "principal.tenant",
-      "humanLabel": "Tenant",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_human-organizational.traveler",
       "class": "human-organizational",
       "canonicalType": "principal.traveler",
       "humanLabel": "Traveler",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.vendor-organization",
-      "class": "human-organizational",
-      "canonicalType": "organization.vendor-organization",
-      "humanLabel": "Vendor organization",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_human-organizational.worker",
-      "class": "human-organizational",
-      "canonicalType": "principal.worker",
-      "humanLabel": "Worker",
       "actionFamilies": []
     },
     {
@@ -5985,157 +4118,10 @@
       "actionFamilies": []
     },
     {
-      "entityPackId": "epk_physical.actuator",
-      "class": "physical",
-      "canonicalType": "physical.actuator",
-      "humanLabel": "Actuator",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.alarm-system",
-      "class": "physical",
-      "canonicalType": "physical.alarm-system",
-      "humanLabel": "Alarm system",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.camera",
-      "class": "physical",
-      "canonicalType": "physical.camera",
-      "humanLabel": "Camera",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.conveyor",
-      "class": "physical",
-      "canonicalType": "physical.conveyor",
-      "humanLabel": "Conveyor",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.delivery-robot",
-      "class": "physical",
-      "canonicalType": "physical.delivery-robot",
-      "humanLabel": "Delivery robot",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.door-lock",
-      "class": "physical",
-      "canonicalType": "physical.door-lock",
-      "humanLabel": "Door lock",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.drone",
-      "class": "physical",
-      "canonicalType": "physical.drone",
-      "humanLabel": "Drone",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.elevator",
-      "class": "physical",
-      "canonicalType": "physical.elevator",
-      "humanLabel": "Elevator",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.generator",
-      "class": "physical",
-      "canonicalType": "physical.generator",
-      "humanLabel": "Generator",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.hvac-system",
-      "class": "physical",
-      "canonicalType": "physical.hvac-system",
-      "humanLabel": "HVAC system",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.irrigation-system",
-      "class": "physical",
-      "canonicalType": "physical.irrigation-system",
-      "humanLabel": "Irrigation system",
-      "actionFamilies": []
-    },
-    {
       "entityPackId": "epk_physical.lab-instrument",
       "class": "physical",
       "canonicalType": "physical.lab-instrument",
       "humanLabel": "Lab instrument",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.lighting-system",
-      "class": "physical",
-      "canonicalType": "physical.lighting-system",
-      "humanLabel": "Lighting system",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.machine-tool",
-      "class": "physical",
-      "canonicalType": "physical.machine-tool",
-      "humanLabel": "Machine tool",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.medical-device",
-      "class": "physical",
-      "canonicalType": "physical.medical-device",
-      "humanLabel": "Medical device",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.package-container",
-      "class": "physical",
-      "canonicalType": "physical.package-container",
-      "humanLabel": "Package container",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.robot",
-      "class": "physical",
-      "canonicalType": "physical.robot",
-      "humanLabel": "Robot",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.robot-arm",
-      "class": "physical",
-      "canonicalType": "physical.robot-arm",
-      "humanLabel": "Robot arm",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.sensor",
-      "class": "physical",
-      "canonicalType": "physical.sensor",
-      "humanLabel": "Sensor",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.utility-meter",
-      "class": "physical",
-      "canonicalType": "physical.utility-meter",
-      "humanLabel": "Utility meter",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.vehicle-asset",
-      "class": "physical",
-      "canonicalType": "physical.vehicle-asset",
-      "humanLabel": "Vehicle asset",
-      "actionFamilies": []
-    },
-    {
-      "entityPackId": "epk_physical.warehouse-robot",
-      "class": "physical",
-      "canonicalType": "physical.warehouse-robot",
-      "humanLabel": "Warehouse robot",
       "actionFamilies": []
     },
     {
@@ -6258,24 +4244,10 @@
       "actionFamilies": ["protected-data"]
     },
     {
-      "entityPackId": "epk_travel-property.access-grant",
-      "class": "travel-property",
-      "canonicalType": "travel-property.access-grant",
-      "humanLabel": "Access grant",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
       "entityPackId": "epk_travel-property.car-rental",
       "class": "travel-property",
       "canonicalType": "travel-property.car-rental",
       "humanLabel": "Car rental",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.commercial-property",
-      "class": "travel-property",
-      "canonicalType": "travel-property.commercial-property",
-      "humanLabel": "Commercial property",
       "actionFamilies": ["scheduling", "commerce"]
     },
     {
@@ -6307,48 +4279,6 @@
       "actionFamilies": ["scheduling", "commerce"]
     },
     {
-      "entityPackId": "epk_travel-property.property-lease",
-      "class": "travel-property",
-      "canonicalType": "travel-property.property-lease",
-      "humanLabel": "Property lease",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.property-listing",
-      "class": "travel-property",
-      "canonicalType": "travel-property.property-listing",
-      "humanLabel": "Property listing",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.property-maintenance",
-      "class": "travel-property",
-      "canonicalType": "travel-property.property-maintenance",
-      "humanLabel": "Maintenance record",
-      "actionFamilies": ["scheduling"]
-    },
-    {
-      "entityPackId": "epk_travel-property.reservation",
-      "class": "travel-property",
-      "canonicalType": "travel-property.reservation",
-      "humanLabel": "Reservation",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.residence",
-      "class": "travel-property",
-      "canonicalType": "travel-property.residence",
-      "humanLabel": "Residence",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.smart-home",
-      "class": "travel-property",
-      "canonicalType": "travel-property.smart-home",
-      "humanLabel": "Smart home system",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
       "entityPackId": "epk_travel-property.train-booking",
       "class": "travel-property",
       "canonicalType": "travel-property.train-booking",
@@ -6360,20 +4290,6 @@
       "class": "travel-property",
       "canonicalType": "travel-property.travel-document",
       "humanLabel": "Travel document",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.vehicle",
-      "class": "travel-property",
-      "canonicalType": "travel-property.vehicle",
-      "humanLabel": "Personal vehicle",
-      "actionFamilies": ["scheduling", "commerce"]
-    },
-    {
-      "entityPackId": "epk_travel-property.vehicle-registration",
-      "class": "travel-property",
-      "canonicalType": "travel-property.vehicle-registration",
-      "humanLabel": "Vehicle registration",
       "actionFamilies": ["scheduling", "commerce"]
     }
   ]

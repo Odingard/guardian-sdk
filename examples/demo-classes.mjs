@@ -5,7 +5,7 @@
  *
  * Label per run (printed, never assumed):
  *   SIMULATED — no env vars: a local deterministic demo policy stands in for
- *               Guardian. Nothing real is sent, paid, deployed or stopped.
+ *               Guardian. Nothing real is sent, paid, deployed or refunded.
  *   LIVE      — GUARDIAN_BASE_URL / GUARDIAN_AGENT_CREDENTIAL /
  *               GUARDIAN_CONNECTION_ID set: real hosted Guardian decides.
  *               Each tool must exist on that tool connection; the effect is
@@ -49,9 +49,9 @@ const CLASSES = [
     { account: "acc_9", field: "tier", value: "gold" },
   ],
   [
-    "6 robot stop (flagship)",
-    "robot_stop",
-    { robot: "arm-3", reason: "operator request" },
+    "6 customer refund (flagship)",
+    "issue_refund",
+    { orderId: "ord_1042", amountCents: 4999, reason: "damaged item" },
   ],
 ];
 

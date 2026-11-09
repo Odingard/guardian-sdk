@@ -106,7 +106,7 @@ It uses the same environment variables, the same two connections (the console's 
 
 A `PreToolUse` hook runs for every tool call, even calls an allow rule or `bypassPermissions` would approve, and its deny holds in every permission mode.
 
-A runnable example is in `examples/claude-agent-sdk.mjs`. For agents hosted on [Maritime](https://maritime.sh), where Claude Code runs unattended in its own VM, see `examples/maritime-claude-code/`.
+A runnable example is in `examples/claude-agent-sdk.mjs`. For a hosted agent where Claude Code runs unattended in its own VM, see `examples/hosted-claude-code/`.
 
 ## OpenAI Codex CLI
 
@@ -151,15 +151,15 @@ Set the same `GUARDIAN_*` variables as for Claude Code in the environment Codex 
 
 How a decision reaches Codex: an allow prints nothing and exits 0, which Codex treats as success (Codex documents `permissionDecision: "allow"` only together with `updatedInput`). A deny prints the deny JSON, writes the reason to stderr and exits 2; Codex blocks on either. The hook never returns `"ask"`, which Codex does not support and treats as a failed hook that lets the call run: on ASK the hook waits for the approval itself (up to 5 minutes) and then answers allow or deny.
 
-### On Maritime's Codex template
+### Hosted Codex agents (`codex exec`)
 
-Maritime's template runs each chat message as `codex exec --dangerously-bypass-approvals-and-sandbox`, with config under `/data/.codex`. To govern it:
+Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-and-sandbox`, with config under `/data/.codex`. To govern it:
 
-1. Install `@odingard/guardian-hook` in the image (a forked template with a custom image, which Maritime documents) and write the `hooks.json` above to `/data/.codex/hooks.json` at boot.
-2. Add `--dangerously-bypass-hook-trust` to the template's `codex exec` command, or deliver the hook as a managed `requirements.toml` hook. **This is the one setting the template needs**; without it the hook is skipped.
+1. Install `@odingard/guardian-hook` in the image (a custom image) and write the `hooks.json` above to `/data/.codex/hooks.json` at boot.
+2. Add `--dangerously-bypass-hook-trust` to the host's `codex exec` command, or deliver the hook as a managed `requirements.toml` hook. **This is the one setting a headless host needs**; without it the hook is skipped.
 3. Set `GUARDIAN_AGENT_CREDENTIAL`, `GUARDIAN_CONNECTION_ID` and `GUARDIAN_HOOK_ASK_CONNECTION_ID` as agent environment variables (the credential as a secret).
 
-`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals, but that hooks still fire under that flag on Maritime is **not yet confirmed live**. See `examples/codex/`.
+`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals, but that hooks still fire under that flag is **not yet confirmed live**. See `examples/codex/`.
 
 ### Not governed under Codex
 
@@ -208,7 +208,7 @@ The bridge's hooks file, e.g. `/data/.dsh/guardian-hooks.json`:
 }
 ```
 
-Mount the bridge in `$DSH_HOME/cordis.patch.yml` (`/data/.dsh/cordis.patch.yml` on Maritime):
+Mount the bridge in `$DSH_HOME/cordis.patch.yml` (for example `/data/.dsh/cordis.patch.yml`):
 
 ```yaml
 - insert:
@@ -231,7 +231,7 @@ The bridge reads its config once at startup, so restart the agent after changing
 | `web_fetch`                                             | `web_fetch`                                              | The URL.                                                 |
 | `mcp__<server>__<tool>`                                 | `mcp.<server>.<tool>`                                    | The MCP arguments.                                       |
 
-A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both of which the bridge treats as a block. An allow does not pre-approve the call in dsh: dsh's own approval policy still applies after Guardian allows it. The hook never returns `"ask"`; it waits for the approval itself, so it works in Maritime's one-shot headless chats too.
+A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both of which the bridge treats as a block. An allow does not pre-approve the call in dsh: dsh's own approval policy still applies after Guardian allows it. The hook never returns `"ask"`; it waits for the approval itself, so it works in one-shot headless chats too.
 
 ### Not governed under DeepSeek Harness
 
@@ -239,13 +239,13 @@ A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both 
 - **A missing or unparseable hooks file governs nothing.** The bridge logs "could not load hook config … no hooks registered" and runs every call. Check with a deny after every config change.
 - `terminal_send` is classified per message, so a command split across several sends (e.g. `terraform ap` then `ply`) is seen in pieces, and text sent to a program already running in the PTY (a REPL, `ssh`) is classified as if it were a shell command. Prefer the plain `bash` tool and turn the terminal tools off where that matters.
 - **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
-- Not yet confirmed live: the tool names the bridge passes in Maritime's image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether Maritime's dsh image already includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether Maritime's headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
+- Not yet confirmed live: the tool names the bridge passes in a hosted dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether a host's dsh image already includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether a host's headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
 
 ## Limits (read these)
 
 - **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The receipt proves Guardian's authorization of that exact call, not the command's own outcome.
 - **Routing is local and evadable.** The classification patterns run on your machine and catch plain spellings only (see [Tools the hook proposes](#tools-the-hook-proposes)).
-- **The agent can edit the hook's own config.** An Allow-tier file edit (`apply_patch`, dsh `write`/`edit`, Claude Code `Write`) can rewrite `.codex/hooks.json`, `/data/.dsh/guardian-hooks.json`, `cordis.patch.yml` or `.claude/settings.json` and remove the hook. On Maritime's one-shot dsh runs the harness restarts on every message, so the edit takes effect on the next one. Deliver the hook as a managed hook (Codex `requirements.toml` with `allow_managed_hooks_only`, Claude Code managed settings), or mount the config read-only (owned by another user) where that matters.
+- **The agent can edit the hook's own config.** An Allow-tier file edit (`apply_patch`, dsh `write`/`edit`, Claude Code `Write`) can rewrite `.codex/hooks.json`, `/data/.dsh/guardian-hooks.json`, `cordis.patch.yml` or `.claude/settings.json` and remove the hook. On one-shot dsh runs the harness restarts on every message, so the edit takes effect on the next one. Deliver the hook as a managed hook (Codex `requirements.toml` with `allow_managed_hooks_only`, Claude Code managed settings), or mount the config read-only (owned by another user) where that matters.
 - **Starting the hook.** It answers only when run as `guardian-hook` (or `…/hook/dist/index.js`). Installed under another file name it exits 0 with no output, which every agent treats as "no objection". Use the documented commands.
 - **Only calls through the hook are governed.** Commands you run yourself, or other credentials on the machine, are not.
 - **Arguments are bounded.** Commands over 2,000 characters are truncated in what the approver sees; MCP inputs over that size are sent as a digest.

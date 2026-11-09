@@ -49,22 +49,21 @@ and exit 0 to allow, deny JSON plus stderr and exit 2 to block.
 For a fleet, deliver the hook as a managed hook instead; see
 [`requirements.toml`](requirements.toml).
 
-## Maritime's Codex template
+## Hosted Codex agents (`codex exec`)
 
-Maritime runs each chat message as
+Some hosts run each chat message as
 `codex exec --dangerously-bypass-approvals-and-sandbox`, with Codex's config
-under `/data/.codex`. The template needs a fork with a custom image (which
-Maritime documents) to:
+under `/data/.codex`. Such a host's Codex image needs a custom build to:
 
 1. install `@odingard/guardian-hook` in the image;
 2. write `hooks.json` to `/data/.codex/hooks.json` at boot;
 3. **add `--dangerously-bypass-hook-trust` to its `codex exec` command**
-   (or ship the managed `requirements.toml`). This is the setting the template
-   needs; without it Codex skips the hook.
+   (or ship the managed `requirements.toml`). This is the setting a headless
+   host needs; without it Codex skips the hook.
 
 Then set the three `GUARDIAN_*` variables in the agent's settings (the
 credential as a secret). Not yet confirmed live: that hooks fire under
-`--dangerously-bypass-approvals-and-sandbox`, and Maritime's Codex version.
+`--dangerously-bypass-approvals-and-sandbox`, and which Codex version a host runs.
 
 ## What is not governed
 

@@ -677,7 +677,7 @@ describe("hostile remote upstream", () => {
 describe("remote MCP upstream (SSE)", () => {
   it("governs an SSE server the same way: ALLOW forwards with the bearer key, DENY does not", async () => {
     const remote = await remoteSse();
-    const env = { ...ENV, MARITIME_API_KEY: API_KEY };
+    const env = { ...ENV, REMOTE_MCP_API_KEY: API_KEY };
     const parsed = parseCli(
       [
         "proxy",
@@ -686,7 +686,7 @@ describe("remote MCP upstream (SSE)", () => {
         "--transport",
         "sse",
         "--header",
-        "Authorization: Bearer ${MARITIME_API_KEY}",
+        "Authorization: Bearer ${REMOTE_MCP_API_KEY}",
       ],
       env,
     );
@@ -761,7 +761,7 @@ describe("remote CLI config", () => {
       [
         "tools",
         "--json",
-        "--url=https://mcp.maritime.sh/mcp",
+        "--url=https://mcp.example.com/mcp",
         "--transport=sse",
       ],
       {},
@@ -770,7 +770,7 @@ describe("remote CLI config", () => {
       kind: "tools",
       json: true,
       remote: {
-        url: "https://mcp.maritime.sh/mcp",
+        url: "https://mcp.example.com/mcp",
         transport: "sse",
         headers: {},
       },

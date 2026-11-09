@@ -1,11 +1,11 @@
 /**
- * A Claude Code agent for Maritime (https://maritime.sh), governed by Guardian.
+ * A Claude Code agent for a hosted agent VM, governed by Guardian.
  *
  * LIVE: needs a Claude API key and a Guardian agent. Nothing is simulated.
  *
- * Maritime runs each agent in its own micro-VM and talks to it over its
- * bring-your-own-agent contract: GET /health and POST /chat on $PORT, with
- * persistent state under /data. Inside the VM, Claude Code runs unattended
+ * It suits hosts that run each agent in its own VM and talk to it over a
+ * small HTTP contract: GET /health and POST /chat on $PORT, with persistent
+ * state under /data. Inside the VM, Claude Code runs unattended
  * (permissionMode "bypassPermissions"), which is right for an isolated
  * sandbox but means nothing asks before a command runs.
  *
@@ -18,17 +18,18 @@
  *   - every allowed call leaves a receipt you can verify offline.
  * A PreToolUse hook runs even under bypassPermissions, and its deny holds.
  *
- * Environment (set on the Maritime agent; mark keys as secrets):
+ * Environment (set on the hosted agent; mark keys as secrets):
  *   ANTHROPIC_API_KEY                 Claude key (a workspace-scoped key)
  *   GUARDIAN_AGENT_CREDENTIAL         Guardian console -> Agents
  *   GUARDIAN_CONNECTION_ID            pcn_... "Coding agent — everyday" (Allow)
  *   GUARDIAN_HOOK_ASK_CONNECTION_ID   pcn_... "Coding agent — needs approval" (Ask)
- *   IS_SANDBOX=1                      required: Maritime runs agents as root
- *   CLAUDE_MODEL                      optional (default claude-opus-5-5)
+ *   IS_SANDBOX=1                      required when the host runs agents as root
+ *   CLAUDE_MODEL                      optional (default: the Agent SDK's default)
  *
- * Maritime's gateway gives each reply about 30 seconds, and a Guardian
- * approval can take up to 5 minutes. A request is never cancelled: if it is
- * still running (for example, waiting for an approval) when the reply is due,
+ * A host may give each reply only about 30 seconds, and a Guardian approval
+ * can take up to 5 minutes. This agent answers within REPLY_BUDGET_MS (24 s).
+ * A request is never cancelled: if it is still running (for example, waiting
+ * for an approval) when the reply is due,
  * the agent says what it is waiting for, and the finished answer comes back
  * as the reply to the next message in that conversation.
  */
@@ -40,10 +41,10 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { guardianHookMatcher } from "@odingard/guardian-hook/agent-sdk";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
+const MODEL = process.env.CLAUDE_MODEL?.trim() || undefined;
 const MAX_TURNS = Number(process.env.MAX_TURNS ?? 20);
 const REPLY_BUDGET_MS = Number(process.env.REPLY_BUDGET_MS ?? 24_000);
-const AGENT_NAME = process.env.GUARDIAN_HOOK_AGENT_NAME || "Maritime agent";
+const AGENT_NAME = process.env.GUARDIAN_HOOK_AGENT_NAME || "Hosted Claude Code agent";
 
 // /data survives restarts, redeploys and sleep/wake; everything else is disposable.
 const DATA_DIR = fs.existsSync("/data") ? "/data" : path.resolve("data");
@@ -91,7 +92,7 @@ function stateFor(id) {
 async function runQuery(message, conversationId, state) {
   const options = {
     cwd: WORKSPACE,
-    model: MODEL,
+    ...(MODEL ? { model: MODEL } : {}),
     maxTurns: MAX_TURNS,
     // Unattended inside an isolated VM. Guardian, not a prompt, decides.
     permissionMode: "bypassPermissions",
@@ -143,7 +144,7 @@ function failureText(error) {
 export async function handleChat(message, conversationId) {
   const missing = missingConfig();
   if (missing.length > 0) {
-    return `This agent is not set up yet, so it will not run anything. Set ${missing.join(", ")} in the agent's environment variables on Maritime, then restart it.`;
+    return `This agent is not set up yet, so it will not run anything. Set ${missing.join(", ")} in the agent's environment variables, then restart it.`;
   }
   const state = stateFor(conversationId);
   if (state.stashed) {
@@ -219,7 +220,7 @@ export const server = http.createServer(async (req, res) => {
     return send(200, {
       agent: "claude-code",
       governedBy: "guardian",
-      model: MODEL,
+      model: MODEL ?? "default",
       ready: missingConfig().length === 0,
     });
   }
@@ -248,7 +249,7 @@ if (process.argv[1]?.endsWith("server.mjs")) {
   server.listen(PORT, "0.0.0.0", () => {
     const missing = missingConfig();
     process.stderr.write(
-      `Guardian-governed Claude Code agent on :${PORT} (model ${MODEL}).` +
+      `Guardian-governed Claude Code agent on :${PORT} (model ${MODEL ?? "default"}).` +
         (missing.length ? ` Not ready: set ${missing.join(", ")}.` : "") +
         "\n",
     );

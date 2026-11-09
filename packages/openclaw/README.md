@@ -14,8 +14,7 @@ sends every consequential tool call to Guardian for a deterministic
 
 **Status: not yet proven live.** Tested against a stand-in Guardian, and
 loaded and run inside OpenClaw 2026.7.1's real plugin loader and tool-hook
-runtime (the version Maritime's OpenClaw template runs). It has not yet
-run live on Maritime.
+runtime. It has not yet run live against a real Guardian.
 
 **Tamper-resistance is a deployment precondition, and the plugin enforces
 it.** If the OpenClaw process user can change the plugin, the OpenClaw config,
@@ -215,13 +214,13 @@ ignored, whatever its value, and the Gateway log says so. Set them in the
 environment the Gateway is started with (the container or service
 definition) or in the protected `<state dir>/.env`.
 
-### Maritime / the official OpenClaw image
+### The official OpenClaw image
 
-Maritime runs `ghcr.io/openclaw/openclaw:2026.7.1`: the Gateway runs as user
+In `ghcr.io/openclaw/openclaw:2026.7.1` the Gateway runs as user
 `node`, with `HOME=/data` and the state directory `/data/.openclaw`. Install
 and configure the plugin first (steps 1-4 of [Install](#install)), then run
 these as root in the container (`docker exec -u 0 -it <container> sh`, or a
-root shell from Maritime; if you cannot get root in the container, the
+root shell from your host; if you cannot get root in the container, the
 install cannot be protected: see the opt-out below). Until now the Gateway
 user could write everything here, so first read `openclaw.json`,
 `$S/.env` and `/data/.config/openclaw/gateway.env` and check they say what
@@ -284,8 +283,8 @@ state directory, creating a hook in `hooks/` or a catalog in `mpm/` or
 `plugins/`, writing or replacing `openclaw.json`, `openclaw.json.bak`,
 `$S/.env`, `gateway.env`, `/data/.npmrc` or a `.env` in the working
 directory. The upkeep below was run the same way, with a Gateway-user
-`.npmrc` naming another registry in place. It has not been run on Maritime
-itself.
+`.npmrc` naming another registry in place. It has not been run on a hosted
+deployment.
 
 Then restart the agent. The Gateway log must not say "the install is not
 protected", and an everyday call (`ls`) must reach Guardian. OpenClaw itself
@@ -478,7 +477,7 @@ ignored (see above).
 | `approvalTimeoutMs`                        |                                   | `300000` (also the maximum)             |
 | `allowTierTools`                           |                                   | `[]`                                    |
 
-Running on Maritime: see [examples/openclaw](../../examples/openclaw).
+Running on the official image: see [examples/openclaw](../../examples/openclaw).
 
 ## What is not governed
 

@@ -340,7 +340,7 @@ def test_approval_timeout_env_shortens_the_wait():
     assert clock.t <= 20
 
 
-# --- an ASK that outlives one turn (hermes chat -q, Maritime) ------------------
+# --- an ASK that outlives one turn (one hermes chat -q per message) ------------
 
 
 def test_retrying_the_same_call_in_the_same_process_claims_the_open_request():
@@ -543,7 +543,7 @@ def test_the_credential_never_reaches_messages_or_logs():
 
 # --- Guardian cannot be switched off through an everyday call -----------------
 
-MARITIME = hermes.protected_paths({"HERMES_HOME": "/opt/data"})
+HOSTED = hermes.protected_paths({"HERMES_HOME": "/opt/data"})
 PLUGIN_FILE = hermes.__file__
 
 
@@ -570,7 +570,7 @@ PLUGIN_FILE = hermes.__file__
     ],
 )
 def test_changes_to_hermes_home_and_the_plugin_need_approval(tool_name, args):
-    call = governed_call(tool_name, args, protected=MARITIME)
+    call = governed_call(tool_name, args, protected=HOSTED)
     assert call is not None and call.tool_name == "hermes_config"
     assert hermes.tier_of("hermes_config") == "ask"
 
@@ -585,7 +585,7 @@ def test_changes_to_hermes_home_and_the_plugin_need_approval(tool_name, args):
     ],
 )
 def test_ordinary_work_outside_hermes_home_is_unchanged(tool_name, args, expected):
-    call = governed_call(tool_name, args, protected=MARITIME)
+    call = governed_call(tool_name, args, protected=HOSTED)
     assert (call.tool_name if call else None) == expected
 
 
@@ -644,7 +644,7 @@ def test_register_moves_the_credential_out_of_os_environ(monkeypatch):
 
 
 def test_a_non_string_command_is_governed_as_its_raw_value():
-    call = governed_call("terminal", {"command": ["rm", "-rf", "/"]}, protected=MARITIME)
+    call = governed_call("terminal", {"command": ["rm", "-rf", "/"]}, protected=HOSTED)
     assert call.tool_name == "hermes_other"
     assert call.arguments["input"] == {"command": ["rm", "-rf", "/"]}
     assert governed_call("process_manage", {"action": "write", "data": {"x": 1}}).tool_name == "hermes_other"
@@ -659,8 +659,8 @@ def test_a_bare_url_string_is_shown_to_the_approver():
 
 
 def test_every_terminal_argument_is_part_of_the_proposal():
-    plain = governed_call("terminal", {"command": "make"}, protected=MARITIME)
+    plain = governed_call("terminal", {"command": "make"}, protected=HOSTED)
     more = governed_call("terminal", {"command": "make", "timeout": 600, "pty": True, "force": True},
-                         protected=MARITIME)
+                         protected=HOSTED)
     assert plain.arguments == {"command": "make"}
     assert more.arguments == {"command": "make", "options": {"force": True, "pty": True, "timeout": 600}}

@@ -19,7 +19,7 @@ Python 3.9.2+. Dependencies: `httpx`, `cryptography`.
 
 Guardian does not need to ship a connector for your provider. Wrap the
 function that performs the action (your Stripe call, your WhatsApp send,
-your robot command, your database write) and Guardian decides whether it may
+your production deploy, your database write) and Guardian decides whether it may
 run.
 
 ```python
@@ -145,7 +145,7 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
 
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the
-Maritime setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
+Hosted setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
 Not yet proven live.
 
 ## Lower-level client

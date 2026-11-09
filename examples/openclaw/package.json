@@ -2,7 +2,7 @@
   "name": "guardian-openclaw-example",
   "private": true,
   "type": "module",
-  "description": "Guardian on OpenClaw. simulated-openclaw-runtime.mjs is SIMULATED (real OpenClaw 2026.7.1 tool-hook runtime, stand-in Guardian). The Maritime recipe in README.md is LIVE.",
+  "description": "Guardian on OpenClaw. simulated-openclaw-runtime.mjs is SIMULATED (real OpenClaw 2026.7.1 tool-hook runtime, stand-in Guardian). The official-image recipe in README.md is LIVE.",
   "scripts": {
     "simulated": "node simulated-openclaw-runtime.mjs"
   },

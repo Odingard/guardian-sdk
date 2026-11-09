@@ -1,6 +1,6 @@
 # Guardian for Hermes Agent: merge this into Hermes' config.yaml
-# (~/.hermes/config.yaml, or $HERMES_HOME/config.yaml; on Maritime's hermes
-# template that is /opt/data/config.yaml).
+# (~/.hermes/config.yaml, or $HERMES_HOME/config.yaml; on a host that sets
+# HERMES_HOME=/opt/data that is /opt/data/config.yaml).
 #
 # Needs `pip install odingard-guardian` in the Python environment Hermes runs
 # from, and GUARDIAN_AGENT_CREDENTIAL, GUARDIAN_CONNECTION_ID and

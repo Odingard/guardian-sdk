@@ -13,7 +13,7 @@ Hermes plugin `guardian`. It asks Guardian before the tool runs:
 - every allowed call leaves a receipt you can verify offline.
 
 Status: tested with a fake Guardian only (`packages/python/tests/test_hermes.py`).
-**Not yet proven live** on Hermes or on Maritime.
+**Not yet proven live** on Hermes, locally or hosted.
 
 ## Try it without Hermes (SIMULATED)
 
@@ -64,12 +64,12 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
    call is blocked. A retry of the exact same call in the same Hermes process
    picks up the open request; a new `hermes chat -q` run files a new request.
 
-## On Maritime (`maritime create -t hermes`)
+## On a hosted Hermes agent
 
-Maritime's hermes template keeps Hermes' home in `/opt/data`
-(`HERMES_HOME=/opt/data`) and runs one `hermes chat -q` per message. So:
+Some hosts keep Hermes' home in `/opt/data` (`HERMES_HOME=/opt/data`) and run
+one `hermes chat -q` per message. On such a host:
 
-- edit `/opt/data/config.yaml` (or use the dashboard's Plugins tab) as above;
+- edit `/opt/data/config.yaml` as above;
 - add the three `GUARDIAN_*` variables as agent secrets (not in
   `/opt/data/.env`, see "What is not governed");
 - `odingard-guardian` must be installed in the image's Hermes Python.
@@ -79,14 +79,14 @@ request is never carried to the next message: the hook keeps open requests in
 memory only, because any file Hermes can read, its tools can rewrite (and a
 rewritten entry could spend one approval on a different call).
 
-Guardian's Claude Code Maritime example notes a reply window of about 30 s. If
-Maritime ends a message sooner than `hook_callback_timeout`, the hook is cut
+Some hosts give each reply a window of about 30 s. If the host ends a message
+sooner than `hook_callback_timeout`, the hook is cut
 off and the call is blocked (fail closed), so 130 s may buy nothing there; with
 30 s the hook waits about 12 s for a person.
 
-Not yet checked on Maritime: whether its image lets you `pip install` into
-Hermes' Python and keep `/opt/data/config.yaml` edits, how long Maritime lets
-one `hermes chat -q` run, and whether `/opt/data` is also the workspace (then
+Not yet checked on a hosted agent: whether the image lets you `pip install`
+into Hermes' Python and keep `/opt/data/config.yaml` edits, how long the host
+lets one `hermes chat -q` run, and whether `/opt/data` is also the workspace (then
 every command that names `/opt/data` is routed as `hermes_config` and needs
 approval).
 

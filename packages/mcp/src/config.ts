@@ -62,7 +62,7 @@ Environment:
 
 Examples (proxy):
   guardian-mcp proxy -- npx -y @modelcontextprotocol/server-filesystem ./data
-  guardian-mcp proxy --url https://mcp.maritime.sh/mcp --header 'Authorization: Bearer \${MARITIME_API_KEY}'
+  guardian-mcp proxy --url https://mcp.example.com/mcp --header 'Authorization: Bearer \${REMOTE_MCP_API_KEY}'
 `;
 
 export function parseCli(

@@ -464,7 +464,7 @@ class PendingStore:
     instead of filing a new one. It is deliberately never written to disk: any
     file Hermes can read, its tools can rewrite, and a rewritten entry could
     point an approval of one call at a different call. One ``hermes chat -q``
-    per message (Maritime) therefore starts with an empty store.
+    per message (as some hosts run it) therefore starts with an empty store.
     """
 
     def __init__(self) -> None:

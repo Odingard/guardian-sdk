@@ -1,5 +1,5 @@
 # Mount DeepSeek Harness's Claude Code hook bridge with Guardian's hooks.
-# On Maritime: /data/.dsh/cordis.patch.yml (DSH_HOME=/data/.dsh), with
+# For example /data/.dsh/cordis.patch.yml (DSH_HOME=/data/.dsh), with
 # guardian-hooks.json beside it. Restart the agent after changing it: the
 # bridge reads its config once at startup.
 - insert:

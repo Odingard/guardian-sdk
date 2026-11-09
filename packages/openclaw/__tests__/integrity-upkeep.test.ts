@@ -40,7 +40,7 @@ describe("npm config the Gateway's HOME would give npm", () => {
     expect(problems(fx)).toContain(fx.npmrc);
   });
 
-  it("a missing $HOME/.npmrc the Gateway user could create blocks (Maritime: /data is 1775 root:node)", () => {
+  it("a missing $HOME/.npmrc the Gateway user could create blocks (official image: /data is 1775 root:node)", () => {
     fx = protectedInstall();
     rmSync(fx.npmrc);
     chmodSync(fx.home, 0o1777); // sticky: existing entries are safe, new ones are not
@@ -205,10 +205,10 @@ describe("config backups: <config>.bak and <config>.bak.*", () => {
   });
 });
 
-describe("README: the Maritime recipe and upkeep", () => {
+describe("README: the official-image recipe and upkeep", () => {
   const readme = readFileSync(join(PKG, "README.md"), "utf8");
   const section = readme.slice(
-    readme.indexOf("### Maritime / the official OpenClaw image"),
+    readme.indexOf("### The official OpenClaw image"),
     readme.indexOf("### Other hosts"),
   );
   const blocks = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map(

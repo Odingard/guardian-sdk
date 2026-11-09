@@ -34,7 +34,6 @@ const POLICY = {
     "pay_vendor",
     "deploy_production",
     "update_crm_record",
-    "robot_stop",
     "steel.checkout.submit",
   ]),
 };

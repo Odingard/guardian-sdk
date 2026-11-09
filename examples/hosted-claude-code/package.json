@@ -1,8 +1,8 @@
 {
-  "name": "guardian-maritime-claude-code",
+  "name": "guardian-hosted-claude-code",
   "private": true,
   "type": "module",
-  "description": "A Claude Code agent (Claude Agent SDK) for Maritime, governed by Guardian. LIVE: needs a Claude API key and a Guardian agent.",
+  "description": "A Claude Code agent (Claude Agent SDK) for a hosted agent VM, governed by Guardian. LIVE: needs a Claude API key and a Guardian agent.",
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs"

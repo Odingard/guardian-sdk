@@ -9,7 +9,7 @@
 
 # --- 1. Every MCP server goes through guardian-mcp -------------------------
 #
-# A remote server (Composio, Maritime Computers …): do NOT use ZeroClaw's own
+# A remote server (Composio or another hosted server): do NOT use ZeroClaw's own
 # transport = "http"/"sse" for it, because that path reaches the server
 # directly and Guardian never sees the call. Use a stdio entry that runs
 # guardian-mcp with --url instead. The API key stays in guardian-mcp's env;
@@ -23,8 +23,8 @@ args = [
   "/opt/guardian-mcp/node_modules/@odingard/guardian-mcp/dist/index.js",
   "proxy",
   # The URL Composio's generate step returned (Composio says not to build it
-  # yourself). Maritime Computers: "https://mcp.maritime.sh/mcp" with
-  # "Authorization: Bearer ${MARITIME_API_KEY}".
+  # yourself). For another server, its own URL and header, for example
+  # "Authorization: Bearer ${REMOTE_MCP_API_KEY}".
   "--url", "<COMPOSIO_MCP_URL>",
   "--header", "x-api-key: ${COMPOSIO_API_KEY}",
 ]
@@ -62,5 +62,5 @@ risk_profile = "assistant_risk"
 allowed_tools = ["file_read", "glob_search", "content_search", "memory_recall"]
 # Belt and braces: if allowed_tools is ever emptied (which ZeroClaw reads as
 # "no restriction"), these still prompt, and on a surface with no approver
-# (Maritime's headless gateway) a prompt fails closed.
+# (a headless gateway) a prompt fails closed.
 always_ask = ["shell", "file_write", "file_edit", "http_request", "web_fetch", "browser", "cron_add", "schedule"]
