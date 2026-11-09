@@ -444,6 +444,764 @@ const emailSendDefinition: ActionDefinition<EmailSendParametersV1> = {
   envelopeProjection: (params) => emailEnvelopeProjection(params),
 };
 
+/**
+ * Money facts of an `api.request`.
+ *
+ * A declarative table of request shapes that move money, and ONE reader
+ * that derives the amount (minor units) and currency from the exact
+ * request: method, URL, content type and body. The `api.request`
+ * definition uses it at decision time (the envelope's declared
+ * `valueCents` must equal the derived amount, so caps, ask-above and
+ * budgets check the real number), and the executor's money guard
+ * imports the same reader, so the gate and the
+ * executor can never read a request differently.
+ *
+ * Rules are data, not branches: the reader is generic over the table.
+ * Anything it cannot read unambiguously is refused, never resolved:
+ * a missing, duplicated, malformed or non-integer amount; an amount or
+ * currency in the query string; a body whose content type the rule does
+ * not accept (Stripe: exactly application/x-www-form-urlencoded); form
+ * keys that could be read as the amount or currency by a different
+ * parser; a non-canonical path on a money origin; and endpoints that move
+ * money without stating the amount (confirm, invoice pay, subscriptions…).
+ *
+ * Money origins are closed: on a money origin (Stripe), every request
+ * other than GET must match a money rule or one entry of a short reviewed
+ * list of endpoints that move no money; anything else is refused
+ * (MONEY_ENDPOINT_UNKNOWN). The host is compared normalised (case, one
+ * trailing dot, default port); a request whose host is a money host but
+ * not written exactly as the canonical origin, or whose host looks like a
+ * money host (IDN or digit look-alikes), is refused
+ * (MONEY_HOST_NONCANONICAL), so what is checked is what is sent.
+ *
+ * A money origin's own semantic headers are refused on every method
+ * (MONEY_HEADER_UNSUPPORTED): Stripe lets a request pin an older API
+ * version with `stripe-version`, under which old parameter names move
+ * money (customers: `account_balance`; `plan`, `quantity`, `trial_end`,
+ * `coupon` creating a charged subscription), and `stripe-account` /
+ * `stripe-context` act on another account. The rules here are read
+ * against the account's default API version only. Every `stripe-*`
+ * request header is refused; none is reviewed.
+ *
+ * The reviewed non-money endpoints accept only an empty body or exactly
+ * one form-encoded body. Neither they nor the money rules accept a body or
+ * query key containing a control character (e.g. `balance%00` or
+ * `amount%00`, which another parser could truncate): AMOUNT_AMBIGUOUS.
+ */
+export type ApiMoneyBody = "form" | "json";
+
+export type ApiMoneyRule = Readonly<{
+  /** Exact origin, e.g. https://api.stripe.com */
+  origin: string;
+  method: "POST";
+  /** Matched against the URL path only. */
+  path: RegExp;
+  label: string;
+  /**
+   * How the amount is read. "unverifiable": the endpoint moves money whose
+   * amount the request does not state; always refused.
+   */
+  amount: Readonly<{ field: string }> | "unverifiable";
+  /**
+   * How the currency is checked. "implied": the request carries no currency
+   * (e.g. a refund is in the original charge's currency); only the amount
+   * is derived and the rule says so. The amount is then compared with a
+   * USD cap as minor units of whatever the original currency is.
+   */
+  currency: Readonly<{ field: string; allowed: readonly string[] }> | "implied";
+  /** The body encodings the provider reads; any other is refused. */
+  bodies: readonly ApiMoneyBody[];
+}>;
+
+/**
+ * A money origin: closed to requests that match no reviewed entry. A
+ * request header whose lowercased name starts with one of
+ * `refusedHeaderPrefixes` changes how the provider reads the request
+ * (API version, acting account) and is refused.
+ */
+export type ApiMoneyOrigin = Readonly<{
+  origin: string;
+  label: string;
+  refusedHeaderPrefixes: readonly string[];
+}>;
+
+/**
+ * An endpoint on a money origin reviewed as moving no money. A field in
+ * `refuseFields` (or a look-alike key) in the body is refused, because it
+ * would change a money balance.
+ */
+export type ApiNonMoneyEndpoint = Readonly<{
+  origin: string;
+  method: "POST";
+  path: RegExp;
+  label: string;
+  refuseFields: readonly string[];
+}>;
+
+const STRIPE_ORIGIN = "https://api.stripe.com";
+const STRIPE_CURRENCIES = Object.freeze(["usd"]);
+const STRIPE_BODIES: readonly ApiMoneyBody[] = Object.freeze(["form"]);
+
+export const API_MONEY_ORIGINS: readonly ApiMoneyOrigin[] = Object.freeze([
+  Object.freeze({
+    origin: STRIPE_ORIGIN,
+    label: "Stripe",
+    // stripe-version (old API versions read old money parameters),
+    // stripe-account and stripe-context (another account), and any other
+    // stripe-* header: none is reviewed.
+    refusedHeaderPrefixes: Object.freeze(["stripe-"]),
+  }),
+]);
+
+function moneyRule(rule: ApiMoneyRule): ApiMoneyRule {
+  return Object.freeze({
+    ...rule,
+    amount:
+      rule.amount === "unverifiable"
+        ? rule.amount
+        : Object.freeze({ ...rule.amount }),
+    currency:
+      rule.currency === "implied"
+        ? rule.currency
+        : Object.freeze({ ...rule.currency }),
+    bodies: Object.freeze([...rule.bodies]),
+  });
+}
+
+const ID = "[^/]+";
+const stripePath = (path: string) => new RegExp(`^/v1/${path}/?$`, "u");
+const stripeRule = (
+  path: string,
+  label: string,
+  amount: ApiMoneyRule["amount"],
+  currency: "implied" | "currency" = "currency",
+): ApiMoneyRule => ({
+  origin: STRIPE_ORIGIN,
+  method: "POST",
+  path: stripePath(path),
+  label,
+  amount,
+  currency:
+    currency === "implied"
+      ? "implied"
+      : { field: "currency", allowed: STRIPE_CURRENCIES },
+  bodies: STRIPE_BODIES,
+});
+const AMOUNT = Object.freeze({ field: "amount" });
+
+export const API_MONEY_RULES: readonly ApiMoneyRule[] = Object.freeze(
+  [
+    // The amount is stated: it is derived, and a missing amount (which
+    // Stripe reads as "all of it") is refused.
+    stripeRule("refunds", "Stripe refund", AMOUNT, "implied"),
+    stripeRule(
+      `charges/${ID}/refunds`,
+      "Stripe refund (legacy charge path)",
+      AMOUNT,
+      "implied",
+    ),
+    stripeRule(
+      `charges/${ID}/refund`,
+      "Stripe refund (legacy charge refund)",
+      AMOUNT,
+      "implied",
+    ),
+    stripeRule(
+      `charges/${ID}/capture`,
+      "Stripe charge capture",
+      AMOUNT,
+      "implied",
+    ),
+    stripeRule(
+      `payment_intents/${ID}/capture`,
+      "Stripe payment capture",
+      { field: "amount_to_capture" },
+      "implied",
+    ),
+    stripeRule(
+      `transfers/${ID}/reversals`,
+      "Stripe transfer reversal",
+      AMOUNT,
+      "implied",
+    ),
+    stripeRule(
+      `application_fees/${ID}/refunds`,
+      "Stripe application fee refund",
+      AMOUNT,
+      "implied",
+    ),
+    stripeRule("payouts", "Stripe payout", AMOUNT),
+    stripeRule("payment_intents", "Stripe payment", AMOUNT),
+    stripeRule("charges", "Stripe charge", AMOUNT),
+    stripeRule("transfers", "Stripe transfer", AMOUNT),
+    stripeRule("topups", "Stripe top-up", AMOUNT),
+    // Money moves, but the request does not state how much (or can change
+    // an amount stated elsewhere): always refused.
+    ...(
+      [
+        [`payment_intents/${ID}`, "Stripe payment update"],
+        [`payment_intents/${ID}/confirm`, "Stripe payment confirm"],
+        [
+          `payment_intents/${ID}/increment_authorization`,
+          "Stripe payment authorization increment",
+        ],
+        [
+          `payment_intents/${ID}/apply_customer_balance`,
+          "Stripe payment from customer balance",
+        ],
+        [`invoices/${ID}/pay`, "Stripe invoice pay"],
+        ["subscriptions", "Stripe subscription"],
+        [`subscriptions/${ID}`, "Stripe subscription update"],
+        [`subscriptions/${ID}/resume`, "Stripe subscription resume"],
+        ["subscription_items", "Stripe subscription item"],
+        [`subscription_items/${ID}`, "Stripe subscription item update"],
+        ["subscription_schedules", "Stripe subscription schedule"],
+        ["checkout/sessions", "Stripe checkout session"],
+        ["payment_links", "Stripe payment link"],
+        [`payment_links/${ID}`, "Stripe payment link update"],
+        [`payouts/${ID}/reverse`, "Stripe payout reversal"],
+      ] as const
+    ).map(([path, label]) =>
+      stripeRule(path, label, "unverifiable", "implied"),
+    ),
+  ].map((rule) => moneyRule(rule)),
+);
+
+/**
+ * The reviewed endpoints on a money origin that move no money. Short on
+ * purpose: anything not here and not a money rule is refused. Customer
+ * create is not here: its accepted fields (balance, and under older API
+ * versions account_balance, plan, coupon…) change what is charged, and no
+ * strict field allowlist is enforced, so it is refused as unknown.
+ */
+export const API_NON_MONEY_ENDPOINTS: readonly ApiNonMoneyEndpoint[] =
+  Object.freeze(
+    (
+      [
+        [`payment_intents/${ID}/cancel`, "Stripe payment cancel", []],
+        [`refunds/${ID}`, "Stripe refund metadata update", []],
+        [`payment_methods/${ID}/detach`, "Stripe payment method detach", []],
+      ] as const
+    ).map(([path, label, refuseFields]) =>
+      Object.freeze({
+        origin: STRIPE_ORIGIN,
+        method: "POST" as const,
+        path: stripePath(path),
+        label,
+        refuseFields: Object.freeze([...refuseFields]),
+      }),
+    ),
+  );
+
+export type ApiMoneyRequest = Readonly<{
+  method: string;
+  url: string;
+  headers?: readonly Readonly<{ name: string; value: string }>[] | undefined;
+  body?: string | undefined;
+}>;
+
+export type ApiMoneyRefusal =
+  | "AMOUNT_UNVERIFIABLE"
+  | "AMOUNT_MISSING"
+  | "AMOUNT_AMBIGUOUS"
+  | "AMOUNT_INVALID"
+  | "CURRENCY_MISSING"
+  | "CURRENCY_NOT_ALLOWED"
+  | "CONTENT_TYPE_UNSUPPORTED"
+  | "BODY_UNREADABLE"
+  | "MONEY_ENDPOINT_UNKNOWN"
+  | "MONEY_HOST_NONCANONICAL"
+  | "MONEY_HEADER_UNSUPPORTED";
+
+export type ApiMoneyReading =
+  | Readonly<{ kind: "none" }>
+  | Readonly<{
+      kind: "money";
+      rule: string;
+      amountMinor: number;
+      currency: string | null;
+    }>
+  | Readonly<{ kind: "refused"; rule: string; reason: ApiMoneyRefusal }>;
+
+const MONEY_ORIGIN_LABEL = "money origin (non-canonical path)";
+const MINOR_UNITS = /^(0|[1-9][0-9]{0,15})$/;
+
+function parseRequestUrl(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+export function apiMoneyRuleFor(
+  method: string,
+  url: string,
+): ApiMoneyRule | null {
+  const parsed = parseRequestUrl(url);
+  if (parsed === null) return null;
+  return (
+    API_MONEY_RULES.find(
+      (rule) =>
+        rule.method === method.toUpperCase() &&
+        rule.origin === parsed.origin &&
+        rule.path.test(parsed.pathname),
+    ) ?? null
+  );
+}
+
+/**
+ * A key another parser could read as `field` (amount[], " Amount",
+ * "[amount]", …). A leading run of brackets, dots and whitespace is dropped
+ * first: Rack 2 (`parse_nested_query`) strips leading brackets and reads
+ * "[amount]", "[]amount" and "]amount" as "amount", last value winning.
+ */
+function lookalikeKey(key: string, field: string): boolean {
+  if (key === field) return false;
+  const base = key.replace(/^[\s[\].]+/u, "").toLowerCase();
+  return base === field || base.split(/[[\].]/u, 1)[0]!.trim() === field;
+}
+
+type Fields = Readonly<{
+  /** Every value stated for `name`; null when the body is ambiguous for it. */
+  get(name: string): readonly string[] | null;
+}>;
+
+/** Every object key in a JSON text, at any depth, decoded. */
+function jsonKeys(text: string): string[] | null {
+  const keys: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] !== '"') {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < text.length && text[end] !== '"') {
+      end += text[end] === "\\" ? 2 : 1;
+    }
+    if (end >= text.length) return null;
+    const token = text.slice(index, end + 1);
+    let next = end + 1;
+    while (next < text.length && /\s/u.test(text[next]!)) next += 1;
+    if (text[next] === ":") {
+      try {
+        keys.push(JSON.parse(token) as string);
+      } catch {
+        return null;
+      }
+    }
+    index = end + 1;
+  }
+  return keys;
+}
+
+function jsonFields(body: string): Fields | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const keys = jsonKeys(body);
+  if (keys === null) return null;
+  const object = value as Record<string, unknown>;
+  return {
+    get(name) {
+      // JSON.parse silently keeps the last of duplicate keys, and nested or
+      // escaped keys can hide a second amount; any second key that reads
+      // as `name`, at any depth, is ambiguous.
+      const named = keys.filter((key) => key === name).length;
+      if (keys.some((key) => lookalikeKey(key, name))) return null;
+      const own = Object.prototype.hasOwnProperty.call(object, name);
+      if (named > 1 || (named === 1 && !own)) return null;
+      if (!own) return [];
+      const field = object[name];
+      if (typeof field === "string") return [field];
+      if (typeof field === "number" && Number.isSafeInteger(field)) {
+        return [String(field)];
+      }
+      return [""];
+    },
+  };
+}
+
+function formFields(body: string): Fields | null {
+  // Some form parsers also split on ";": a raw ";" could hide a second
+  // amount, so it is refused (an encoder always writes it as %3B).
+  if (body.includes(";")) return null;
+  const pairs = [...new URLSearchParams(body)];
+  return {
+    get(name) {
+      if (pairs.some(([key]) => lookalikeKey(key, name))) return null;
+      return pairs.filter(([key]) => key === name).map(([, value]) => value);
+    },
+  };
+}
+
+function mediaType(
+  headers: ApiMoneyRequest["headers"],
+): "json" | "form" | null {
+  const values = (headers ?? []).filter(
+    (header) => header.name.toLowerCase() === "content-type",
+  );
+  if (values.length !== 1) return null;
+  const [type, ...parameters] = values[0]!.value.split(";");
+  for (const parameter of parameters) {
+    const [key, value] = parameter.split("=");
+    if (
+      key?.trim().toLowerCase() !== "charset" ||
+      value?.trim().toLowerCase() !== "utf-8"
+    ) {
+      return null;
+    }
+  }
+  const normalized = type!.trim().toLowerCase();
+  if (normalized === "application/json") return "json";
+  if (normalized === "application/x-www-form-urlencoded") return "form";
+  return null;
+}
+
+/** Lowercase, one trailing dot removed: how a resolver reads the host. */
+function normalisedHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/\.$/u, "");
+}
+
+function moneyOriginFor(url: URL): ApiMoneyOrigin | null {
+  const host = normalisedHost(url.hostname);
+  return (
+    API_MONEY_ORIGINS.find(
+      (candidate) => new URL(candidate.origin).hostname === host,
+    ) ?? null
+  );
+}
+
+/** RFC 3492 decoding of one punycode label body (after "xn--"). */
+function punycodeDecode(input: string): string | null {
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const adapt = (delta: number, points: number, first: boolean) => {
+    let d = first ? Math.floor(delta / 700) : delta >> 1;
+    d += Math.floor(d / points);
+    let k = 0;
+    while (d > ((base - tMin) * tMax) >> 1) {
+      d = Math.floor(d / (base - tMin));
+      k += base;
+    }
+    return k + Math.floor(((base - tMin + 1) * d) / (d + 38));
+  };
+  const output: number[] = [];
+  const delimiter = Math.max(input.lastIndexOf("-"), 0);
+  for (let j = 0; j < delimiter; j += 1) {
+    const code = input.charCodeAt(j);
+    if (code >= 0x80) return null;
+    output.push(code);
+  }
+  let n = 128;
+  let bias = 72;
+  let i = 0;
+  let index = delimiter > 0 ? delimiter + 1 : 0;
+  while (index < input.length) {
+    const old = i;
+    let w = 1;
+    for (let k = base; ; k += base) {
+      if (index >= input.length) return null;
+      const code = input.charCodeAt(index);
+      index += 1;
+      const digit =
+        code >= 48 && code <= 57
+          ? code - 22
+          : code >= 97 && code <= 122
+            ? code - 97
+            : code >= 65 && code <= 90
+              ? code - 65
+              : base;
+      if (digit >= base) return null;
+      i += digit * w;
+      if (!Number.isSafeInteger(i)) return null;
+      const t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias;
+      if (digit < t) break;
+      w *= base - t;
+    }
+    const points = output.length + 1;
+    bias = adapt(i - old, points, old === 0);
+    n += Math.floor(i / points);
+    i %= points;
+    if (n > 0x10ffff) return null;
+    output.splice(i, 0, n);
+    i += 1;
+  }
+  return String.fromCodePoint(...output);
+}
+
+/** Latin look-alikes of the letters a money host is spelled with. */
+const LOOKALIKES: Readonly<Record<string, string>> = Object.freeze({
+  "0": "o",
+  "1": "i",
+  l: "i",
+  а: "a", // Cyrillic а
+  е: "e", // Cyrillic е
+  і: "i", // Cyrillic і
+  ї: "i", // Cyrillic ї
+  о: "o", // Cyrillic о
+  р: "p", // Cyrillic р
+  с: "c", // Cyrillic с
+  ѕ: "s", // Cyrillic ѕ
+  т: "t", // Cyrillic т
+  ґ: "r", // Cyrillic ґ
+  α: "a", // Greek α
+  ε: "e", // Greek ε
+  ι: "i", // Greek ι
+  ο: "o", // Greek ο
+  ρ: "p", // Greek ρ
+  τ: "t", // Greek τ
+  ı: "i", // dotless i
+  ɪ: "i", // small capital i
+  ʀ: "r", // small capital r
+  ᴘ: "p", // small capital p
+  ᴛ: "t", // small capital t
+  ᴇ: "e", // small capital e
+  ꜱ: "s", // small capital s
+});
+
+/**
+ * True when a host that is not a money host could be read as one: it
+ * contains a money host's name once IDN labels are decoded, accents are
+ * dropped and look-alike letters (Cyrillic, Greek, 1/l/0) are folded.
+ */
+function resemblesMoneyHost(hostname: string): boolean {
+  const labels = normalisedHost(hostname).split(".");
+  const decoded: string[] = [];
+  for (const label of labels) {
+    if (!label.startsWith("xn--")) {
+      decoded.push(label);
+      continue;
+    }
+    const unicode = punycodeDecode(label.slice(4));
+    if (unicode === null) return true;
+    decoded.push(unicode);
+  }
+  const skeleton = [...decoded.join(".").normalize("NFKD").toLowerCase()]
+    .filter((char) => !/\p{M}/u.test(char))
+    .map((char) => LOOKALIKES[char] ?? char)
+    .join("")
+    .replace(/[^a-z.]/gu, "");
+  return API_MONEY_ORIGINS.some((candidate) => {
+    const name = new URL(candidate.origin).hostname.split(".").slice(-2)[0]!;
+    const folded = [...name].map((char) => LOOKALIKES[char] ?? char).join("");
+    return skeleton.includes(folded);
+  });
+}
+
+/**
+ * Derives the money an `api.request` moves from the exact request.
+ * "none": not on a money origin, a GET, or a reviewed non-money endpoint.
+ * "money": the single readable amount, and the currency when the rule
+ * reads one. "refused": the request moves money, or could, in a way that
+ * cannot be read unambiguously (including any unreviewed endpoint on a
+ * money origin).
+ */
+export function readApiMoney(request: ApiMoneyRequest): ApiMoneyReading {
+  const url = parseRequestUrl(request.url);
+  if (url === null) return { kind: "none" };
+  const method = request.method.toUpperCase();
+  const origin = moneyOriginFor(url);
+  if (origin === null) {
+    if (method !== "GET" && resemblesMoneyHost(url.hostname)) {
+      return {
+        kind: "refused",
+        rule: "money host look-alike",
+        reason: "MONEY_HOST_NONCANONICAL",
+      };
+    }
+    const rule = apiMoneyRuleFor(method, request.url);
+    return rule === null ? { kind: "none" } : readRule(rule, url, request);
+  }
+  // The host is a money host: it must be written exactly as the canonical
+  // origin (no trailing dot, case, port, userinfo or other scheme), so the
+  // URL checked here is the URL the executor sends.
+  if (!request.url.startsWith(`${origin.origin}/`)) {
+    return {
+      kind: "refused",
+      rule: `${origin.label} (non-canonical host)`,
+      reason: "MONEY_HOST_NONCANONICAL",
+    };
+  }
+  // Headers that change how the provider reads the request (API version,
+  // acting account) are refused on every method.
+  const semantic = (request.headers ?? []).some((header) => {
+    const name = header.name.trim().toLowerCase();
+    return origin.refusedHeaderPrefixes.some((prefix) =>
+      name.startsWith(prefix),
+    );
+  });
+  if (semantic) {
+    return {
+      kind: "refused",
+      rule: `${origin.label} (semantic header)`,
+      reason: "MONEY_HEADER_UNSUPPORTED",
+    };
+  }
+  if (method === "GET") return { kind: "none" };
+  // A path another server could normalize onto a money endpoint.
+  if (/%|\/\/|;|\\/u.test(url.pathname)) {
+    return {
+      kind: "refused",
+      rule: MONEY_ORIGIN_LABEL,
+      reason: "AMOUNT_AMBIGUOUS",
+    };
+  }
+  const rule = apiMoneyRuleFor(method, request.url);
+  if (rule === null) {
+    const known = API_NON_MONEY_ENDPOINTS.find(
+      (endpoint) =>
+        endpoint.origin === origin.origin &&
+        endpoint.method === method &&
+        endpoint.path.test(url.pathname),
+    );
+    if (known === undefined) {
+      return {
+        kind: "refused",
+        rule: `${origin.label} (endpoint not reviewed)`,
+        reason: "MONEY_ENDPOINT_UNKNOWN",
+      };
+    }
+    const body = request.body ?? "";
+    if (body !== "" && mediaType(request.headers) !== "form") {
+      return {
+        kind: "refused",
+        rule: known.label,
+        reason: "CONTENT_TYPE_UNSUPPORTED",
+      };
+    }
+    return nonMoneyFieldsOk(known, url, body)
+      ? { kind: "none" }
+      : { kind: "refused", rule: known.label, reason: "AMOUNT_AMBIGUOUS" };
+  }
+  return readRule(rule, url, request);
+}
+
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * The form body reads unambiguously: no raw ";", no body or query key
+ * containing a control character (e.g. "balance%00", which a C-string
+ * parser reads as "balance"), and every refuseFields entry absent from the
+ * query, form and JSON body.
+ */
+function nonMoneyFieldsOk(
+  endpoint: ApiNonMoneyEndpoint,
+  url: URL,
+  text: string,
+): boolean {
+  const form = formFields(text);
+  if (form === null) return false;
+  const formKeys = [...new URLSearchParams(text).keys()];
+  if (
+    [...formKeys, ...url.searchParams.keys()].some((key) =>
+      CONTROL_CHARACTER.test(key),
+    )
+  ) {
+    return false;
+  }
+  if (endpoint.refuseFields.length === 0) return true;
+  let json: string[] = [];
+  let isJson = true;
+  try {
+    JSON.parse(text);
+  } catch {
+    isJson = false;
+  }
+  if (isJson) {
+    const keys = jsonKeys(text);
+    if (keys === null) return false;
+    json = keys;
+  }
+  const query = [...url.searchParams.keys()];
+  return endpoint.refuseFields.every((field) => {
+    const named = (key: string) => key === field || lookalikeKey(key, field);
+    const values = form.get(field);
+    return (
+      values !== null &&
+      values.length === 0 &&
+      !json.some(named) &&
+      !query.some(named)
+    );
+  });
+}
+
+function readRule(
+  rule: ApiMoneyRule,
+  url: URL,
+  request: ApiMoneyRequest,
+): ApiMoneyReading {
+  const refuse = (reason: ApiMoneyRefusal): ApiMoneyReading => ({
+    kind: "refused",
+    rule: rule.label,
+    reason,
+  });
+  if (rule.amount === "unverifiable") return refuse("AMOUNT_UNVERIFIABLE");
+
+  const currencyField =
+    rule.currency === "implied" ? null : rule.currency.field;
+  for (const key of url.searchParams.keys()) {
+    if (
+      // A key with a control character ("amount%00") is one a C-string
+      // parser could truncate to a money field.
+      CONTROL_CHARACTER.test(key) ||
+      key === rule.amount.field ||
+      lookalikeKey(key, rule.amount.field) ||
+      (currencyField !== null &&
+        (key === currencyField || lookalikeKey(key, currencyField)))
+    ) {
+      return refuse("AMOUNT_AMBIGUOUS");
+    }
+  }
+  const type = mediaType(request.headers);
+  if (type === null || !rule.bodies.includes(type)) {
+    return refuse("CONTENT_TYPE_UNSUPPORTED");
+  }
+  const body = request.body ?? "";
+  const fields = type === "json" ? jsonFields(body) : formFields(body);
+  if (fields === null) {
+    return refuse(type === "json" ? "BODY_UNREADABLE" : "AMOUNT_AMBIGUOUS");
+  }
+  const bodyKeys =
+    type === "json" ? jsonKeys(body) : [...new URLSearchParams(body).keys()];
+  if (
+    bodyKeys === null ||
+    bodyKeys.some((key) => CONTROL_CHARACTER.test(key))
+  ) {
+    return refuse("AMOUNT_AMBIGUOUS");
+  }
+
+  const amounts = fields.get(rule.amount.field);
+  if (amounts === null) return refuse("AMOUNT_AMBIGUOUS");
+  if (amounts.length === 0) return refuse("AMOUNT_MISSING");
+  if (amounts.length > 1) return refuse("AMOUNT_AMBIGUOUS");
+  const raw = amounts[0]!;
+  if (!MINOR_UNITS.test(raw)) return refuse("AMOUNT_INVALID");
+  const amountMinor = Number(raw);
+  if (!Number.isSafeInteger(amountMinor)) return refuse("AMOUNT_INVALID");
+
+  let currency: string | null = null;
+  if (rule.currency !== "implied") {
+    const currencies = fields.get(rule.currency.field);
+    if (currencies === null) return refuse("AMOUNT_AMBIGUOUS");
+    if (currencies.length === 0) return refuse("CURRENCY_MISSING");
+    if (currencies.length > 1) return refuse("AMOUNT_AMBIGUOUS");
+    currency = currencies[0]!.toLowerCase();
+    if (!rule.currency.allowed.includes(currency)) {
+      return refuse("CURRENCY_NOT_ALLOWED");
+    }
+  }
+  return { kind: "money", rule: rule.label, amountMinor, currency };
+}
+
 const apiRequestDefinition: ActionDefinition<ApiRequestParametersV1> = {
   actionId: "api.request",
   schemaVersion: 1,
@@ -484,7 +1242,11 @@ const apiRequestDefinition: ActionDefinition<ApiRequestParametersV1> = {
   status: "active",
   validateParameters(materialParameters) {
     const parsed = ApiRequestParametersV1Schema.safeParse(materialParameters);
-    return parsed.success ? { ok: true, params: parsed.data } : { ok: false };
+    if (!parsed.success) return { ok: false };
+    // A request that moves money in a way that cannot be read
+    // unambiguously is refused before any decision (fail closed).
+    if (readApiMoney(parsed.data).kind === "refused") return { ok: false };
+    return { ok: true, params: parsed.data };
   },
   validateBinding({ params, connection }) {
     return apiEndpointWithinAllowlist(
@@ -496,6 +1258,14 @@ const apiRequestDefinition: ActionDefinition<ApiRequestParametersV1> = {
   },
   verificationProjection: (params) => apiVerificationProjection(params),
   envelopeProjection: (params) => apiEnvelopeProjection(params),
+  // The amount is derived from the exact request, so a declared
+  // valueCents must equal it; requests that move no money derive none (and
+  // declaring one stays refused). Merchant and category are not derived:
+  // the request names no merchant unambiguously.
+  authorityFacts: (params) => {
+    const money = readApiMoney(params);
+    return money.kind === "money" ? { valueCents: money.amountMinor } : {};
+  },
 };
 
 const toolInvokeDefinition: ActionDefinition<ToolInvokeParametersV1> = {

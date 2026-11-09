@@ -101,16 +101,23 @@ export type GuardianGovernedInvocation = Readonly<{
    * currency. Bound into the action, so caps, "ask above" and approvals
    * apply to it.
    *
-   * Guardian accepts it only on actions whose definition derives the same
-   * value from the action's parameters. `api.request` does not derive
-   * one yet, so Guardian refuses an `api.request` that declares it
-   * (INVALID_REQUEST). Until it does, money-moving `api.request` calls
-   * (e.g. Stripe refunds) are refused by the executor's money guard:
-   * fail closed. A receiver can still read the amount from the signed
-   * request with `verifyBeforeActing(..., { amountField })`.
+   * Guardian accepts it only when the action's definition derives the
+   * same value from the action's parameters. For `api.request`, Guardian
+   * derives it from the exact request for known money endpoints (Stripe
+   * refunds, payouts, payments, charges, transfers): a money request must
+   * declare exactly the amount in its body, in the body's own content
+   * type (form or JSON), or it is refused (INVALID_REQUEST), and so is one
+   * whose amount cannot be read unambiguously. A request that moves no
+   * money must not declare it. Requires a Guardian deployment with the
+   * money-facts change; older deployments refuse any declared value
+   * on `api.request`.
    */
   valueCents?: number;
-  /** Merchant and category, checked against grant allowlists. */
+  /**
+   * Merchant and category, checked against grant allowlists.
+   * Not derived for `api.request` (the request names no merchant
+   * unambiguously), so declaring them on an `api.request` is refused.
+   */
   merchantId?: string;
   merchantCategory?: string;
   /** Whether this is a recurring payment (grant recurrence rules). */
