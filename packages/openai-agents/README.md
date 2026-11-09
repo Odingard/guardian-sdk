@@ -88,7 +88,9 @@ the agent.
   receipt recorded (`onReceipt` gets it). A failed redemption raises
   `GuardianExecutionFailed` with `localEffectRan: true`. Without your own
   `errorFunction`, the model is told the tool ran without a receipt and not
-  to call it again; it is never told to try again.
+  to call it again. If the SDK's own `timeoutMs` has already fired, the SDK
+  has told the model the tool timed out, and this failure is not reported
+  to the model.
 - `ASK` — your `execute` does not run. By default the call throws
   `GuardianApprovalPending`; the Agents SDK ends the run with a
   `ToolCallError` that wraps it, and `findApprovalPending(err)` finds it.
@@ -108,7 +110,11 @@ the agent.
   is told `Guardian could not check refund_order, so it did not run.`, and
   `onGuardianError` is called. `decisionTimeoutMs` (default 30000) bounds the
   wait for Guardian's decision; the Agents SDK's own `timeoutMs` and run
-  cancellation stop it too.
+  cancellation stop the wait too, but only while Guardian is still deciding.
+  Once Guardian has allowed the call and your `execute` has started, neither
+  stops it: the SDK may tell the model the tool timed out while your
+  `execute` and the receipt still finish. Keep your own `execute` within the
+  SDK timeout, and make side effects idempotent.
 
 The arguments Guardian checks are the ones the Agents SDK parsed from the
 tool call, and the same value is passed to `execute`. Text the model writes
