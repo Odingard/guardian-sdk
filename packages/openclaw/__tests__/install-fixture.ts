@@ -32,6 +32,7 @@ export type Fixture = {
   pluginsDir: string;
   home: string;
   npmrc: string;
+  nodePrefix: string;
   cwd: string;
   install: InstallCheckOptions;
   cleanup: () => void;
@@ -40,7 +41,9 @@ export type Fixture = {
 /**
  * A protected install: plugin directory, state directory with openclaw.json,
  * openclaw.json.bak, .env, extensions/, npm/, hooks/, mpm/ and plugins/, and the Gateway's working directory
- * (no .env) and HOME with an empty .npmrc, all owned by this process (not OTHER_UID), directories 0755
+ * (no .env), HOME with an empty .npmrc, and a Node.js install prefix with
+ * an `etc/` but no global npmrc (passed as `nodePrefix`, so the check never
+ * looks at the Node.js install running the tests), all owned by this process (not OTHER_UID), directories 0755
  * and files 0644. With `npm`, the plugin sits where OpenClaw 2026.7.1's
  * `npm:` / `npm-pack:` install puts it:
  * `<state>/npm/projects/<name>/node_modules/@odingard/guardian-openclaw`.
@@ -89,6 +92,8 @@ export function protectedInstall(opts: { npm?: boolean } = {}): Fixture {
   mkdirSync(home, { mode: 0o755 });
   const npmrc = join(home, ".npmrc");
   writeFileSync(npmrc, "");
+  const nodePrefix = join(root, "node");
+  mkdirSync(join(nodePrefix, "etc"), { recursive: true, mode: 0o755 });
   const config = join(stateDir, "openclaw.json");
   writeFileSync(config, "{}");
   writeFileSync(`${config}.bak`, "");
@@ -108,9 +113,11 @@ export function protectedInstall(opts: { npm?: boolean } = {}): Fixture {
     pluginsDir,
     home,
     npmrc,
+    nodePrefix,
     cwd,
     install: {
       pluginDir,
+      nodePrefix,
       uid: OTHER_UID,
       gids: [OTHER_UID],
       cwd,
