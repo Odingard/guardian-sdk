@@ -15,7 +15,7 @@ human decides. Every tool call an agent makes gets a deterministic
 tamper-evident receipt you can verify without an account. The receipt format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
-tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Business via sales.
+tier, no card required (1 agent, 1 connection, 50 protected actions/month). [Pricing](https://odingard.com/guardian#gd-pricing): Free $0, Guardian Personal $19/month or $190/year, Guardian Family $39/month or $390/year, Guardian Developer $99/month plus protected-action usage.
 
 ## Packages
 
