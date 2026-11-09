@@ -105,9 +105,10 @@ export type GuardianGovernedInvocation = Readonly<{
    * same value from the action's parameters. For `api.request`, Guardian
    * derives it from the exact request for known money endpoints (Stripe
    * refunds, payouts, payments, charges, transfers): a money request must
-   * declare exactly the amount in its body, in the body's own content
-   * type (form or JSON), or it is refused (INVALID_REQUEST), and so is one
-   * whose amount cannot be read unambiguously. A request that moves no
+   * declare exactly the amount in a form-encoded body
+   * (`application/x-www-form-urlencoded`; any other content type is
+   * refused), or it is refused (INVALID_REQUEST), and so is one whose
+   * amount cannot be read unambiguously. A request that moves no
    * money must not declare it. Requires a Guardian deployment that
    * derives `api.request` amounts; older deployments refuse any declared
    * value on `api.request`.
