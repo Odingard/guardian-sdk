@@ -4,6 +4,7 @@
   "mcpName": "io.github.Odingard/guardian-mcp",
   "description": "MCP server that routes an agent's tool calls through Guardian — the human authority layer for autonomous AI. Every tool call gets a deterministic ALLOW/ASK/DENY decision before anything executes; ASK holds for human approval, DENY never runs, every outcome carries a verifiable receipt.",
   "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
