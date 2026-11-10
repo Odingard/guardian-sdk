@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.9.2"
-authors = [{ name = "Odingard" }]
+authors = [{ name = "Odingard Security LLC" }]
 keywords = ["guardian", "ai-agents", "authorization", "authority", "human-in-the-loop", "mcp", "agentic-commerce"]
 classifiers = [
   "Development Status :: 4 - Beta",
