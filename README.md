@@ -29,7 +29,7 @@ tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Fre
 | [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)                 | Your browser agent checks out on Steel. Not yet available on hosted Guardian                                                                                                                                                      | [packages/steel](packages/steel)                 |
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested against Guardian; production proof pending                                               | [packages/openai-agents](packages/openai-agents) |
-| `@odingard/guardian-openclaw` (not yet published)                                                    | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
+| [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
 
 ## Works with
 
@@ -57,7 +57,7 @@ document, and how far each has been tested.
 | ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Example, not yet tested                           |
 | Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
-| OpenClaw                                        | `@odingard/guardian-openclaw`                          | Unpublished                                       |
+| OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
 
 "Tested against Guardian" means the integration ran end to end against the
 real Guardian server code, with real approvals and receipts verified offline,
