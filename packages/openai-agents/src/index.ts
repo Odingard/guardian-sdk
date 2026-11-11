@@ -9,6 +9,7 @@ import {
 } from "@openai/agents";
 
 import {
+  createGuardianContext,
   GuardianApprovalPending,
   GuardianDenied,
   GuardianExecutionFailed,
@@ -85,6 +86,12 @@ type Shared = {
   ensured: Set<string>;
   installed: NonNullable<GuardianContext["installed"]>;
   heldSetup: NonNullable<GuardianContext["heldSetup"]>;
+  /**
+   * Held ASK calls by invocation key, so a retry of the same call (same
+   * arguments, same content pins) claims the approval the person gave
+   * instead of proposing a new request.
+   */
+  heldInvocations: NonNullable<GuardianContext["heldInvocations"]>;
 };
 
 function askMessage(toolName: string, requestId: string): string {
@@ -106,7 +113,27 @@ function unavailableMessage(toolName: string): string {
   return `Guardian could not check ${toolName}, so it did not run. Try again later.`;
 }
 
+/** Content-pin refusals after ALLOW: the tool did not run. */
+function contentPinRefused(err: GuardianExecutionFailed): boolean {
+  return (
+    !err.localEffectRan &&
+    !err.outcomeUnknown &&
+    (err.reasonCode === "CONTENT_CHANGED_SINCE_APPROVAL" ||
+      err.reasonCode.startsWith("CONTENT_PIN_"))
+  );
+}
+
 function executionFailedMessage(err: GuardianExecutionFailed): string {
+  if (contentPinRefused(err)) {
+    return (
+      `${err.toolName} did not run: a file it was approved with ` +
+      (err.reasonCode === "CONTENT_CHANGED_SINCE_APPROVAL"
+        ? "changed since the approval"
+        : "could not be checked") +
+      ` (${err.reasonCode}). Tell the user; a changed file needs a new ` +
+      `approval.`
+    );
+  }
   if (err.localEffectRan) {
     return (
       `${err.toolName} ran, but Guardian could not record it ` +
@@ -155,6 +182,47 @@ function remapModes(
   return { ...modes, [builtName]: written };
 }
 
+/**
+ * The same rename for `fileArgs`: an entry keyed by the name the developer
+ * wrote is moved to the built name, so a declared file argument is never
+ * left unpinned because the Agents SDK renamed the tool. Two entries that
+ * disagree are refused.
+ */
+function remapFileArgs(
+  fileArgs: GuardianAdapterOptions["fileArgs"],
+  writtenName: string | undefined,
+  builtName: string,
+): GuardianAdapterOptions["fileArgs"] {
+  if (!fileArgs || !writtenName || writtenName === builtName) {
+    return fileArgs;
+  }
+  if (!Object.prototype.hasOwnProperty.call(fileArgs, writtenName)) {
+    return fileArgs;
+  }
+  const written = fileArgs[writtenName]!;
+  if (Object.prototype.hasOwnProperty.call(fileArgs, builtName)) {
+    const built = fileArgs[builtName]!;
+    const same =
+      written !== null &&
+      built !== null &&
+      typeof written === "object" &&
+      typeof built === "object" &&
+      Object.keys(written).length === Object.keys(built).length &&
+      Object.entries(written).every(
+        ([arg, mode]) =>
+          Object.prototype.hasOwnProperty.call(built, arg) &&
+          built[arg] === mode,
+      );
+    if (!same) {
+      throw new Error(
+        `Guardian fileArgs disagree for tool "${writtenName}" (the Agents ` +
+          `SDK names it "${builtName}"): set one entry`,
+      );
+    }
+  }
+  return { ...fileArgs, [builtName]: written };
+}
+
 function buildTool(
   shared: Shared,
   toolOptions: ToolOptions<any, any, any>,
@@ -197,6 +265,7 @@ function buildTool(
       ensured: shared.ensured,
       installed: shared.installed,
       heldSetup: shared.heldSetup,
+      heldInvocations: shared.heldInvocations,
     };
     try {
       // `input` is the call's own arguments, parsed by the Agents SDK from
@@ -311,6 +380,13 @@ function buildTool(
   if (modes !== options.modes) {
     coreOptions = { ...coreOptions, ...(modes ? { modes } : {}) };
   }
+  const fileArgs = remapFileArgs(options.fileArgs, name, built.name);
+  if (fileArgs !== options.fileArgs) {
+    coreOptions = { ...coreOptions, ...(fileArgs ? { fileArgs } : {}) };
+  }
+  // Wrap time: a bad fileArgs declaration (or fileArgs in remote mode) is a
+  // configuration error here, not on the first call.
+  createGuardianContext(coreOptions);
   return built;
 }
 
@@ -358,6 +434,7 @@ export function guardianTool<
       ensured: new Set(),
       installed: new Set(),
       heldSetup: new Map(),
+      heldInvocations: new Map(),
     },
     toolOptions as ToolOptions<any, any, any>,
   ) as GuardedTool<TParameters, Context, Result, TOutputSchema>;
@@ -378,6 +455,7 @@ export function createGuardianTool(options: GuardianOpenAIAgentsOptions) {
     ensured: new Set(),
     installed: new Set(),
     heldSetup: new Map(),
+    heldInvocations: new Map(),
   };
   return <
     TParameters extends ToolInputParameters = undefined,

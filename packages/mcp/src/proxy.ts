@@ -16,6 +16,8 @@
  * processes; `index.ts` wires it to stdio on both sides.
  */
 import {
+  CONTENT_PIN_KEY,
+  CONTENT_PIN_REMOTE_UPSTREAM,
   createGuardianContext,
   runThroughGuardian,
   settle,
@@ -27,6 +29,7 @@ import {
   type GuardianContext,
   type GuardianDecisionResult,
   type GuardianRequestResult,
+  type FileArgsSpec,
 } from "@odingard/guardian-sdk";
 
 export type UpstreamTool = {
@@ -78,7 +81,51 @@ export type GovernedProxyOptions = Readonly<{
   autoRegister?: boolean;
   /** Diagnostics sink (stderr in the CLI). Never receives credentials. */
   log?: (message: string) => void;
+  /**
+   * Declared file arguments, tool name → top-level argument names (CLI
+   * `--pin-file <tool>:<arg>`). For each, the SDK reads the file the path
+   * names, puts its SHA-256 in the proposed arguments (so the approval
+   * binds it), and checks it again just before the call is forwarded; a
+   * changed file is refused (`CONTENT_CHANGED_SINCE_APPROVAL`) and nothing
+   * is forwarded. Mode is always "recheck": the upstream server opens the
+   * path itself, so a short window remains between the check and its open.
+   * Paths must be absolute. Allowed only for a stdio upstream (same machine,
+   * same files).
+   */
+  pinFiles?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Where the upstream runs: "stdio" (a local process, the default) or
+   * "remote" (Streamable HTTP / SSE). With "remote", `pinFiles` is refused
+   * (`CONTENT_PIN_REMOTE_UPSTREAM`): the path names a file on another
+   * machine.
+   */
+  upstreamTransport?: "stdio" | "remote";
 }>;
+
+/** A declared pin for a remote upstream: a configuration error at start. */
+export class ContentPinConfigError extends Error {
+  constructor(
+    readonly reasonCode: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ContentPinConfigError";
+  }
+}
+
+/** `pinFiles` as the SDK's `fileArgs`, every argument in "recheck" mode. */
+export function pinFilesToFileArgs(
+  pinFiles: GovernedProxyOptions["pinFiles"],
+): Record<string, FileArgsSpec> {
+  const fileArgs: Record<string, FileArgsSpec> = {};
+  for (const [toolName, args] of Object.entries(pinFiles ?? {})) {
+    if (args.length === 0) continue;
+    fileArgs[toolName] = Object.fromEntries(
+      args.map((arg) => [arg, "recheck" as const]),
+    );
+  }
+  return fileArgs;
+}
 
 type ToolResult = {
   isError?: boolean;
@@ -227,14 +274,30 @@ export class UpstreamListFailed extends Error {
 /** Whether a call was handed to the upstream (set just before it is sent). */
 type Forwarding = { sent: boolean };
 
+/**
+ * The approved copy the SDK hands `runTool`, without the reserved
+ * content-pin key: what goes upstream is always what was approved, and
+ * upstream servers never see the pins.
+ */
+function forwardable(approved: unknown): Record<string, unknown> {
+  const record =
+    approved !== null &&
+    typeof approved === "object" &&
+    !Array.isArray(approved)
+      ? { ...(approved as Record<string, unknown>) }
+      : {};
+  delete record[CONTENT_PIN_KEY];
+  return record;
+}
+
 function callUpstream(
   upstream: Upstream,
   name: string,
-  args: Record<string, unknown>,
   signal: AbortSignal | undefined,
   forwarding: Forwarding,
-): () => Promise<UpstreamRan> {
-  return async () => {
+): (approved: unknown) => Promise<UpstreamRan> {
+  return async (approved) => {
+    const args = forwardable(approved);
     if (signal?.aborted) {
       throw new UpstreamCallCancelled(name);
     }
@@ -288,6 +351,27 @@ function failure(
         toolName,
         error:
           "Guardian allowed the call but the upstream MCP server did not return a result. It may or may not have run; check before retrying. The capability was not redeemed.",
+      },
+      true,
+    );
+  }
+  if (
+    err instanceof GuardianExecutionFailed &&
+    !err.localEffectRan &&
+    (err.reasonCode === "CONTENT_CHANGED_SINCE_APPROVAL" ||
+      err.reasonCode.startsWith("CONTENT_PIN_"))
+  ) {
+    return jsonResult(
+      {
+        decision: "ALLOW",
+        toolName,
+        requestId: err.requestId,
+        executionFailed: err.reasonCode,
+        localEffectRan: false,
+        message:
+          err.reasonCode === "CONTENT_CHANGED_SINCE_APPROVAL"
+            ? "A file named in the approved call changed since it was approved. Nothing was forwarded and the capability was not redeemed. Propose the call again; it needs a new approval."
+            : "A file named in the approved call could not be checked against its approval. Nothing was forwarded and the capability was not redeemed.",
       },
       true,
     );
@@ -367,14 +451,30 @@ export function createGovernedProxy(
   options: GovernedProxyOptions,
 ): GovernedProxy {
   const { upstream, log = () => {} } = options;
+  const fileArgs = pinFilesToFileArgs(options.pinFiles);
+  if (
+    Object.keys(fileArgs).length > 0 &&
+    options.upstreamTransport === "remote"
+  ) {
+    throw new ContentPinConfigError(
+      CONTENT_PIN_REMOTE_UPSTREAM,
+      "guardian-mcp proxy: --pin-file is supported only for a stdio upstream. " +
+        "A remote (HTTP/SSE) MCP server opens paths on another machine, so the " +
+        "proxy cannot check the file it will read.",
+    );
+  }
 
   // Track which requestIds belong to tool.invoke proposals vs the one-time
   // record-transport registration (mcp.install), so a claim can only ever
   // resume the call it was approved for.
   const toolInvokeRequestIds = new Set<string>();
+  /**
+   * Held ASK calls: the caller's arguments (for messages) and the input
+   * that was proposed, with any content pins, which is what a claim settles.
+   */
   const pendingCalls = new Map<
     string,
-    { name: string; args: Record<string, unknown> }
+    { name: string; args: Record<string, unknown>; proposed: unknown }
   >();
   const pendingInstalls = new Map<string, string>();
   /**
@@ -437,9 +537,13 @@ export function createGovernedProxy(
     installRecordTransport: options.autoRegister ?? false,
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     ...(options.agentName ? { agentName: options.agentName } : {}),
+    ...(Object.keys(fileArgs).length > 0 ? { fileArgs } : {}),
   });
   // Shared by the per-call contexts below.
   ctx.installed ??= new Set();
+  // The proposed (pinned) input of each held tool call, by requestId, so a
+  // claim settles exactly what was proposed.
+  ctx.proposedInputs = new Map();
 
   /** The registration step the SDK holds under this requestId, if any. */
   function heldSetupStep(
@@ -512,7 +616,12 @@ export function createGovernedProxy(
     const g = output.guardian;
     if (g.decision === "ASK") {
       if (toolInvokeRequestIds.has(g.requestId)) {
-        pendingCalls.set(g.requestId, { name: toolName, args });
+        // Without a stored proposed input the pin-free args are settled,
+        // and a tool with declared pins is then refused
+        // (CONTENT_PIN_MISSING), never forwarded unpinned.
+        const proposed = ctx.proposedInputs?.get(g.requestId) ?? args;
+        ctx.proposedInputs?.delete(g.requestId);
+        pendingCalls.set(g.requestId, { name: toolName, args, proposed });
         return jsonResult({
           decision: "ASK",
           toolName,
@@ -645,12 +754,13 @@ export function createGovernedProxy(
       const forwarding: Forwarding = { sent: false };
       try {
         const call = tracked();
+        // The proposed input: the content pins are checked again here.
         const output = await settle<UpstreamRan>(
           call.ctx,
           held.name,
-          held.args,
+          held.proposed,
           claimed,
-          callUpstream(upstream, held.name, held.args, signal, forwarding),
+          callUpstream(upstream, held.name, signal, forwarding),
         );
         result = toCallResult(
           held.name,
@@ -864,7 +974,7 @@ export function createGovernedProxy(
           call.ctx,
           name,
           args,
-          callUpstream(upstream, name, args, signal, forwarding),
+          callUpstream(upstream, name, signal, forwarding),
         );
         return toCallResult(name, args, output, call.allowedRequestId());
       } catch (err) {

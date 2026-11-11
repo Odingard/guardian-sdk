@@ -19,7 +19,14 @@ export type UpstreamTarget =
 
 export type CliMode =
   | { kind: "dispatch" }
-  | ({ kind: "proxy" } & UpstreamTarget)
+  | ({
+      kind: "proxy";
+      /**
+       * `--pin-file <tool>:<arg>` (repeatable): declared file arguments,
+       * tool → argument names. Stdio upstreams only.
+       */
+      pinFiles?: Record<string, string[]>;
+    } & UpstreamTarget)
   | ({ kind: "tools"; json: boolean } & UpstreamTarget);
 
 export type GuardianMcpConfig = {
@@ -36,6 +43,11 @@ export const USAGE = `guardian-mcp — route an agent's tool calls through Guard
 Usage:
   guardian-mcp                               Guardian tools (guardian_invoke_tool, guardian_claim, guardian_receipt)
   guardian-mcp proxy -- <command> [args...]  Govern every tool of an existing stdio MCP server
+  guardian-mcp proxy --pin-file <tool>:<arg> [--pin-file ...] -- <command> [args...]
+                                             Also pin the file a path argument names: its SHA-256
+                                             goes into the approved arguments and is checked again
+                                             just before the call is forwarded (stdio upstreams
+                                             only; the path must be absolute)
   guardian-mcp proxy --url <https-url> [--transport streamable-http|sse] [--header "Name: value"]...
                                              Govern every tool of a remote MCP server (Streamable
                                              HTTP by default, or SSE). The agent still talks stdio.
@@ -89,9 +101,25 @@ export function parseCli(
     };
   }
   if (argv[0] === "proxy") {
-    const target = parseTarget("proxy", argv.slice(1), env);
+    const pins = extractPinFiles(argv.slice(1));
+    if (!pins.ok) return pins;
+    const target = parseTarget("proxy", pins.rest, env);
     if (!target.ok) return target;
-    mode = { kind: "proxy", ...target.target };
+    const declared = Object.keys(pins.pinFiles).length > 0;
+    if (declared && "remote" in target.target) {
+      return {
+        ok: false,
+        message:
+          "guardian-mcp proxy: --pin-file is supported only for a stdio upstream " +
+          "(CONTENT_PIN_REMOTE_UPSTREAM). A remote MCP server opens paths on " +
+          `another machine, so the proxy cannot check the file it will read.\n\n${USAGE}`,
+      };
+    }
+    mode = {
+      kind: "proxy",
+      ...target.target,
+      ...(declared ? { pinFiles: pins.pinFiles } : {}),
+    };
   } else if (argv.length > 0) {
     return {
       ok: false,
@@ -179,6 +207,50 @@ function expandEnv(
     ok: true,
     value: value.replace(ENV_REF, (_, name: string) => env[name]!),
   };
+}
+
+/**
+ * Take every `--pin-file <tool>:<arg>` (or `--pin-file=<tool>:<arg>`) out
+ * of the proxy options before the upstream command (`--`), which is left
+ * untouched.
+ */
+function extractPinFiles(
+  argv: readonly string[],
+):
+  | { ok: true; pinFiles: Record<string, string[]>; rest: string[] }
+  | { ok: false; message: string } {
+  const pinFiles: Record<string, string[]> = {};
+  const rest: string[] = [];
+  const fail = (message: string) => ({
+    ok: false as const,
+    message: `guardian-mcp proxy: ${message}\n\n${USAGE}`,
+  });
+  let i = 0;
+  for (; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--") break;
+    let value: string | undefined;
+    if (arg === "--pin-file") {
+      value = argv[++i];
+    } else if (arg.startsWith("--pin-file=")) {
+      value = arg.slice("--pin-file=".length);
+    } else {
+      rest.push(arg);
+      continue;
+    }
+    const colon = value?.lastIndexOf(":") ?? -1;
+    const tool = colon > 0 ? value!.slice(0, colon) : "";
+    const name = colon > 0 ? value!.slice(colon + 1) : "";
+    if (!tool || !name || name.includes(".")) {
+      return fail(
+        '--pin-file needs "<tool>:<argument>", naming a top-level argument.',
+      );
+    }
+    const list = (pinFiles[tool] ??= []);
+    if (!list.includes(name)) list.push(name);
+  }
+  rest.push(...argv.slice(i));
+  return { ok: true, pinFiles, rest };
 }
 
 type TargetResult =

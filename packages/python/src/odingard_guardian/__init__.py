@@ -26,6 +26,25 @@ from .guard import (
     execution_failed_message,
     to_arguments_record,
 )
+from .content_pins import (
+    CONTENT_CHANGED_SINCE_APPROVAL,
+    CONTENT_PIN_INVALID_ARGUMENT,
+    CONTENT_PIN_KEY,
+    CONTENT_PIN_KEY_RESERVED,
+    CONTENT_PIN_MISSING,
+    CONTENT_PIN_NOT_REGULAR_FILE,
+    CONTENT_PIN_REMOTE_MODE,
+    CONTENT_PIN_REMOTE_UPSTREAM,
+    CONTENT_PIN_TOO_LARGE,
+    CONTENT_PIN_TOO_MANY,
+    CONTENT_PIN_UNREADABLE,
+    CONTENT_PIN_UNSTABLE,
+    CONTENT_PIN_UNSUPPORTED_PLATFORM,
+    ContentPinError,
+    PinnedFile,
+    pin_file,
+    verify_pin,
+)
 from .lifecycle import GuardianDecision, classify_request_result
 from .receipts import (
     afetch_receipt_verification_keys,
@@ -40,9 +59,26 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 
 __all__ = [
+    "CONTENT_CHANGED_SINCE_APPROVAL",
+    "CONTENT_PIN_INVALID_ARGUMENT",
+    "CONTENT_PIN_KEY",
+    "CONTENT_PIN_KEY_RESERVED",
+    "CONTENT_PIN_MISSING",
+    "CONTENT_PIN_NOT_REGULAR_FILE",
+    "CONTENT_PIN_REMOTE_MODE",
+    "CONTENT_PIN_REMOTE_UPSTREAM",
+    "CONTENT_PIN_TOO_LARGE",
+    "CONTENT_PIN_TOO_MANY",
+    "CONTENT_PIN_UNREADABLE",
+    "CONTENT_PIN_UNSTABLE",
+    "CONTENT_PIN_UNSUPPORTED_PLATFORM",
+    "ContentPinError",
+    "PinnedFile",
+    "pin_file",
+    "verify_pin",
     "DEFAULT_RECEIPT_MAX_AGE_MS",
     "fetch_receipt_status",
     "verify_before_acting",

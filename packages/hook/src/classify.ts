@@ -9,6 +9,13 @@
  */
 import { createHash } from "node:crypto";
 
+import {
+  CONTENT_PIN_INVALID_ARGUMENT,
+  CONTENT_PIN_KEY,
+  pinFile,
+  type FileDigest,
+} from "@odingard/guardian-sdk";
+
 import { parseShell, type Parsed, type Word } from "./shell.js";
 
 /** Tool names the hook proposes. Register these once in the console. */
@@ -63,6 +70,12 @@ export type GovernedCall = Readonly<{
   arguments: Record<string, unknown>;
   /** One-line plain-words summary for the approval prompt. */
   summary: string;
+  /**
+   * Edit-type tools only: the target's current contents as pinned into
+   * `arguments.guardianContentPins` (or absent). `decide` checks the file
+   * against it again just before the approved call is released.
+   */
+  contentPin?: Readonly<{ path: string; pin: FileDigest }>;
 }>;
 
 const MAX_COMMAND = 2_000;
@@ -1027,6 +1040,79 @@ const FILE_TOOLS = new Set([
   "write", // DeepSeek Harness
   "edit", // DeepSeek Harness
 ]);
+
+/**
+ * Edit-type tools: the result depends on the target's current bytes, so
+ * the hook pins them (Write replaces the whole file and is not pinned).
+ */
+export const CONTENT_PIN_TOOLS: ReadonlySet<string> = new Set([
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "edit", // DeepSeek Harness
+]);
+
+/** A content pin could not be taken, so the call is denied before proposing. */
+export class EditPinRefused extends Error {
+  constructor(
+    readonly reasonCode: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EditPinRefused";
+  }
+}
+
+/**
+ * For an Edit-type tool, pin the target file's current contents into the
+ * recorded arguments under `guardianContentPins` (mode "recheck"; or
+ * `absent: true` when the file does not exist yet), so the approval binds
+ * the file as it was when the call was proposed. Other calls are returned
+ * unchanged. The target path must be absolute; it is never resolved
+ * against `cwd`. Any failure throws `EditPinRefused` (fail closed).
+ */
+export async function pinEditTarget(
+  call: ToolCall,
+  governed: GovernedCall,
+): Promise<GovernedCall> {
+  if (!CONTENT_PIN_TOOLS.has(call.tool)) return governed;
+  const path = governed.arguments.path;
+  if (typeof path !== "string" || !path.startsWith("/")) {
+    throw new EditPinRefused(
+      CONTENT_PIN_INVALID_ARGUMENT,
+      `${call.tool} needs an absolute file path; the hook does not resolve relative paths`,
+    );
+  }
+  let pin: FileDigest;
+  try {
+    pin = await pinFile(path, { allowAbsent: true });
+  } catch (err) {
+    const code =
+      typeof (err as { reasonCode?: unknown })?.reasonCode === "string"
+        ? (err as { reasonCode: string }).reasonCode
+        : "CONTENT_PIN_UNREADABLE";
+    throw new EditPinRefused(
+      code,
+      `the current contents of ${path} could not be pinned`,
+    );
+  }
+  const record =
+    "absent" in pin
+      ? { arg: "path", index: 0, mode: "recheck", absent: true }
+      : {
+          arg: "path",
+          index: 0,
+          mode: "recheck",
+          name: pin.name,
+          size: pin.size,
+          sha256: pin.sha256,
+        };
+  return {
+    ...governed,
+    arguments: { ...governed.arguments, [CONTENT_PIN_KEY]: [record] },
+    contentPin: { path, pin },
+  };
+}
 
 /** A command may arrive as a string or as argv (some exec tools). */
 function commandText(value: unknown): string {

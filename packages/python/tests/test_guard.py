@@ -453,3 +453,548 @@ def test_a_new_guard_opted_in_is_refused_for_an_entry_an_earlier_guard_installed
     assert third() == "sent"
     assert client.calls == ["request:tool.invoke", "execute:req_allow"]
     assert ran == [1, 1, 1]
+
+
+# --- content pins (file_args) -------------------------------------------------
+
+import asyncio  # noqa: E402
+import os  # noqa: E402
+import threading  # noqa: E402
+
+from odingard_guardian import CONTENT_PIN_KEY, ContentPinError, PinnedFile  # noqa: E402
+
+ASK_TOOL = RequestResult(ok=True, request_id="req_pin", decision="ASK")
+ALLOW_PIN = RequestResult(ok=True, request_id="req_pin", decision="ALLOW", capability_token="cap")
+
+
+@pytest.fixture
+def attachment(tmp_path):
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"approved bytes")
+    return str(path)
+
+
+class RewritingClient(FakeClient):
+    """Runs ``before_answer`` when Guardian answers (between proposal and run)."""
+
+    def __init__(self, invoke, before_answer=None, **kwargs):
+        super().__init__(invoke, **kwargs)
+        self.before_answer = before_answer
+
+    def request(self, invocation):
+        result = super().request(invocation)
+        if self.before_answer and invocation["action"] == "tool.invoke":
+            self.before_answer()
+        return result
+
+
+def call_sync_or_async(is_async, fn, *args, **kwargs):
+    result = fn(*args, **kwargs)
+    if is_async:
+        return asyncio.run(result) if asyncio.iscoroutine(result) else result
+    return result
+
+
+def make_guard(client, is_async, **kwargs):
+    return Guard(AsyncFake(client) if is_async else client, connection_id=CONNECTION, **kwargs)
+
+
+def rewrite(path, data=b"rewritten bytes"):
+    def go():
+        with open(path, "wb") as f:
+            f.write(data)
+
+    return go
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_file_rewritten_between_allow_and_run_is_refused(attachment, is_async):
+    client = RewritingClient(ALLOW_PIN, before_answer=rewrite(attachment))
+    guard = make_guard(client, is_async)
+    ran = []
+
+    def body(to, attachment_path):
+        ran.append(attachment_path)
+
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(body, is_async)
+    )
+    with pytest.raises(GuardianExecutionFailed) as info:
+        call_sync_or_async(is_async, send, "ops@example.test", attachment)
+    assert info.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert info.value.local_effect_ran is False
+    assert ran == []
+    assert client.calls == ["request:tool.invoke"]  # never executed / redeemed
+    pins = client.last_invocation["arguments"][CONTENT_PIN_KEY]
+    assert pins == [
+        {
+            "arg": "attachment_path",
+            "index": 0,
+            "mode": "recheck",
+            "name": "report.pdf",
+            "size": 14,
+            "sha256": pins[0]["sha256"],
+        }
+    ]
+
+
+def _maybe_async(fn, is_async):
+    if not is_async:
+        return fn
+
+    async def wrapper(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    wrapper.__signature__ = __import__("inspect").signature(fn)  # type: ignore[attr-defined]
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_resume_after_ask_rechecks(attachment, is_async):
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "bytes"})(
+        _maybe_async(lambda attachment_path: ran.append(attachment_path), is_async)
+    )
+    with pytest.raises(GuardianApprovalPending) as info:
+        call_sync_or_async(is_async, send, attachment)
+    pending = info.value
+    assert CONTENT_PIN_KEY not in pending.arguments
+    assert CONTENT_PIN_KEY in pending.proposed_args
+    rewrite(attachment)()
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        call_sync_or_async(is_async, pending.resume)
+    assert failed.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert ran == []
+    assert "execute:req_pin" not in client.calls
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_held_recall_with_on_ask_result(attachment, is_async):
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async, on_ask="result")
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda attachment_path: ran.append(1), is_async)
+    )
+    first = call_sync_or_async(is_async, send, attachment)
+    assert first["guardian"]["decision"] == "ASK"
+    # Unchanged file: the same pinned arguments claim the held request, and the
+    # re-check passes.
+    call_sync_or_async(is_async, send, attachment)
+    assert client.calls[-2:] == ["claim:req_pin", "execute:req_pin"]
+    assert ran == [1]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_held_recall_after_change_is_a_new_request(attachment, is_async):
+    client = FakeClient(ASK_TOOL)
+    guard = make_guard(client, is_async, on_ask="result")
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda attachment_path: None, is_async)
+    )
+    call_sync_or_async(is_async, send, attachment)
+    rewrite(attachment)()
+    call_sync_or_async(is_async, send, attachment)
+    # A changed file gives a new key: proposed again, never a claim of the old one.
+    assert client.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_bytes_mode_hands_the_verified_bytes(attachment, is_async):
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async)
+    seen = {}
+
+    def body(to, attachment_path):
+        seen["file"] = attachment_path
+        seen["locals"] = dict(locals())
+        rewrite(attachment, b"changed after the re-check")()
+        return "sent"
+
+    send = guard("send_report", file_args={"attachment_path": "bytes"})(_maybe_async(body, is_async))
+    assert call_sync_or_async(is_async, send, "ops@example.test", attachment) == "sent"
+    file = seen["file"]
+    assert isinstance(file, PinnedFile)
+    assert file.data == b"approved bytes"
+    assert attachment not in str(file)
+    assert "approved bytes" not in repr(file)
+    assert CONTENT_PIN_KEY not in seen["locals"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_copy_mode_private_copy_is_deleted_also_on_raise(attachment, is_async):
+    for raises in (False, True):
+        client = FakeClient(ALLOW_PIN)
+        guard = make_guard(client, is_async)
+        seen = {}
+
+        def body(attachment_path):
+            seen["path"] = attachment_path
+            st = os.stat(attachment_path)
+            seen["mode"] = st.st_mode & 0o777
+            seen["dir_mode"] = os.stat(os.path.dirname(attachment_path)).st_mode & 0o777
+            with open(attachment_path, "rb") as f:
+                seen["data"] = f.read()
+            if raises:
+                raise RuntimeError("tool failed")
+            return "ok"
+
+        send = guard("send_report", file_args={"attachment_path": "copy"})(_maybe_async(body, is_async))
+        if raises:
+            with pytest.raises(RuntimeError):
+                call_sync_or_async(is_async, send, attachment)
+        else:
+            call_sync_or_async(is_async, send, attachment)
+        assert seen["path"] != attachment
+        assert seen["mode"] == 0o600 and seen["dir_mode"] == 0o700
+        assert seen["data"] == b"approved bytes"
+        assert not os.path.exists(seen["path"])
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_refusals_before_proposal_send_nothing(tmp_path, attachment, is_async):
+    fifo = str(tmp_path / "fifo")
+    os.mkfifo(fifo)
+    cases = [
+        ("relative.pdf", "CONTENT_PIN_INVALID_ARGUMENT"),
+        ("~/x.pdf", "CONTENT_PIN_INVALID_ARGUMENT"),
+        ("", "CONTENT_PIN_INVALID_ARGUMENT"),
+        (str(tmp_path / "missing"), "CONTENT_PIN_UNREADABLE"),
+        (str(tmp_path), "CONTENT_PIN_NOT_REGULAR_FILE"),
+        (fifo, "CONTENT_PIN_NOT_REGULAR_FILE"),
+        ("/dev/zero", "CONTENT_PIN_NOT_REGULAR_FILE"),
+        (attachment, "CONTENT_PIN_TOO_LARGE"),
+    ]
+    for path, code in cases:
+        client = FakeClient(ALLOW_PIN)
+        # install_record_transport: even the record-transport request is not sent.
+        guard = make_guard(client, is_async, install_record_transport=True, max_pin_bytes=4)
+        send = guard("send_report", file_args={"attachment_path": "bytes"})(
+            _maybe_async(lambda attachment_path: None, is_async)
+        )
+        with pytest.raises(GuardianDenied) as info:
+            call_sync_or_async(is_async, send, path)
+        assert info.value.reason_code == code, path
+        assert client.calls == [], path
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pin_refusal_as_a_result_with_on_deny_result(is_async):
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async, on_deny="result")
+    send = guard("send_report", file_args={"attachment_path": "bytes"})(
+        _maybe_async(lambda attachment_path: None, is_async)
+    )
+    out = call_sync_or_async(is_async, send, "relative.pdf")
+    assert out["guardian"]["reason_code"] == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert "did not run" in out["guardian"]["message"]
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_reserved_key_is_refused_with_and_without_file_args(attachment, is_async):
+    for file_args in (None, {"attachment_path": "recheck"}):
+        client = FakeClient(ALLOW_PIN)
+        guard = make_guard(client, is_async)
+        with pytest.raises(GuardianDenied) as info:
+            call_sync_or_async(
+                is_async,
+                guard.run,
+                "send_report",
+                {"attachment_path": attachment, CONTENT_PIN_KEY: [{"arg": "attachment_path"}]},
+                lambda: None,
+                file_args=file_args,
+            )
+        assert info.value.reason_code == "CONTENT_PIN_KEY_RESERVED"
+        assert client.calls == []
+
+
+def test_guard_run_supports_recheck_only(attachment):
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    for mode in ("bytes", "copy"):
+        with pytest.raises(ContentPinError, match="decorator"):
+            guard.run("send_report", {"p": attachment}, lambda: None, file_args={"p": mode})
+    assert client.calls == []
+    ran = []
+    guard.run("send_report", {"p": attachment}, lambda: ran.append(1), file_args={"p": "recheck"})
+    assert ran == [1]
+    assert CONTENT_PIN_KEY in client.last_invocation["arguments"]
+
+
+def test_file_args_in_remote_mode_is_a_decoration_time_error():
+    guard = Guard(FakeClient(ALLOW_PIN), connection_id=CONNECTION, mode="remote")
+    with pytest.raises(ContentPinError) as info:
+        guard("send_report", file_args={"attachment_path": "bytes"})(lambda attachment_path: None)
+    assert info.value.reason_code == "CONTENT_PIN_REMOTE_MODE"
+    per_tool = Guard(FakeClient(ALLOW_PIN), connection_id=CONNECTION, modes={"send_report": "remote"})
+    with pytest.raises(ContentPinError):
+        per_tool.run("send_report", {"p": "/x"}, lambda: None, file_args={"p": "recheck"})
+
+
+def test_file_args_must_name_a_named_parameter():
+    guard = Guard(FakeClient(ALLOW_PIN), connection_id=CONNECTION)
+
+    def tool(to, *paths, **extra):
+        return None
+
+    for key in ("paths", "extra", "attachment_path", "a.b"):
+        with pytest.raises(ContentPinError):
+            guard("send_report", file_args={key: "bytes"})(tool)
+
+
+def test_decorator_rebind_positional_keyword_and_keyword_only(tmp_path):
+    files = {}
+    for name in ("a", "b", "c"):
+        p = tmp_path / f"{name}.txt"
+        p.write_bytes(name.encode())
+        files[name] = str(p)
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    seen = {}
+
+    @guard("combine", file_args={"first": "bytes", "second": "copy", "third": "bytes"})
+    def combine(first, /, second, *, third, label="x"):
+        with open(second, "rb") as f:
+            seen["second"] = f.read()
+        seen["first"] = first.data
+        seen["third"] = third.data
+        seen["label"] = label
+        return "ok"
+
+    assert combine(files["a"], files["b"], third=files["c"], label="L") == "ok"
+    assert seen == {"first": b"a", "second": b"b", "third": b"c", "label": "L"}
+    assert [p["arg"] for p in client.last_invocation["arguments"][CONTENT_PIN_KEY]] == [
+        "first",
+        "second",
+        "third",
+    ]
+
+
+def test_a_list_of_paths_is_pinned_in_order(tmp_path):
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"{i}.txt"
+        p.write_bytes(str(i).encode())
+        paths.append(str(p))
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    seen = []
+
+    @guard("bundle", file_args={"parts": "bytes"})
+    def bundle(parts):
+        seen.extend(part.data for part in parts)
+
+    bundle(paths)
+    assert seen == [b"0", b"1", b"2"]
+    assert [p["index"] for p in client.last_invocation["arguments"][CONTENT_PIN_KEY]] == [0, 1, 2]
+
+
+def test_a_mutable_argument_changed_while_waiting_does_not_reach_the_body(attachment):
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = Guard(client, connection_id=CONNECTION)
+    seen = []
+
+    @guard("send_report", file_args={"attachment_path": "recheck"})
+    def send(attachment_path, recipients):
+        seen.append(list(recipients))
+
+    recipients = ["ops@example.test"]
+    with pytest.raises(GuardianApprovalPending) as info:
+        send(attachment, recipients)
+    recipients.append("attacker@example.test")  # changed while the approval waits
+    info.value.resume()
+    assert seen == [["ops@example.test"]]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("field", ["arguments", "proposed_arguments"])
+def test_mutating_the_pending_arguments_does_not_reach_the_body(attachment, field, is_async):
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async)
+    seen = []
+
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda attachment_path, recipients: seen.append(list(recipients)), is_async)
+    )
+    with pytest.raises(GuardianApprovalPending) as info:
+        call_sync_or_async(is_async, send, attachment, ["ops@example.test"])
+    # Code holding the pending object changes the exposed record while it waits.
+    getattr(info.value, field)["recipients"].append("attacker@example.test")
+    call_sync_or_async(is_async, info.value.resume)
+    assert seen == [["ops@example.test"]]
+    # What Guardian was asked to approve is what the body received.
+    assert client.last_invocation["arguments"]["recipients"] == ["ops@example.test"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pins_edited_on_the_pending_object_do_not_change_the_recheck(attachment, is_async):
+    import hashlib
+
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async)
+    ran = []
+    with pytest.raises(GuardianApprovalPending) as info:
+        call_sync_or_async(
+            is_async,
+            guard.run,
+            "send_report",
+            {"attachment_path": attachment},
+            lambda: ran.append(1),
+            file_args={"attachment_path": "recheck"},
+        )
+    rewritten = b"other contents"
+    rewrite(attachment, rewritten)()
+    # Code holding the pending object rewrites the pin to match the new file.
+    pin = info.value.proposed_arguments[CONTENT_PIN_KEY][0]
+    pin["size"] = len(rewritten)
+    pin["sha256"] = "sha256:" + hashlib.sha256(rewritten).hexdigest()
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        call_sync_or_async(is_async, info.value.resume)
+    assert failed.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert ran == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_a_path_edited_on_the_pending_object_does_not_change_the_recheck(attachment, tmp_path, is_async):
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda attachment_path: ran.append(attachment_path), is_async)
+    )
+    with pytest.raises(GuardianApprovalPending) as info:
+        call_sync_or_async(is_async, send, attachment)
+    decoy = tmp_path / "decoy.pdf"
+    decoy.write_bytes(b"approved bytes")  # the approved bytes, at another path
+    rewrite(attachment)()
+    info.value.proposed_arguments["attachment_path"] = str(decoy)
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        call_sync_or_async(is_async, info.value.resume)
+    assert failed.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert ran == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_a_declared_file_argument_set_to_none_is_refused_before_proposal(is_async):
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async)
+    ran = []
+    with pytest.raises(GuardianDenied) as info:
+        call_sync_or_async(
+            is_async,
+            guard.run,
+            "send_report",
+            {"attachment_path": None},
+            lambda: ran.append(1),
+            file_args={"attachment_path": "recheck"},
+        )
+    assert info.value.reason_code == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert client.calls == [] and ran == []
+
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda to, attachment_path=None: ran.append(attachment_path), is_async)
+    )
+    with pytest.raises(GuardianDenied) as info:
+        call_sync_or_async(is_async, send, "ops@example.test", None)
+    assert info.value.reason_code == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert client.calls == [] and ran == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_a_declared_parameter_left_at_its_default_is_absent(is_async):
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda to, attachment_path=None: ran.append((to, attachment_path)), is_async)
+    )
+    call_sync_or_async(is_async, send, "ops@example.test")
+    assert ran == [("ops@example.test", None)]
+    proposed = client.last_invocation["arguments"]
+    assert proposed == {"to": "ops@example.test"}  # not pinned, not proposed
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_a_declared_parameter_with_a_path_default_is_pinned(attachment, is_async):
+    # Only a None default means "no file"; a path default is opened by the
+    # function, so it is pinned like a passed value.
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda to, attachment_path=attachment: ran.append(attachment_path), is_async)
+    )
+    call_sync_or_async(is_async, send, "ops@example.test")
+    assert ran == [attachment]
+    proposed = client.last_invocation["arguments"]
+    assert proposed["attachment_path"] == attachment
+    assert [p["arg"] for p in proposed[CONTENT_PIN_KEY]] == ["attachment_path"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_pins_edited_on_a_decorated_tools_pending_object_do_not_change_the_recheck(attachment, is_async):
+    import hashlib
+
+    client = FakeClient(ASK_TOOL, claims=[ALLOW_PIN])
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args={"attachment_path": "recheck"})(
+        _maybe_async(lambda attachment_path: ran.append(attachment_path), is_async)
+    )
+    with pytest.raises(GuardianApprovalPending) as info:
+        call_sync_or_async(is_async, send, attachment)
+    rewritten = b"other contents"
+    rewrite(attachment, rewritten)()
+    pin = info.value.proposed_arguments[CONTENT_PIN_KEY][0]
+    pin["size"] = len(rewritten)
+    pin["sha256"] = "sha256:" + hashlib.sha256(rewritten).hexdigest()
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        call_sync_or_async(is_async, info.value.resume)
+    assert failed.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert ran == []
+
+
+def test_an_argument_deepcopy_cannot_copy_is_refused_only_for_file_args_tools(attachment):
+    lock = threading.Lock()  # copy.deepcopy cannot copy a lock
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+
+    @guard("send_report", file_args={"attachment_path": "recheck"})
+    def pinned(attachment_path, handle):
+        return "ran"
+
+    with pytest.raises(GuardianDenied) as info:
+        pinned(attachment, lock)
+    assert info.value.reason_code == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert client.calls == []
+
+    @guard("send_plain")
+    def plain(attachment_path, handle):
+        return "ran"
+
+    # Without file_args nothing is deep-copied: same behaviour as before
+    # (the lock does not canonicalize, which the request path handles as today).
+    try:
+        plain(attachment, lock)
+    except Exception as err:  # noqa: BLE001
+        assert not isinstance(err, ContentPinError)
+
+
+def test_a_tool_without_file_args_proposes_unchanged_arguments(attachment):
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+
+    @guard("send_report")
+    def send(to, attachment_path, meta=None):
+        return "ok"
+
+    send("ops@example.test", attachment, meta={"b": [1, 2], "a": "é"})
+    assert client.last_invocation["arguments"] == {
+        "to": "ops@example.test",
+        "attachment_path": attachment,
+        "meta": {"b": [1, 2], "a": "é"},
+    }

@@ -252,6 +252,17 @@ A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both 
 - **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
 - Not yet confirmed live: the tool names the bridge passes in a hosted dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether a host's dsh image already includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether a host's headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
 
+## Edit-type tools: the target file is pinned (0.4)
+
+Approval binds the exact arguments. A file path is an argument; for most tools the file's contents are not. For Edit, MultiEdit, NotebookEdit and DeepSeek Harness `edit`, whose result depends on the file being edited, the hook reads the target file when the call is proposed and puts its SHA-256 in the approved arguments (`guardianContentPins`, or `absent: true` for a file that does not exist yet). Just before it releases the approved call it checks the file again. If the file changed, appeared or disappeared, the call is denied with `CONTENT_CHANGED_SINCE_APPROVAL`, nothing runs and the capability is not redeemed. Guardian's servers never see the file.
+
+- What this checks is that the file matched when the approved call was released. The agent's own Edit tool then reads the file again after the hook returns, so a short window remains.
+- The target path must be absolute; the hook does not resolve it against the working directory. An Edit-type call with a relative path is denied (`CONTENT_PIN_INVALID_ARGUMENT`). Claude Code always sends absolute paths.
+- Write and DeepSeek `write` are not pinned: they replace the whole file, so its current contents do not change what runs. Their arguments and tiers are unchanged.
+- Shell commands are not pinned. The command text is bound; files it names (`bash deploy.sh`, `curl -F file=@x`, globs, `$VAR`) are not.
+- Pinning is supported on Linux and macOS. On Windows an Edit-type call is denied (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
+- **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.
+
 ## Limits (read these)
 
 - **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The receipt proves Guardian's authorization of that exact call, not the command's own outcome.

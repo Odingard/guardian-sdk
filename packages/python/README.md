@@ -64,6 +64,37 @@ changed arguments. Hosted Guardian decides Allow or Ask **per tool** today.
 Amount thresholds and payee rules on argument values are not evaluated yet;
 the invoice example shows them only under the local demo policy.
 
+### Pin the contents of file arguments: `file_args` (0.2.0)
+
+Approval binds the exact arguments. A file path is an argument; the file's contents are not, unless you declare the argument in `file_args`.
+
+With `file_args`, the SDK on your machine reads the file, puts its SHA-256 in the approved arguments, and checks it again just before the tool runs. Guardian's servers never see the file. If the file changed, the call is refused with `GuardianExecutionFailed` (`reason_code="CONTENT_CHANGED_SINCE_APPROVAL"`, `local_effect_ran=False`): your function does not run and a new approval is needed.
+
+```python
+from odingard_guardian import PinnedFile
+
+@guard("send_report", file_args={"attachment_path": "bytes"})
+def send_report(to: str, attachment_path: PinnedFile):
+    return mailer.send(to=to, attachment=attachment_path.data)
+
+send_report("ops@example.com", "/srv/reports/q3.pdf")
+
+# Guard.run takes a zero-argument fn, so it supports "recheck" only:
+guard.run("send_report", {"attachment_path": p}, lambda: send(p), file_args={"attachment_path": "recheck"})
+```
+
+- `bytes` passes your function the verified bytes (a frozen `PinnedFile` with `path`, `name`, `data`, `size`, `sha256`; `data` is not in its `repr`, and it has no `__fspath__`, so it cannot be reopened by accident). `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your function returns, so a function that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your function open it, so a short window remains.
+- `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`.
+- A `file_args` key must name a parameter of the function (not one that comes from `*args` or `**kwargs`). For such a tool the bound arguments are deep-copied when the call is proposed, and the function is called on that copy, so a mutable argument changed while the call waits does not reach it. `Guard.run` with `file_args` deep-copies the `arguments` you pass in the same way (your zero-argument `fn` is not affected). An argument `copy.deepcopy` cannot copy is refused before proposal (`CONTENT_PIN_INVALID_ARGUMENT`). Tools without `file_args` are not copied.
+- A declared argument passed as `None` is refused before proposal (`CONTENT_PIN_INVALID_ARGUMENT`), as `null` is in TypeScript. A declared argument left out (a key missing from `Guard.run` arguments, or a decorated parameter the caller does not pass whose default is `None`) is not pinned and is left out of the proposal, and the function gets its default. A declared parameter with any other default is pinned like a passed value.
+- File paths must be absolute. The SDK does not resolve relative paths or `~`.
+- `file_args` needs in-process mode; with `mode="remote"` Guardian runs the tool and cannot read your files, so it is refused when the function is decorated (`CONTENT_PIN_REMOTE_MODE`).
+- Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
+- `GuardianApprovalPending.arguments` is your call without pins; `proposed_arguments` is what was proposed. For a `file_args` tool both are copies: changing them does not change what is checked or what your function receives.
+- The OpenAI Agents helper works with `@guard(file_args=...)` tools unchanged, and tells the model a refused call did not run.
+
 ### async
 
 ```python
@@ -208,6 +239,8 @@ plugin was "not installed or bundled". Install `odingard-guardian` into the
 same Python environment Hermes runs in, list `guardian` under
 `plugins.enabled` in `config.yaml` yourself, and check that Hermes loads it
 before relying on it.
+
+Hermes does not pin the contents of files its tools read. The path is bound; the file's bytes are not. (Hermes runs the tool itself after the hook returns, so there is no point just before it runs where the SDK could check the file. The `write_file`/`patch` `contentDigest` covers the call's own arguments, such as the new text the agent supplies, not the file on disk.)
 
 ## Lower-level client
 

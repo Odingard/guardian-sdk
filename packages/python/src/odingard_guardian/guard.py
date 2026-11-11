@@ -35,6 +35,8 @@ semantics cannot drift.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import functools
 import inspect
 from dataclasses import dataclass, field
@@ -53,6 +55,23 @@ from typing import (
 
 from ._canonical import CanonicalJsonError, canonical_json
 from .client import AsyncGuardianClient, GuardianClient, RequestResult
+from .content_pins import (
+    CONTENT_CHANGED_SINCE_APPROVAL,
+    CONTENT_PIN_INVALID_ARGUMENT,
+    CONTENT_PIN_KEY_RESERVED,
+    CONTENT_PIN_REMOTE_MODE,
+    CONTENT_PIN_UNREADABLE,
+    DEFAULT_MAX_PIN_BYTES,
+    DEFAULT_MAX_PIN_TOTAL_BYTES,
+    ContentPinError,
+    VerifiedArguments,
+    assert_file_args_spec,
+    carries_reserved_key,
+    deep_copy_arguments,
+    pin_arguments,
+    verify_arguments,
+    without_pins,
+)
 
 __all__ = [
     "Guard",
@@ -170,14 +189,33 @@ class GuardianExecutionFailed(Exception):
         )
 
 
+def _content_pin_refusal(err: GuardianExecutionFailed) -> bool:
+    """A content-pin refusal after ALLOW: the tool did not run."""
+    return not err.local_effect_ran and (
+        err.reason_code == CONTENT_CHANGED_SINCE_APPROVAL or err.reason_code.startswith("CONTENT_PIN_")
+    )
+
+
 def execution_failed_message(err: GuardianExecutionFailed) -> str:
     """What to tell a model after Guardian was asked to run or record a call.
 
     The action ran (in-process) or may have run (remote), so the message
     never invites a retry: calling the tool again would be a new request and
-    could repeat the effect.
+    could repeat the effect. A content-pin refusal is the exception: the
+    file was checked before the tool started, so the model is told the call
+    did not run.
     """
     rid = f", request_id {err.request_id}" if err.request_id else ""
+    if _content_pin_refusal(err):
+        what = (
+            "a file it was approved with changed since the approval"
+            if err.reason_code == CONTENT_CHANGED_SINCE_APPROVAL
+            else "a file it was approved with could not be checked"
+        )
+        return (
+            f"{err.tool_name} did not run: {what} ({err.reason_code}{rid}). "
+            "Tell the user; a changed file needs a new approval."
+        )
     if err.local_effect_ran:
         return (
             f"{err.tool_name} ran, but Guardian could not record it "
@@ -214,12 +252,23 @@ class GuardianApprovalPending(Exception):
         request_id: str,
         arguments: Dict[str, Any],
         resume: Callable[[], Union[ResumeResult, Awaitable[ResumeResult]]],
+        proposed_arguments: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.tool_name = tool_name
         self.request_id = request_id
+        #: The caller's arguments, without content pins: calling again with
+        #: them pins the files again.
         self.arguments = arguments
+        #: What was proposed to Guardian: ``arguments`` plus, for a tool with
+        #: ``file_args``, its content pins under ``guardianContentPins``.
+        self.proposed_arguments = arguments if proposed_arguments is None else proposed_arguments
         self._resume = resume
         super().__init__(f'Guardian held "{tool_name}" for human approval (request_id={request_id})')
+
+    @property
+    def proposed_args(self) -> Dict[str, Any]:
+        """Alias of :attr:`proposed_arguments`."""
+        return self.proposed_arguments
 
     def resume(self) -> Any:
         """Claim the approved capability, run the action and record the receipt."""
@@ -260,6 +309,9 @@ class _Options:
     #: ``execution_failed_message``) instead of raising it.
     on_execution_failed: OnDecision
     modes: Mapping[str, Mode]
+    #: Per pinned file cap and per call cap for content pins, in bytes.
+    max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES
+    max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES
     #: on_ask="result" only: held request ids by (kind, connection, tool, args),
     #: so calling the tool again after approval claims the approved request
     #: instead of proposing a fresh one that needs a fresh approval.
@@ -286,7 +338,10 @@ def _deny(
 ) -> Any:
     hint = hint_override if hint_override is not None else denial_hint(tool_name, reason_code, stage)
     if opts.on_deny == "result":
-        if reason_code == "SERVICE_UNAVAILABLE":
+        if stage == "pin":
+            # Refused on this machine before anything was proposed.
+            message = f"{tool_name} was not proposed and did not run ({reason_code})."
+        elif reason_code == "SERVICE_UNAVAILABLE":
             # Guardian did not answer: not a decision, and nothing ran.
             message = (
                 f"Guardian could not be reached to check {tool_name} "
@@ -320,7 +375,9 @@ def _execution_failed(opts: _Options, err: GuardianExecutionFailed) -> Generator
     return {
         "guardian": {
             "decision": "ALLOW",
-            "outcome": "ran_unrecorded" if err.local_effect_ran else "unknown",
+            "outcome": "ran_unrecorded"
+            if err.local_effect_ran
+            else ("not_run" if _content_pin_refusal(err) else "unknown"),
             "tool_name": err.tool_name,
             **({"request_id": err.request_id} if err.request_id else {}),
             "reason_code": err.reason_code,
@@ -372,6 +429,15 @@ def _settle(
     if result.decision == "ALLOW" and result.capability_token:
         request_id = result.request_id or ""
         if opts.mode_for(tool_name) == "remote":
+            # Never redeem a remote call whose declared file arguments
+            # Guardian cannot check (a configuration error caught again).
+            refusal = yield ("pin_check", "remote")
+            if refusal is not None:
+                return (
+                    yield from _execution_failed(
+                        opts, GuardianExecutionFailed(tool_name, request_id, refusal, local_effect_ran=False)
+                    )
+                )
             executed = yield ("execute", request_id, result.capability_token)
             if not executed.ok:
                 # Guardian was asked to perform the call; a lost or refused
@@ -407,6 +473,17 @@ def _settle(
                     "receipt": executed.receipt,
                 }
             }
+        # Content pins: re-read and re-hash every declared file argument just
+        # before the tool runs, driven by the tool's file_args (not by what
+        # the arguments carry). A missing or wrong pin, or a changed file,
+        # refuses: the tool does not run and the capability is not redeemed.
+        refusal = yield ("pin_check", "in_process")
+        if refusal is not None:
+            return (
+                yield from _execution_failed(
+                    opts, GuardianExecutionFailed(tool_name, request_id, refusal, local_effect_ran=False)
+                )
+            )
         output = yield ("run",)
         executed = yield ("execute", request_id, result.capability_token)
         if not executed.ok:
@@ -570,14 +647,57 @@ def _resume_install(
 
 
 class _Run:
-    """One governed call: its machine, its tool body, and the last receipt."""
+    """One governed call: its machine, its tool body, and the last receipt.
 
-    def __init__(self, guard: "Guard", tool_name: str, args: Dict[str, Any], body: Callable[[], Any]):
+    ``args`` is what was proposed (with any content pins); ``caller_args``
+    is the caller's record without them. ``body`` receives the verified
+    content pins (or ``None``) and runs the tool.
+    """
+
+    def __init__(
+        self,
+        guard: "Guard",
+        tool_name: str,
+        args: Dict[str, Any],
+        body: Callable[[Optional[VerifiedArguments]], Any],
+        caller_args: Optional[Dict[str, Any]] = None,
+        file_args: Optional[Mapping[str, str]] = None,
+    ):
         self.guard = guard
         self.tool_name = tool_name
         self.args = args
+        self.caller_args = args if caller_args is None else caller_args
         self.body = body
+        self.file_args = dict(file_args) if file_args else None
         self.receipt: Optional[Dict[str, Any]] = None
+        self._prepared: Optional[VerifiedArguments] = None
+
+    def _pin_check(self, mode: str) -> Optional[str]:
+        """The ``("pin_check", mode)`` op: ``None`` when the call may run,
+        else the refusal code. Driven by the declaration (``file_args``)."""
+        self._prepared = None
+        if mode == "remote":
+            return CONTENT_PIN_REMOTE_MODE if self.file_args else None
+        if not self.file_args and not carries_reserved_key(self.args):
+            return None
+        opts = self.guard._opts
+        try:
+            self._prepared = verify_arguments(
+                self.file_args,
+                self.args,
+                max_pin_bytes=opts.max_pin_bytes,
+                max_pin_total_bytes=opts.max_pin_total_bytes,
+            )
+        except ContentPinError as err:
+            return err.reason_code
+        except Exception:  # noqa: BLE001 — never turn an exception into a run
+            return CONTENT_PIN_UNREADABLE
+        return None
+
+    def _cleanup(self) -> None:
+        prepared, self._prepared = self._prepared, None
+        if prepared is not None:
+            prepared.cleanup()
 
     def _pending(self, ask: _Ask) -> GuardianApprovalPending:
         g = self.guard
@@ -599,7 +719,14 @@ class _Run:
                 output = self.drive(machine())
                 return ResumeResult(ask.request_id, self.receipt, output)
 
-        return GuardianApprovalPending(self.tool_name, ask.request_id, self.args, resume)
+        caller_args, proposed = self.caller_args, self.args
+        if self.file_args:
+            # The run keeps its own records: the pins and paths the re-check
+            # reads must not change through the pending object's fields.
+            caller_args, proposed = copy.deepcopy(caller_args), copy.deepcopy(proposed)
+        return GuardianApprovalPending(
+            self.tool_name, ask.request_id, caller_args, resume, proposed_arguments=proposed
+        )
 
     def _report_failure(self, err: GuardianExecutionFailed) -> Any:
         """Call the app's ``on_execution_error`` hook. It only observes: an
@@ -626,8 +753,14 @@ class _Run:
                     value = client.claim(op[1])
                 elif kind == "execute":
                     value = client.execute(request_id=op[1], capability_token=op[2])
+                elif kind == "pin_check":
+                    value = self._pin_check(op[1])
                 elif kind == "run":
-                    value = self.body()
+                    try:
+                        value = self.body(self._prepared)
+                    finally:
+                        # A private copy is deleted when the tool returns, also on raise.
+                        self._cleanup()
                 elif kind == "failed":
                     pending = self._report_failure(op[1])
                     close = getattr(pending, "close", None)
@@ -657,10 +790,18 @@ class _Run:
                     value = await client.claim(op[1])
                 elif kind == "execute":
                     value = await client.execute(request_id=op[1], capability_token=op[2])
+                elif kind == "pin_check":
+                    if self.file_args or carries_reserved_key(self.args):
+                        value = await asyncio.to_thread(self._pin_check, op[1])
+                    else:
+                        value = self._pin_check(op[1])
                 elif kind == "run":
-                    value = self.body()
-                    if inspect.isawaitable(value):
-                        value = await value
+                    try:
+                        value = self.body(self._prepared)
+                        if inspect.isawaitable(value):
+                            value = await value
+                    finally:
+                        self._cleanup()
                 elif kind == "failed":
                     pending = self._report_failure(op[1])
                     if pending is not None:
@@ -714,6 +855,20 @@ class Guard:
         memory, so after a restart, in another worker or in a new Guard an
         "already registered" answer is refused as ``RECORD_TRANSPORT_UNVERIFIED``
         and nothing runs, even for an entry the SDK created itself.
+    :param max_pin_bytes / max_pin_total_bytes: caps for content pins
+        (``file_args``): per pinned file (default 25 MiB) and for all pinned
+        files of one call (default 64 MiB). Over a cap the call is refused
+        (``CONTENT_PIN_TOO_LARGE``); a prefix is never hashed.
+
+    **Content pins** (``file_args`` on the decorator or on :meth:`run`):
+    approval binds the exact arguments. A file path is an argument; the
+    file's contents are not, unless you declare the argument in
+    ``file_args``. With ``file_args``, the SDK on your machine reads the
+    file, puts its SHA-256 in the approved arguments, and checks it again
+    just before the tool runs; a changed file is refused with
+    ``CONTENT_CHANGED_SINCE_APPROVAL`` and nothing runs. Guardian's servers
+    never see the file. Paths must be absolute (the SDK does not resolve
+    relative paths or ``~``). In-process mode only; Linux and macOS only.
     """
 
     def __init__(
@@ -732,6 +887,8 @@ class Guard:
         install_record_transport: bool = False,
         on_execution_failed: Optional[OnDecision] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
+        max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES,
+        max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES,
     ) -> None:
         if not connection_id:
             raise ValueError("connection_id is required")
@@ -750,36 +907,167 @@ class Guard:
             install_record_transport=install_record_transport,
             on_execution_failed=on_execution_failed or on_deny,
             modes=dict(modes or {}),
+            max_pin_bytes=max_pin_bytes,
+            max_pin_total_bytes=max_pin_total_bytes,
         )
         #: Record-only entries this Guard registered itself (in memory only).
         self._ensured: Set[str] = set()
         self._on_receipt = on_receipt
         self._on_execution_error = on_execution_error
 
-    def run(self, tool_name: str, arguments: Any, fn: Callable[[], Any]) -> Any:
+    def _check_file_args(
+        self, tool_name: str, file_args: Optional[Mapping[str, str]], allowed: Any = ("bytes", "copy", "recheck")
+    ) -> Optional[Dict[str, str]]:
+        """Configuration check (decoration time / Guard.run): a known mode per
+        top-level argument, and in-process only. In remote mode Guardian
+        performs the call and cannot read the agent's files."""
+        if file_args is None:
+            return None
+        assert_file_args_spec(tool_name, file_args, allowed_modes=tuple(allowed))
+        if not file_args:
+            return None
+        if self._opts.mode_for(tool_name) == "remote":
+            raise ContentPinError(
+                CONTENT_PIN_REMOTE_MODE,
+                f'"{tool_name}" declares file_args but runs in remote mode, where Guardian '
+                'performs the call and cannot read your files. Use mode="in_process".',
+            )
+        return dict(file_args)
+
+    def _refuse_before_proposal(self, tool_name: str, reason_code: str, detail: str) -> Any:
+        """A local refusal before anything is proposed: no request is sent."""
+        try:
+            result = _deny(self._opts, tool_name, reason_code, None, "pin", f"{detail} Nothing was proposed or run.")
+        except GuardianDenied as denied:
+            err = denied
+            if self._async:
+
+                async def raise_it() -> Any:
+                    raise err
+
+                return raise_it()
+            raise
+        if self._async:
+
+            async def give() -> Any:
+                return result
+
+            return give()
+        return result
+
+    def _governed(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        body: Callable[[Optional[VerifiedArguments]], Any],
+        file_args: Optional[Dict[str, str]],
+    ) -> Any:
+        # The reserved key is refused for every tool, so an agent cannot
+        # supply a pin of its own.
+        if carries_reserved_key(args):
+            return self._refuse_before_proposal(
+                tool_name,
+                CONTENT_PIN_KEY_RESERVED,
+                'The argument name "guardianContentPins" is reserved for content pins.',
+            )
+        if not file_args:
+            run = _Run(self, tool_name, args, body)
+            machine = _run_through(self._opts, self._ensured, tool_name, args)
+            if self._async:
+                return run.adrive(machine)
+            return run.drive(machine)
+
+        opts = self._opts
+        # A private copy of the record: what is proposed and re-checked
+        # cannot change through the caller's objects or the pending object.
+        try:
+            args = deep_copy_arguments(tool_name, args, "an argument")
+        except ContentPinError as err:
+            return self._refuse_before_proposal(tool_name, err.reason_code, str(err))
+
+        def pin() -> Dict[str, Any]:
+            return pin_arguments(
+                file_args, args, max_pin_bytes=opts.max_pin_bytes, max_pin_total_bytes=opts.max_pin_total_bytes
+            )
+
+        def refusal(err: Exception) -> Any:
+            code = err.reason_code if isinstance(err, ContentPinError) else CONTENT_PIN_UNREADABLE
+            return _deny(opts, tool_name, code, None, "pin", f"{err}. Nothing was proposed or run.")
+
+        # Pin step: before any request (record transport included), so a
+        # refusal sends nothing. The pinned record is proposed and keys the
+        # held retry, so a changed file is a new request needing a new approval.
+        if self._async:
+
+            async def arun() -> Any:
+                try:
+                    proposed = await asyncio.to_thread(pin)
+                except Exception as err:  # noqa: BLE001 — never run unpinned
+                    return refusal(err)
+                run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args)
+                return await run.adrive(_run_through(opts, self._ensured, tool_name, proposed))
+
+            return arun()
+        try:
+            proposed = pin()
+        except Exception as err:  # noqa: BLE001 — never run unpinned
+            return refusal(err)
+        run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args)
+        return run.drive(_run_through(opts, self._ensured, tool_name, proposed))
+
+    def run(
+        self,
+        tool_name: str,
+        arguments: Any,
+        fn: Callable[[], Any],
+        *,
+        file_args: Optional[Mapping[str, str]] = None,
+    ) -> Any:
         """Govern one call of ``fn`` (no arguments) proposed as ``tool_name(arguments)``.
 
         Returns ``fn``'s output for a sync guard, or an awaitable for an async guard.
-        """
-        args = to_arguments_record(arguments)
-        run = _Run(self, tool_name, args, fn)
-        machine = _run_through(self._opts, self._ensured, tool_name, args)
-        if self._async:
-            return run.adrive(machine)
-        return run.drive(machine)
 
-    def __call__(self, tool_name: Optional[str] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Decorator: ``@guard("pay_invoice")``. The call's bound arguments become the proposal."""
+        ``file_args`` supports ``"recheck"`` only: ``fn`` takes no arguments,
+        so the SDK cannot hand it the verified bytes or a private copy. Use
+        the ``@guard`` decorator for ``"bytes"`` and ``"copy"``.
+        """
+        spec = self._check_file_args(tool_name, file_args, allowed=("recheck",))
+        args = to_arguments_record(arguments)
+        return self._governed(tool_name, args, lambda _prepared: fn(), spec)
+
+    def __call__(
+        self, tool_name: Optional[str] = None, *, file_args: Optional[Mapping[str, str]] = None
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Decorator: ``@guard("pay_invoice")``. The call's bound arguments become the proposal.
+
+        ``file_args={"attachment_path": "bytes"}`` pins the file each named
+        parameter points at (``"bytes"``: the function receives a
+        :class:`PinnedFile`; ``"copy"``: the path of a private copy;
+        ``"recheck"``: the original path, checked again just before the run).
+        """
 
         def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
             name = tool_name or fn.__name__
             signature = inspect.signature(fn)
+            spec = self._check_file_args(name, file_args)
+            if spec:
+                named = (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+                for arg in spec:
+                    param = signature.parameters.get(arg)
+                    if param is None or param.kind not in named:
+                        raise ContentPinError(
+                            CONTENT_PIN_INVALID_ARGUMENT,
+                            f'file_args for "{name}" names "{arg}", which is not a named parameter of '
+                            f"{fn.__name__} (an argument from *args or **kwargs cannot be pinned)",
+                        )
 
-            def arguments_of(args: tuple, kwargs: dict) -> Dict[str, Any]:
-                bound = signature.bind(*args, **kwargs)
-                bound.apply_defaults()
+            def record_of(arguments: Mapping[str, Any]) -> Dict[str, Any]:
                 record: Dict[str, Any] = {}
-                for key, value in bound.arguments.items():
+                for key, value in arguments.items():
                     param = signature.parameters[key]
                     if param.kind is inspect.Parameter.VAR_KEYWORD:
                         record.update(value)
@@ -789,10 +1077,51 @@ class Guard:
                         record[key] = value
                 return record
 
+            def arguments_of(args: tuple, kwargs: dict) -> Dict[str, Any]:
+                bound = signature.bind(*args, **kwargs)
+                bound.apply_defaults()
+                return record_of(bound.arguments)
+
+            def pinned_call(args: tuple, kwargs: dict) -> Any:
+                """A ``file_args`` tool: the bound arguments are deep-copied when
+                proposed, and the call is rebuilt from that copy with each
+                declared parameter replaced by its verified value."""
+                bound = signature.bind(*args, **kwargs)
+                passed = set(bound.arguments)
+                bound.apply_defaults()
+                arguments = dict(bound.arguments)
+                # A declared parameter the caller did not pass and whose
+                # default is None is absent (not pinned, left out of the
+                # proposal, and the function gets its default), as an
+                # undefined argument is in TypeScript. Any other default is
+                # pinned like a passed value. A declared parameter passed as
+                # None is present and refused.
+                for arg in spec:
+                    if arg not in passed and signature.parameters[arg].default is None:
+                        arguments.pop(arg, None)
+                try:
+                    snapshot = deep_copy_arguments(name, arguments, "an argument")
+                except ContentPinError as err:
+                    return self._refuse_before_proposal(name, err.reason_code, str(err))
+
+                def body(prepared: Optional[VerifiedArguments]) -> Any:
+                    arguments = copy.deepcopy(snapshot)
+                    if prepared is not None:
+                        prepared.substitute(arguments)
+                    rebuilt = inspect.BoundArguments(signature, arguments)  # type: ignore[arg-type]
+                    return fn(*rebuilt.args, **rebuilt.kwargs)
+
+                # ``snapshot`` stays private to ``body``: _governed deep-copies
+                # this record again, so what is proposed, checked and exposed
+                # shares no object with what the body is rebuilt from.
+                return self._governed(name, record_of(snapshot), body, spec)
+
             if self._async:
 
                 @functools.wraps(fn)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    if spec:
+                        return await pinned_call(args, kwargs)
                     return await self.run(name, arguments_of(args, kwargs), lambda: fn(*args, **kwargs))
 
                 return async_wrapper
@@ -802,6 +1131,8 @@ class Guard:
 
             @functools.wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
+                if spec:
+                    return pinned_call(args, kwargs)
                 return self.run(name, arguments_of(args, kwargs), lambda: fn(*args, **kwargs))
 
             return wrapper

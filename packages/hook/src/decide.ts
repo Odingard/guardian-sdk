@@ -14,7 +14,7 @@
  * receipt proves Guardian's authorization of that exact call, not the
  * command's own outcome.
  */
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import { verifyPin, type GuardianClient } from "@odingard/guardian-sdk";
 
 import type { GovernedCall } from "./classify.js";
 
@@ -64,6 +64,23 @@ const PLAIN: Record<string, string> = {
   SERVICE_UNAVAILABLE: "Guardian could not be reached",
   REQUEST_CONFLICT: "Guardian saw a conflicting request",
 };
+
+/**
+ * Edit-type tools: the target must still match the pin the approval bound.
+ * Returns the refusal code, or undefined when it matches.
+ */
+async function contentPinRefusal(
+  call: GovernedCall,
+): Promise<string | undefined> {
+  if (!call.contentPin) return undefined;
+  try {
+    await verifyPin(call.contentPin.path, call.contentPin.pin);
+    return undefined;
+  } catch (err) {
+    const code = (err as { reasonCode?: unknown })?.reasonCode;
+    return typeof code === "string" ? code : "CONTENT_PIN_UNREADABLE";
+  }
+}
 
 function plain(code: string): string {
   return PLAIN[code] ?? code;
@@ -180,6 +197,24 @@ export async function decide(
       ...(requestId ? { requestId } : {}),
       guardianDecision: "DENY",
     });
+  }
+
+  // The file an Edit-type tool changes must still be the one that was
+  // approved. Checked just before the capability is redeemed: on a
+  // difference nothing is redeemed and the agent is told no.
+  const pinRefusal = await contentPinRefusal(call);
+  if (pinRefusal !== undefined) {
+    const path = call.contentPin!.path;
+    return {
+      decision: "deny",
+      reason:
+        pinRefusal === "CONTENT_CHANGED_SINCE_APPROVAL"
+          ? `Guardian hook: ${path} changed since this edit was proposed (CONTENT_CHANGED_SINCE_APPROVAL). Nothing ran. Read the file again and propose the edit again; it needs a new approval.`
+          : `Guardian hook: ${path} could not be checked against its approval (${pinRefusal}). Nothing ran.`,
+      requestId: result.requestId,
+      guardianDecision: approvedByHuman ? "ASK" : "ALLOW",
+      approvedByHuman,
+    };
   }
 
   let executed: Awaited<ReturnType<GuardianClient["execute"]>>;

@@ -146,6 +146,16 @@ function abortable<R>(
  * ASK throws `GuardianApprovalPending` (or a result object with
  * onAsk: "result"); DENY throws `GuardianDenied` (or a result object with
  * onDeny: "result"). Tools without an `execute` pass through unchanged.
+ *
+ * `fileArgs` (in-process tools only) pins the bytes behind declared
+ * file-path arguments: the SDK reads each declared file, puts its SHA-256
+ * in the approved arguments, and checks it again just before `execute`
+ * runs; a changed file is refused with `CONTENT_CHANGED_SINCE_APPROVAL` and
+ * nothing runs. `execute(approved, callOptions)` receives the substituted
+ * value: a `PinnedFile` (`"bytes"`), a private copy's path (`"copy"`) or
+ * the original path (`"recheck"`). The default mode is `"remote"`, where
+ * Guardian runs the tool and cannot read your files, so `fileArgs` needs
+ * `mode: "inProcess"` (or a `modes` entry).
  */
 export function withGuardian<T extends ToolSet>(
   tools: T,

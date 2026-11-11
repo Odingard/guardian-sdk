@@ -4,15 +4,40 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTENT_CHANGED_SINCE_APPROVAL,
+  CONTENT_PIN_INVALID_ARGUMENT,
+  CONTENT_PIN_KEY,
+  CONTENT_PIN_KEY_RESERVED,
+  CONTENT_PIN_MISSING,
+  CONTENT_PIN_NOT_REGULAR_FILE,
+  CONTENT_PIN_REMOTE_MODE,
+  CONTENT_PIN_REMOTE_UPSTREAM,
+  CONTENT_PIN_TOO_LARGE,
+  CONTENT_PIN_TOO_MANY,
+  CONTENT_PIN_UNREADABLE,
+  CONTENT_PIN_UNSTABLE,
+  CONTENT_PIN_UNSUPPORTED_PLATFORM,
   classifyRequestResult,
   createEmbeddedApprovalClient,
   createGuardianClient,
   fetchReceiptVerificationKeys,
   guardianCatalog,
   isHumanSessionToken,
+  pinFile,
+  verifyPin,
   verifyReceiptOffline,
   verifyReceiptOnline,
   verticalsForAction,
+} from "../index.js";
+import * as sdk from "../index.js";
+import type {
+  ContentPin,
+  ContentPinReasonCode,
+  FileArgMode,
+  FileArgsSpec,
+  FileDigest,
+  PinFileOptions,
+  PinnedFile,
 } from "../index.js";
 
 const fixtures = join(import.meta.dirname, "fixtures");
@@ -229,5 +254,59 @@ describe("public catalog metadata", () => {
       guardianCatalog.verticals.length,
     );
     expect(verticalsForAction("tool.invoke").length).toBeGreaterThan(0);
+  });
+});
+
+describe("content pins (public surface)", () => {
+  it("exports the reserved key and every refusal code by its own name", () => {
+    expect(CONTENT_PIN_KEY).toBe("guardianContentPins");
+    const codes: Record<string, ContentPinReasonCode> = {
+      CONTENT_CHANGED_SINCE_APPROVAL,
+      CONTENT_PIN_INVALID_ARGUMENT,
+      CONTENT_PIN_KEY_RESERVED,
+      CONTENT_PIN_MISSING,
+      CONTENT_PIN_NOT_REGULAR_FILE,
+      CONTENT_PIN_REMOTE_MODE,
+      CONTENT_PIN_REMOTE_UPSTREAM,
+      CONTENT_PIN_TOO_LARGE,
+      CONTENT_PIN_TOO_MANY,
+      CONTENT_PIN_UNREADABLE,
+      CONTENT_PIN_UNSTABLE,
+      CONTENT_PIN_UNSUPPORTED_PLATFORM,
+    };
+    for (const [name, value] of Object.entries(codes)) {
+      expect(value).toBe(name);
+    }
+    expect(Object.keys(codes)).toHaveLength(12);
+  });
+
+  it("exports pinFile and verifyPin but not the internal file-system seam", () => {
+    expect(typeof pinFile).toBe("function");
+    expect(typeof verifyPin).toBe("function");
+    expect("setContentPinFsForTests" in sdk).toBe(false);
+    expect("ContentPinError" in sdk).toBe(false);
+  });
+
+  it("the public types describe the declaration and the pin record", () => {
+    const mode: FileArgMode = "bytes";
+    const spec: FileArgsSpec = { attachmentPath: mode };
+    const pin: ContentPin = {
+      arg: "attachmentPath",
+      index: 0,
+      mode: "recheck",
+      name: "report.pdf",
+      size: 1,
+      sha256: `sha256:${"a".repeat(64)}`,
+    };
+    const absent: FileDigest = { absent: true };
+    const options: PinFileOptions = { allowAbsent: true };
+    const file: Pick<PinnedFile, "name" | "size"> = { name: "x", size: 0 };
+    expect([spec, pin, absent, options, file]).toHaveLength(5);
+  });
+
+  it("refuses a relative path before reading anything", async () => {
+    await expect(pinFile("relative/report.pdf")).rejects.toMatchObject({
+      reasonCode: CONTENT_PIN_INVALID_ARGUMENT,
+    });
   });
 });

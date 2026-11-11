@@ -20,6 +20,8 @@ const out = await steel.submitOrder(order); // executed | pending-approval | den
 if (out.status === "pending-approval") await steel.resume(out.requestId); // after the human approves
 ```
 
+The Steel integration does not pin the contents of local files. The path is bound; the file's bytes are not.
+
 ## Enforcement boundary
 
 | Side                               | Holds                                                  | Package export                                                                   |

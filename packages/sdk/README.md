@@ -156,6 +156,41 @@ limit. The decision itself never changes.
 Runnable: [`examples/invoice-agent.mjs`](../../examples/invoice-agent.mjs).
 For Python, see [`odingard-guardian`](../python).
 
+## Pin the contents of file arguments — `fileArgs` (0.4)
+
+Approval binds the exact arguments. A file path is an argument; the file's contents are not, unless you declare the argument in `fileArgs`.
+
+With `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in the approved arguments, and checks it again just before the tool runs. Guardian's servers never see the file. If the file changed, the call is refused with `CONTENT_CHANGED_SINCE_APPROVAL` (`GuardianExecutionFailed`, `localEffectRan: false`): the tool does not run, the capability is not redeemed, and a new approval is needed.
+
+```ts
+const guard = createGuard({
+  client,
+  connectionId: "pcn_…",
+  mode: "inProcess",
+  fileArgs: { send_report: { attachmentPath: "bytes" } },
+});
+const sendReport = guard("send_report", async ({ to, attachmentPath }) => {
+  // attachmentPath is a PinnedFile: { path, name, bytes, size, sha256 }
+  return mailer.send({ to, attachment: attachmentPath.bytes });
+});
+await sendReport({
+  to: "ops@example.com",
+  attachmentPath: "/srv/reports/q3.pdf",
+});
+```
+
+A declared argument is a top-level argument holding one absolute path or an array of them. The pins go into the proposed arguments under the reserved key `guardianContentPins` (`CONTENT_PIN_KEY`), one record per file: `{ arg, index, mode, name, size, sha256 }`, where `name` is the basename with control and bidi characters removed. A call that supplies `guardianContentPins` itself is refused (`CONTENT_PIN_KEY_RESERVED`) for every tool. Each file is capped at 25 MiB (`maxPinBytes`) and each call at 64 MiB (`maxPinTotalBytes`) and 16 files; a symlink as the last path component, a directory, FIFO, device, an unreadable file or a file that changes while it is read is refused before anything is proposed, with no request sent. `GuardianApprovalPending.input` is your input without pins; `proposedInput` is what was proposed.
+
+- `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
+- File paths must be absolute. The SDK does not resolve relative paths or `~`.
+- `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
+- Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
+- Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
+
+`pinFile(path, { allowAbsent })` and `verifyPin(path, pin)` are the same checks for code that pins a file itself (the coding-agent hook uses them).
+
 ## What the agent can and cannot do
 
 - The agent only ever holds a scoped, revocable agent credential (`gak_…`).
