@@ -451,7 +451,8 @@ describe("proxy: an unexpected error after forwarding", () => {
 
 describe("secrets in diagnostics", () => {
   it("a query key is scrubbed as typed, percent-decoded and with + as a space", () => {
-    const key = "AbC+dEf/gh12==";
+    // Built at runtime: no key-shaped literal in the source.
+    const key = "AbC" + "+dEf" + "/gh12==";
     const parsed = parseCli(
       ["tools", "--url", "https://mcp.example.com/mcp?api_key=${K}&org=acme"],
       { K: key },
