@@ -435,6 +435,29 @@ describe("withGuardian inProcess mode", () => {
     await expect(call(tools.boom, {})).rejects.toThrow("tool exploded");
   });
 
+  it("runs the tool on the approved arguments even if the caller's object changes while Guardian decides", async () => {
+    const run = vi.fn().mockResolvedValue("ok");
+    const input = { orderId: "ord_9", amount: 1250 };
+    const request = vi.fn().mockImplementation(async () => {
+      input.amount = 999_999; // other code edits the object meanwhile
+      return allow();
+    });
+    const client = stubClient({
+      request,
+      execute: vi.fn().mockResolvedValue({ ok: true, receipt: { id: "r" } }),
+    });
+    const tools = withGuardian(
+      { refund_order: fakeTool(run) },
+      { client, connectionId: "con_1", mode: "inProcess" },
+    );
+    await expect(call(tools.refund_order, input)).resolves.toBe("ok");
+    expect(request.mock.calls[0]?.[0].arguments).toEqual({
+      orderId: "ord_9",
+      amount: 1250,
+    });
+    expect(run.mock.calls[0]?.[0]).toEqual({ orderId: "ord_9", amount: 1250 });
+  });
+
   it("per-tool modes override mixes remote and inProcess", async () => {
     const request = vi.fn().mockResolvedValue(allow());
     const execute = vi.fn().mockResolvedValue({

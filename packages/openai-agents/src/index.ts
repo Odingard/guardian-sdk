@@ -200,11 +200,17 @@ function buildTool(
     };
     try {
       // `input` is the call's own arguments, parsed by the Agents SDK from
-      // the tool call. The same value goes to Guardian and to the tool.
-      const output = await runThroughGuardian(ctx, toolName, input, () => {
-        gate.commit();
-        return userExecute(input, runContext, details);
-      });
+      // the tool call. The tool gets the copy Guardian decided on, not the
+      // caller's object, which other code may have changed meanwhile.
+      const output = await runThroughGuardian(
+        ctx,
+        toolName,
+        input,
+        (approved) => {
+          gate.commit();
+          return userExecute(approved as typeof input, runContext, details);
+        },
+      );
       gate.settle();
       return output;
     } catch (err) {
