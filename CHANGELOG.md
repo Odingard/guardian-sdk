@@ -1,5 +1,12 @@
 # Changelog
 
+## guardian-openclaw 0.1.0
+
+### Added: OpenClaw plugin on npm
+
+- **`@odingard/guardian-openclaw` 0.1.0** is published to npm. Install it with `openclaw plugins install npm:@odingard/guardian-openclaw@0.1.0 --pin` and follow the README, including "Required: protect the install".
+- Proven live on hosted Guardian for shell commands, on OpenClaw 2026.7.1 with a protected install: an everyday command is allowed, runs and leaves a receipt that verifies offline; a deploy command waits for approval and, once approved, runs once with the approved parameters. On staging, a denied approval, a tool set to off and an unreachable Guardian each block the call. Outbound messages, MCP tools and the other Ask-tier tools have not yet been run live.
+
 ## guardian-langchain 0.3.4 / guardian-vercel-ai 0.3.4 / guardian-openai-agents 0.1.2
 
 ### Fixed: the tool runs on the arguments Guardian approved

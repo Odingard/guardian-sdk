@@ -12,9 +12,15 @@ sends every consequential tool call to Guardian for a deterministic
 - anything Guardian denies, or that nobody approves in time, does not run;
 - every allowed call leaves a receipt you can verify offline.
 
-**Status: not yet proven live.** Tested against a stand-in Guardian, and
-loaded and run inside OpenClaw 2026.7.1's real plugin loader and tool-hook
-runtime. It has not yet run live against a real Guardian.
+**Status: proven live on hosted Guardian for shell commands.** Run on
+OpenClaw 2026.7.1 with a protected install, through the Gateway agent's real
+`before_tool_call` hook. On staging and production: an everyday command was
+allowed and ran, and its receipt verified offline; a deploy command waited for
+approval in the console and, once approved, ran once with the approved
+parameters. On staging also: a denied approval, a tool set to off, and an
+unreachable Guardian each blocked the call, and nothing ran. Outbound
+messages, MCP tools and the other Ask-tier tools use the same hook and
+decision path but have not yet been run live.
 
 **Tamper-resistance is a deployment precondition, and the plugin enforces
 it.** If the OpenClaw process user can change the plugin, the OpenClaw config,
