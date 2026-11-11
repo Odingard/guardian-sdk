@@ -3,7 +3,10 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import {
+  CONTENT_PIN_INVALID_ARGUMENT,
+  type GuardianClient,
+} from "@odingard/guardian-sdk";
 import {
   createGuardianContext,
   runThroughGuardian,
@@ -44,6 +47,17 @@ export type GuardianLangChainOptions = GuardianAdapterOptions;
  * The returned tool keeps the wrapped tool's name, description, schema and
  * returnDirect flag, so it drops into `bindTools` / a LangGraph node
  * unchanged.
+ *
+ * `fileArgs` (in-process tools only) pins the bytes behind declared
+ * file-path arguments: approval binds the exact arguments, and a file path
+ * is an argument; the file's contents are not, unless the argument is
+ * declared in `fileArgs`. The SDK reads each declared file, puts its
+ * SHA-256 in the approved arguments, and checks it again just before the
+ * tool runs; a changed file is refused with `CONTENT_CHANGED_SINCE_APPROVAL`
+ * and nothing runs. `"bytes"` mode needs a tool the wrapper can call
+ * directly (`func` or `_call`); a tool reachable only through `invoke`
+ * re-parses its input against its schema, so wrapping it with `"bytes"`
+ * throws and `"copy"` is the option.
  */
 export function guardianTool(
   inner: StructuredToolInterface,
@@ -200,10 +214,44 @@ async function runInner(
   return raw;
 }
 
+/**
+ * Wrap time: `"bytes"` hands the tool a PinnedFile in place of the path.
+ * `runInner` passes it straight to `func` / `_call`; a tool reachable only
+ * through `invoke` would re-parse its input against its schema, where a
+ * PinnedFile is not a string, so that combination is a configuration error.
+ */
+function assertBytesModeReachable(
+  inner: StructuredToolInterface,
+  options: GuardianLangChainOptions,
+): void {
+  const spec = options.fileArgs?.[inner.name];
+  if (spec === undefined) return;
+  const direct = inner as unknown as DirectTool;
+  if (typeof direct._call === "function" || typeof direct.func === "function") {
+    return;
+  }
+  const bytesArgs = Object.entries(spec)
+    .filter(([, mode]) => mode === "bytes")
+    .map(([arg]) => arg);
+  if (bytesArgs.length === 0) return;
+  throw Object.assign(
+    new TypeError(
+      `fileArgs for "${inner.name}" uses "bytes" for ${bytesArgs
+        .map((arg) => `"${arg}"`)
+        .join(", ")}, but this tool can only be called through invoke(), ` +
+        `which re-validates its input against the schema, so it cannot ` +
+        `receive a PinnedFile. Use "copy" (a private copy of the verified ` +
+        `bytes) instead.`,
+    ),
+    { reasonCode: CONTENT_PIN_INVALID_ARGUMENT },
+  );
+}
+
 function wrapWithContext(
   inner: StructuredToolInterface,
   ctx: ReturnType<typeof createGuardianContext>,
 ): StructuredToolInterface {
+  assertBytesModeReachable(inner, ctx.options);
   const source = inner as unknown as {
     responseFormat?: string;
     verboseParsingErrors?: boolean;

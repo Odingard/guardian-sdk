@@ -1,6 +1,19 @@
 // Generated file — do not edit.
 import { canonicalJson, sha256Text } from "./contracts/index.js";
 
+import {
+  assertFileArgsSpec,
+  carriesReservedKey,
+  ContentPinError,
+  CONTENT_PIN_KEY_RESERVED,
+  CONTENT_PIN_REMOTE_MODE,
+  CONTENT_PIN_UNREADABLE,
+  pinArguments,
+  verifyArguments,
+  withoutPins,
+  type FileArgsSpec,
+  type VerifiedArguments,
+} from "./content-pins.js";
 import type {
   GuardianClient,
   GuardianMcpInvocation,
@@ -77,7 +90,14 @@ export function denialHint(
   stage: "register" | "invoke",
 ): string | undefined {
   if (reasonCode === "PLAN_LIMIT_EXCEEDED") {
-    return "Your Guardian plan's monthly protected-action limit is reached; upgrade in Settings → Billing or wait for the next period.";
+    return (
+      "Your Guardian plan limit is reached: the Free plan's monthly " +
+      "protected actions, or the spending cap on a paid plan. Upgrade or " +
+      "raise the cap in Settings → Billing, or wait for the next period."
+    );
+  }
+  if (reasonCode === "RATE_LIMITED") {
+    return "Guardian is rate limiting this agent. Nothing was run; retry after a short wait.";
   }
   if (stage === "register") {
     return (
@@ -175,7 +195,8 @@ export class GuardianExecutionFailed extends Error {
             `do not retry; check requestId ${args.requestId}` +
             ` (reasonCode=${args.reasonCode}, localEffectRan=true)`
           : `Guardian execution of "${args.toolName}" failed` +
-            ` (requestId=${args.requestId}, reasonCode=${args.reasonCode})`,
+            ` (requestId=${args.requestId}, reasonCode=${args.reasonCode})` +
+            `${args.detail ? `: ${args.detail}` : ""}`,
     );
     this.name = "GuardianExecutionFailed";
     this.toolName = args.toolName;
@@ -227,7 +248,17 @@ export class GuardianApprovalPending<Output = unknown> extends Error {
   readonly decision = "ASK" as const;
   readonly requestId: string;
   readonly toolName: string;
+  /**
+   * The caller's arguments, without content pins: retrying the call with
+   * them pins the files again (and claims this request while they are
+   * unchanged).
+   */
   readonly input: unknown;
+  /**
+   * What was proposed to Guardian: `input` plus, for a tool with
+   * `fileArgs`, its content pins under `guardianContentPins`.
+   */
+  readonly proposedInput: unknown;
   readonly #resume: GuardianResume<Output>;
 
   constructor(
@@ -235,6 +266,7 @@ export class GuardianApprovalPending<Output = unknown> extends Error {
       requestId: string;
       toolName: string;
       input: unknown;
+      proposedInput?: unknown;
     },
     resume: GuardianResume<Output>,
   ) {
@@ -246,6 +278,8 @@ export class GuardianApprovalPending<Output = unknown> extends Error {
     this.requestId = args.requestId;
     this.toolName = args.toolName;
     this.input = args.input;
+    this.proposedInput =
+      "proposedInput" in args ? args.proposedInput : args.input;
     this.#resume = resume;
   }
 
@@ -350,6 +384,24 @@ export type GuardianAdapterOptions = Readonly<{
     error: unknown,
     event: { toolName: string; requestId: string; receipt: unknown },
   ) => void;
+  /**
+   * Per tool: which top-level arguments are local file paths whose bytes
+   * are pinned, e.g. `{ send_report: { attachmentPath: "bytes" } }`.
+   * Approval binds the exact arguments. A file path is an argument; the
+   * file's contents are not, unless the argument is declared here. With
+   * `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in
+   * the approved arguments, and checks it again just before the tool runs;
+   * Guardian's servers never see the file. A changed file is refused with
+   * `CONTENT_CHANGED_SINCE_APPROVAL` and nothing runs. Paths must be
+   * absolute (the SDK does not resolve relative paths or `~`). Needs
+   * `inProcess` mode; Linux and macOS only (on Windows a declared file
+   * argument is refused with `CONTENT_PIN_UNSUPPORTED_PLATFORM`).
+   */
+  fileArgs?: Readonly<Record<string, FileArgsSpec>>;
+  /** Per pinned file cap in bytes (default 25 MiB). */
+  maxPinBytes?: number;
+  /** Cap for all pinned files of one call in bytes (default 64 MiB). */
+  maxPinTotalBytes?: number;
 }>;
 
 /** Per-wrapper state: which record-transport entries were already ensured. */
@@ -383,6 +435,13 @@ export type GuardianContext = {
    * new one, so the approval the person gave is used.
    */
   heldInvocations?: Map<string, string>;
+  /**
+   * Opt-in: when set, the proposed input (with any content pins) of every
+   * `tool.invoke` held for approval, by requestId, so a caller that later
+   * settles the held request itself (the MCP proxy's claim) settles exactly
+   * what was proposed. The caller deletes an entry once it is used.
+   */
+  proposedInputs?: Map<string, unknown>;
 };
 
 type SetupStep = "install" | "enable";
@@ -390,6 +449,7 @@ type SetupStep = "install" | "enable";
 export function createGuardianContext(
   options: GuardianAdapterOptions,
 ): GuardianContext {
+  assertFileArgsConfig(options);
   return {
     // Auto-install is opt-in: it only works for an entry that does not exist
     // yet, because `installed` does not survive a restart.
@@ -409,6 +469,48 @@ export function toolModeFor(
   toolName: string,
 ): GuardianToolMode {
   return options.modes?.[toolName] ?? options.mode ?? "remote";
+}
+
+/** The tool's file-argument declaration, if it declares any argument. */
+function fileArgsFor(
+  options: GuardianAdapterOptions,
+  toolName: string,
+): FileArgsSpec | undefined {
+  const spec = options.fileArgs?.[toolName];
+  return spec !== undefined && Object.keys(spec).length > 0 ? spec : undefined;
+}
+
+/**
+ * Configuration check for `fileArgs` (wrap time): every declaration names
+ * top-level arguments with a known mode, and a tool with file arguments is
+ * in-process. In remote mode Guardian performs the call and cannot read
+ * the agent's files (CONTENT_PIN_REMOTE_MODE).
+ */
+function assertFileArgsConfig(
+  options: GuardianAdapterOptions,
+  only?: string,
+): void {
+  const all = options.fileArgs;
+  if (all === undefined) return;
+  if (all === null || typeof all !== "object" || Array.isArray(all)) {
+    throw new TypeError("fileArgs must map tool names to declarations");
+  }
+  for (const [toolName, spec] of Object.entries(all)) {
+    if (only !== undefined && toolName !== only) continue;
+    assertFileArgsSpec(toolName, spec);
+    if (
+      Object.keys(spec).length > 0 &&
+      toolModeFor(options, toolName) === "remote"
+    ) {
+      throw new ContentPinError(
+        CONTENT_PIN_REMOTE_MODE,
+        `"${toolName}" declares fileArgs but runs in remote mode, where ` +
+          `Guardian performs the call and cannot read your files. Use ` +
+          `mode: "inProcess" (the LangChain and Vercel AI wrappers default ` +
+          `to "remote").`,
+      );
+    }
+  }
 }
 
 export function toArgumentsRecord(input: unknown): Record<string, unknown> {
@@ -433,6 +535,32 @@ function resolvePurpose(
   return `${agent} invoked ${toolName}`;
 }
 
+/**
+ * review: claim answers that are not definitive. Guardian refused
+ * the claim for now (unreachable, rate limited, or its database busy) and
+ * decided nothing about the request, so a held request stays held and the
+ * next retry claims the same request instead of proposing a new one (which
+ * would need a second human approval).
+ */
+const RETRYABLE_CLAIM_REFUSALS = new Set([
+  "SERVICE_UNAVAILABLE",
+  "RATE_LIMITED",
+  "DB_BUSY",
+  "HTTP_429",
+  "HTTP_503",
+]);
+
+function claimNotDefinitive(claimed: {
+  ok: boolean;
+  reasonCode?: string | undefined;
+}): boolean {
+  return (
+    !claimed.ok &&
+    claimed.reasonCode !== undefined &&
+    RETRYABLE_CLAIM_REFUSALS.has(claimed.reasonCode)
+  );
+}
+
 function deny(
   options: GuardianAdapterOptions,
   toolName: string,
@@ -450,7 +578,10 @@ function deny(
         reasonCode,
         ...(requestId ? { requestId } : {}),
         message:
-          `Guardian denied ${toolName} (${reasonCode}). Do not retry the same call.` +
+          `Guardian denied ${toolName} (${reasonCode}).` +
+          (reasonCode === "RATE_LIMITED" || reasonCode === "DB_BUSY"
+            ? " It can be retried after a short wait."
+            : " Do not retry the same call.") +
           (hint ? ` ${hint}` : ""),
       },
     };
@@ -651,11 +782,11 @@ async function claimHeldSetup<Output>(
   const claimed = (await options.client.claim(
     held.requestId,
   )) as GuardianRequestResult;
-  if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+  if (claimNotDefinitive(claimed)) {
     return deny(
       options,
       toolName,
-      "SERVICE_UNAVAILABLE",
+      claimed.reasonCode ?? "SERVICE_UNAVAILABLE",
       held.requestId,
       "register",
     );
@@ -777,10 +908,10 @@ async function governSetupStep<Output>(
       // claim that throws) leaves it, so a retry claims this same request
       // instead of proposing a new registration step.
       const claimed = await options.client.claim(requestId);
-      if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+      if (claimNotDefinitive(claimed)) {
         throw new GuardianDenied({
           toolName,
-          reasonCode: claimed.reasonCode,
+          reasonCode: claimed.reasonCode ?? "SERVICE_UNAVAILABLE",
           requestId,
         });
       }
@@ -1162,6 +1293,16 @@ export async function settle<Output>(
       });
     };
     if (mode === "remote") {
+      if (fileArgsFor(options, toolName) !== undefined) {
+        // Configuration error caught again here: never redeem a remote call
+        // whose declared file arguments Guardian cannot check.
+        throw new GuardianExecutionFailed({
+          toolName,
+          requestId,
+          reasonCode: CONTENT_PIN_REMOTE_MODE,
+          localEffectRan: false,
+        });
+      }
       const executed = await options.client.execute({
         requestId,
         capabilityToken: result.capabilityToken,
@@ -1225,9 +1366,39 @@ export async function settle<Output>(
     // The impl gets its own unfrozen copy of the approved (frozen) input:
     // an impl that mutates its input after its effect keeps working, and
     // nothing outside can reach the object the impl runs on.
-    const output = (await drainIterable(
-      await runTool(structuredClone(input)),
-    )) as Output;
+    // Content pins: re-read and re-hash every declared file argument just
+    // before the tool runs, driven by the tool's `fileArgs` (not by what
+    // the input carries). A missing or wrong pin, or a changed file,
+    // refuses: the tool does not run and the capability is not redeemed.
+    const spec = fileArgsFor(options, toolName);
+    let prepared: VerifiedArguments | undefined;
+    if (spec !== undefined || carriesReservedKey(input)) {
+      try {
+        prepared = await verifyArguments(spec ?? {}, input, options);
+      } catch (err) {
+        throw new GuardianExecutionFailed({
+          toolName,
+          requestId,
+          reasonCode:
+            err instanceof ContentPinError
+              ? err.reasonCode
+              : CONTENT_PIN_UNREADABLE,
+          localEffectRan: false,
+          ...(err instanceof Error ? { detail: err.message } : {}),
+        });
+      }
+    }
+    let output: Output;
+    try {
+      output = (await drainIterable(
+        await runTool(
+          prepared !== undefined ? prepared.toolInput : structuredClone(input),
+        ),
+      )) as Output;
+    } finally {
+      // A private copy is deleted when the tool settles, also on throw.
+      await prepared?.cleanup().catch(() => undefined);
+    }
     const executed = await options.client.execute({
       requestId,
       capabilityToken: result.capabilityToken,
@@ -1271,9 +1442,10 @@ export async function settle<Output>(
       // Remembered so a retry with the same arguments claims this request.
       (ctx.heldInvocations ??= new Map()).set(heldKey, result.requestId);
     }
+    ctx.proposedInputs?.set(result.requestId, input);
     const resume = async () => {
       const claimed = await options.client.claim(result.requestId);
-      if (claimed.ok || claimed.reasonCode !== "SERVICE_UNAVAILABLE") {
+      if (!claimNotDefinitive(claimed)) {
         // Definitive: settle re-remembers it if it is still held.
         forgetHeldInvocation(ctx, heldKey, result.requestId);
       }
@@ -1311,7 +1483,12 @@ export async function settle<Output>(
       };
     }
     throw new GuardianApprovalPending(
-      { requestId: result.requestId, toolName, input },
+      {
+        requestId: result.requestId,
+        toolName,
+        input: withoutPins(input),
+        proposedInput: input,
+      },
       resume,
     );
   }
@@ -1333,23 +1510,57 @@ export async function runThroughGuardian<Output>(
 ): Promise<Output | GuardianDecisionResult> {
   const { options } = ctx;
   const snapshot = snapshotInput(toolName, input);
+  // The reserved key is refused for every tool, so an agent cannot supply
+  // a pin of its own.
+  if (carriesReservedKey(snapshot)) {
+    return deny(
+      options,
+      toolName,
+      CONTENT_PIN_KEY_RESERVED,
+      undefined,
+      "invoke",
+      `The argument name "guardianContentPins" is reserved for content pins. Nothing was proposed or run.`,
+    );
+  }
+  assertFileArgsConfig(options, toolName);
+  // Pin step: before any request (record transport included), so a refusal
+  // sends nothing. The pinned copy is proposed and keys the held retry, so
+  // a changed file is a new request needing a new approval.
+  let proposed: unknown = snapshot;
+  const spec = fileArgsFor(options, toolName);
+  if (spec !== undefined) {
+    try {
+      proposed = deepFreeze(await pinArguments(spec, snapshot, options));
+    } catch (err) {
+      return deny(
+        options,
+        toolName,
+        err instanceof ContentPinError
+          ? err.reasonCode
+          : CONTENT_PIN_UNREADABLE,
+        undefined,
+        "invoke",
+        `${err instanceof Error ? err.message : "The file could not be pinned"}. Nothing was proposed or run.`,
+      );
+    }
+  }
   if (toolModeFor(options, toolName) === "inProcess") {
     const gate = await ensureRecordTransport(ctx, toolName, snapshot, runTool);
     if (gate !== undefined) {
       return gate;
     }
   }
-  const heldKey = invocationKey(options.connectionId, toolName, snapshot);
+  const heldKey = invocationKey(options.connectionId, toolName, proposed);
   const heldRequestId =
     heldKey === undefined ? undefined : ctx.heldInvocations?.get(heldKey);
   if (heldRequestId !== undefined) {
     const claimed = await options.client.claim(heldRequestId);
-    if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+    if (claimNotDefinitive(claimed)) {
       // Not definitive: keep it held so the next retry claims it again.
       return deny(
         options,
         toolName,
-        "SERVICE_UNAVAILABLE",
+        claimed.reasonCode ?? "SERVICE_UNAVAILABLE",
         heldRequestId,
         "invoke",
       );
@@ -1366,17 +1577,17 @@ export async function runThroughGuardian<Output>(
       : claimed.ok
         ? claimed
         : { ...claimed, requestId: claimed.requestId ?? heldRequestId };
-    return settle(ctx, toolName, snapshot, answer, runTool);
+    return settle(ctx, toolName, proposed, answer, runTool);
   }
   const result = await options.client.request({
     action: "tool.invoke",
     connectionId: options.connectionId,
     toolName,
-    arguments: toArgumentsRecord(snapshot),
+    arguments: toArgumentsRecord(proposed),
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     purpose: resolvePurpose(options, toolName, snapshot),
   });
-  return settle(ctx, toolName, snapshot, result, runTool);
+  return settle(ctx, toolName, proposed, result, runTool);
 }
 
 /**

@@ -30,6 +30,8 @@ blocked until the install is protected: see
 OpenClaw itself must write is not covered: see
 [What is not governed](#what-is-not-governed).
 
+The OpenClaw plugin does not pin the contents of files its tools read or patch. The path is bound; the file's bytes are not.
+
 ## How it works
 
 The plugin registers one typed hook, `api.on("before_tool_call", handler,

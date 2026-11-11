@@ -7,8 +7,10 @@ import { createGuardianClient } from "@odingard/guardian-sdk";
 
 import {
   classifyCommand,
+  EditPinRefused,
   governedCall,
   HOOK_TOOLS,
+  pinEditTarget,
   tierOf,
   type HookToolName,
 } from "./classify.js";
@@ -356,16 +358,31 @@ async function evaluate(
   if (!input || typeof input.tool_name !== "string") {
     return failClosed("the tool call had no tool name. Nothing ran.");
   }
-  const call = governedCall({
+  const toolCall = {
     tool: input.tool_name,
     input:
       input.tool_input && typeof input.tool_input === "object"
         ? (input.tool_input as Record<string, unknown>)
         : {},
     ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
-  });
+  };
+  const classified = governedCall(toolCall);
   // Not a governed tool: no opinion; the agent's own permissions apply.
-  if (call === null) return null;
+  if (classified === null) return null;
+  // Edit-type tools: pin the target's current contents before anything is
+  // proposed. A failure denies the call (fail closed).
+  let call: typeof classified;
+  try {
+    call = await pinEditTarget(toolCall, classified);
+  } catch (err) {
+    const code =
+      err instanceof EditPinRefused ? err.reasonCode : "CONTENT_PIN_UNREADABLE";
+    const detail =
+      err instanceof EditPinRefused
+        ? err.message
+        : "the target file could not be pinned";
+    return failClosed(`${detail} (${code}). Nothing ran.`);
+  }
 
   const connectionId = connectionFor(call.toolName, env);
   const credential = env.GUARDIAN_AGENT_CREDENTIAL?.trim();

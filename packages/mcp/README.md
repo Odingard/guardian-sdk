@@ -120,6 +120,23 @@ upstream server's tools unchanged, and every call is decided first:
 `guardian-mcp --help` prints usage. A missing setting prints a one-line
 message naming it instead of a stack trace.
 
+### Pin the contents of file arguments: `--pin-file` (0.4)
+
+Approval binds the exact arguments. A file path is an argument; the file's contents are not, unless you declare the argument with `--pin-file`.
+
+```bash
+guardian-mcp proxy --pin-file upload_file:path --pin-file send_email:attachment -- npx -y my-mcp-server
+```
+
+For each declared `<tool>:<argument>` the proxy (the SDK on your machine) reads the file the path names, puts its SHA-256 in the approved arguments, and checks it again just before the call is forwarded. Guardian's servers never see the file. If the file changed, nothing is forwarded, the capability is not redeemed, and the result says `CONTENT_CHANGED_SINCE_APPROVAL`; propose the call again for a new approval. A call held for approval keeps the arguments that were proposed, pins included, and `guardian_claim` checks the file against them. After a proxy restart a claim finds nothing; call the tool again, which pins the file again. The upstream server receives the approved arguments without the reserved key `guardianContentPins`. In code: `createGovernedProxy({ ..., pinFiles: { upload_file: ["path"] } })`.
+
+- The mode is always `recheck`: the upstream server opens the path itself, so a short window remains between the check and its open.
+- Stdio upstreams only. With `--url` (HTTP or SSE) the path names a file on another machine, so `--pin-file` is refused at start (`CONTENT_PIN_REMOTE_UPSTREAM`). Paths on a remote MCP server are not pinned.
+- File paths must be absolute. The proxy does not resolve relative paths or `~`.
+- Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the proxy, and files a tool opens without naming them in a declared argument are not pinned.
+
 ## Govern a remote MCP server: `guardian-mcp proxy --url` (0.3.3 and later)
 
 **Status: tested against a real Guardian; production proof pending.** It ran

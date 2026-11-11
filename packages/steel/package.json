@@ -27,7 +27,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "peerDependencies": {
-    "@odingard/guardian-sdk": "^0.3.9",
+    "@odingard/guardian-sdk": "^0.3.9 || ^0.4.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

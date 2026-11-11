@@ -100,14 +100,26 @@ if (config.mode.kind === "proxy") {
     name: "guardian-mcp-proxy",
     version: VERSION,
   });
-  const proxy = createGovernedProxy({
-    client,
-    connectionId: config.connectionId!,
-    autoRegister: config.autoRegister,
-    ...(config.adapterId ? { adapterId: config.adapterId } : {}),
-    log: (message) => process.stderr.write(`${message}\n`),
-    upstream: clientUpstream(upstreamClient),
-  });
+  let proxy: ReturnType<typeof createGovernedProxy>;
+  try {
+    proxy = createGovernedProxy({
+      client,
+      connectionId: config.connectionId!,
+      autoRegister: config.autoRegister,
+      upstreamTransport: "remote" in config.mode ? "remote" : "stdio",
+      ...(config.mode.pinFiles ? { pinFiles: config.mode.pinFiles } : {}),
+      ...(config.adapterId ? { adapterId: config.adapterId } : {}),
+      log: (message) => process.stderr.write(`${message}\n`),
+      upstream: clientUpstream(upstreamClient),
+    });
+  } catch (err) {
+    // A bad --pin-file declaration: one readable line, nothing is served.
+    process.stderr.write(
+      `${err instanceof Error ? err.message : "guardian-mcp proxy: invalid configuration."}\n`,
+    );
+    await upstreamClient.close().catch(() => {});
+    process.exit(2);
+  }
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: await proxy.listTools(),
   }));
