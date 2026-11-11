@@ -19,7 +19,8 @@ export const TOOLS = [
         },
         connectionId: {
           type: "string",
-          description: "Tool connection id. Defaults to GUARDIAN_CONNECTION_ID.",
+          description:
+            "Tool connection id. Defaults to GUARDIAN_CONNECTION_ID.",
         },
         purpose: {
           type: "string",
@@ -64,11 +65,37 @@ type ToolResult = {
 };
 
 function jsonResult(payload: unknown): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  };
 }
 
 function errorResult(message: string): ToolResult {
   return { isError: true, content: [{ type: "text", text: message }] };
+}
+
+/** A JSON payload reported as an MCP tool error: the action is not done. */
+function jsonError(payload: unknown): ToolResult {
+  return { ...jsonResult(payload), isError: true };
+}
+
+const CHECK_FIRST =
+  "Call guardian_receipt with this requestId, or check the target system, before retrying.";
+
+function denied(
+  reasonCode: string | undefined,
+  requestId?: string,
+): ToolResult {
+  const code = reasonCode ?? "DENIED";
+  return jsonError({
+    decision: "DENY",
+    reasonCode: code,
+    ...(requestId ? { requestId } : {}),
+    message:
+      code === "SERVICE_UNAVAILABLE"
+        ? "Guardian could not be reached, so nothing was done. Try again later."
+        : "Guardian denied this call. Nothing was done. Do not retry the same call.",
+  });
 }
 
 async function requestAndExecute(
@@ -91,38 +118,71 @@ async function requestAndExecute(
         next: "Held for human approval. Call guardian_claim with this requestId after approval.",
       });
     }
-    return jsonResult({ decision: "DENY", reasonCode: result.reasonCode });
+    return denied(
+      result.reasonCode,
+      typeof heldRequestId === "string" && heldRequestId.length > 0
+        ? heldRequestId
+        : undefined,
+    );
   }
   if (result.decision === "ALLOW" && result.capabilityToken) {
     const executed = await client.execute({
       requestId: result.requestId,
       capabilityToken: result.capabilityToken,
     });
-    return jsonResult(
-      executed.ok
-        ? {
-            decision: "ALLOW",
-            requestId: result.requestId,
-            receipt: executed.receipt,
-          }
-        : {
-            decision: "ALLOW",
-            requestId: result.requestId,
-            executionFailed: executed.reasonCode,
-          },
-    );
+    if (!executed.ok) {
+      // Guardian was asked to perform the call. A lost or refused answer
+      // does not prove it did not happen.
+      return jsonError({
+        decision: "ALLOW",
+        requestId: result.requestId,
+        outcome: "unknown",
+        executionFailed: executed.reasonCode,
+        message: `Guardian could not confirm the outcome (${executed.reasonCode}). The call may have been done. ${CHECK_FIRST}`,
+      });
+    }
+    const status = (executed.receipt as { status?: unknown } | undefined)
+      ?.status;
+    if (status === "sent-verified") {
+      return jsonResult({
+        decision: "ALLOW",
+        requestId: result.requestId,
+        receipt: executed.receipt,
+      });
+    }
+    if (status === "not-sent") {
+      return jsonError({
+        decision: "ALLOW",
+        requestId: result.requestId,
+        outcome: "not-done",
+        receipt: executed.receipt,
+        message:
+          "Guardian did not send the call (receipt status not-sent). It was not done.",
+      });
+    }
+    return jsonError({
+      decision: "ALLOW",
+      requestId: result.requestId,
+      outcome: "unknown",
+      receipt: executed.receipt,
+      message: `The outcome is unknown (receipt status ${typeof status === "string" ? status : "missing"}). The call may have been done. ${CHECK_FIRST}`,
+    });
   }
-  return jsonResult({
-    decision: result.decision,
-    requestId: result.requestId,
-    ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
-    ...(result.decision === "ASK"
-      ? {
-          message:
-            "Held for human approval. Call guardian_claim with this requestId after approval.",
-        }
-      : {}),
-  });
+  if (result.decision === "ASK") {
+    return jsonResult({
+      decision: "ASK",
+      requestId: result.requestId,
+      ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+      message:
+        "Held for human approval. Call guardian_claim with this requestId after approval.",
+    });
+  }
+  // DENY, or an ALLOW without a capability token: nothing ran.
+  return denied(
+    result.reasonCode ??
+      (result.decision === "DENY" ? undefined : "MISSING_CAPABILITY"),
+    result.requestId,
+  );
 }
 
 export async function handleToolCall(

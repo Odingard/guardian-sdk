@@ -139,9 +139,17 @@ connection. The LangChain and Vercel AI adapters use this same core.
    `pay_invoice`).
 3. Allow it for your agent.
 
-Since 0.3.1, `createGuard` does not try to register tools itself.
-`installRecordTransport: true` turns that back on, but it is denied unless the
-agent's grant pins `mcp.install`. When Guardian refuses, `GuardianDenied.hint`
+Since 0.3.1, `createGuard` does not try to register tools itself, and
+`createGuardianContext` (and so the LangChain and Vercel AI adapters) now
+defaults the same way. `installRecordTransport: true` turns that back on, but
+it is denied unless the agent's grant pins `mcp.install`, and it only works
+for a tool that has no entry yet. If Guardian answers that the tool is
+already registered, the call is refused (`RECORD_TRANSPORT_UNVERIFIED`) and
+nothing runs, because the existing entry may make an HTTP call. Which entries
+the SDK registered is kept in memory only, so a restarted process, another
+worker or a cold start is refused that way even for an entry the SDK created
+itself; use the console-registered tool with the option off. When Guardian
+refuses, `GuardianDenied.hint`
 says what to fix: register the tool, allow it for the agent, or check the plan
 limit. The decision itself never changes.
 

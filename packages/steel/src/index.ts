@@ -21,6 +21,7 @@ export {
   type SteelMerchantBinding,
 } from "./executor.js";
 export {
+  HOSTED_RECORD_ONLY_RESULT_DIGEST,
   STEEL_CHECKOUT_TOOL,
   STEEL_TOOL_CATALOG,
   createSteelToolRecordPort,

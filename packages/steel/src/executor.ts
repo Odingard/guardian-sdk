@@ -121,6 +121,11 @@ export function createSteelCheckoutExecutor(input: {
       } catch {
         return { ok: false, reason: "STEEL_UNAVAILABLE", reachedSubmit: false };
       }
+      // Set immediately before the consequential click. Any failure
+      // after it (for example the confirmation page outliving the navigation
+      // timeout) leaves the order's fate unknown at the merchant: it is
+      // reported as possibly submitted, never as "not submitted".
+      let submitStarted = false;
       try {
         const checkoutUrl = new URL("/checkout", merchant.origin);
         checkoutUrl.searchParams.set("sku", args.sku);
@@ -146,8 +151,11 @@ export function createSteelCheckoutExecutor(input: {
             reachedSubmit: false,
           };
         }
+        submitStarted = true;
         const submitted = await session.page.evaluateAndWaitForNavigation(
           fillAndSubmit({
+            sku: args.sku,
+            quantity: String(args.quantity),
             expectedTotalCents: String(args.expectedTotalCents),
             ship_name: args.shipTo.name,
             ship_line1: args.shipTo.line1,
@@ -167,12 +175,21 @@ export function createSteelCheckoutExecutor(input: {
         const order = (await session.page.evaluate(
           READ_ORDER,
         )) as PageData | null;
+        // The confirmation must show the authorized order exactly. Anything
+        // else is not a confirmation of this order, but the submit happened,
+        // so it is reported as possibly placed (reachedSubmit), never as a
+        // clean refusal.
         if (
           order === null ||
           !sameOrigin(order.href, merchant.origin) ||
           order.status !== "confirmed" ||
           order.orderId === undefined ||
-          order.totalCents !== String(args.expectedTotalCents)
+          order.orderId.length === 0 ||
+          order.merchantId !== args.merchantId ||
+          order.sku !== args.sku ||
+          order.quantity !== String(args.quantity) ||
+          order.totalCents !== String(args.expectedTotalCents) ||
+          order.currency !== args.currency
         ) {
           return {
             ok: false,
@@ -180,21 +197,25 @@ export function createSteelCheckoutExecutor(input: {
             reachedSubmit: true,
           };
         }
+        // Built from what the merchant confirmed (each value checked equal
+        // to the authorized one above).
         return {
           ok: true,
           result: {
-            merchantId: args.merchantId,
+            merchantId: order.merchantId,
             orderId: order.orderId,
-            sku: args.sku,
-            quantity: args.quantity,
-            totalCents: args.expectedTotalCents,
-            currency: args.currency,
+            sku: order.sku,
+            quantity: Number(order.quantity),
+            totalCents: Number(order.totalCents),
+            currency: order.currency,
             steelSessionRef: session.sessionRef,
             confirmationUrl: order.href!,
           },
         };
       } catch {
-        return { ok: false, reason: "BROWSER_FAILURE", reachedSubmit: false };
+        return submitStarted
+          ? { ok: false, reason: "SUBMIT_OUTCOME_UNKNOWN", reachedSubmit: true }
+          : { ok: false, reason: "BROWSER_FAILURE", reachedSubmit: false };
       } finally {
         await session.release().catch(() => undefined);
       }

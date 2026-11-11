@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Awaitable,
@@ -51,6 +51,7 @@ from typing import (
     Union,
 )
 
+from ._canonical import CanonicalJsonError, canonical_json
 from .client import AsyncGuardianClient, GuardianClient, RequestResult
 
 __all__ = [
@@ -60,6 +61,7 @@ __all__ = [
     "GuardianExecutionFailed",
     "ResumeResult",
     "denial_hint",
+    "execution_failed_message",
     "to_arguments_record",
 ]
 
@@ -67,6 +69,12 @@ Mode = Literal["remote", "in_process"]
 OnDecision = Literal["raise", "result"]
 
 _HELD = ("APPROVAL_REQUIRED", "APPROVAL_PENDING")
+
+#: Answers to ``mcp.install`` that may mean "a tool with that name is already
+#: registered" (hosted Guardian answers ``INVALID_REQUEST`` for a tool
+#: registered in the console). Guardian does not say whether that entry is
+#: record-only, so the call is refused before anything runs.
+_INSTALL_MAYBE_DONE = ("TOOL_ALREADY_INSTALLED", "INVALID_REQUEST")
 
 
 class GuardianDenied(Exception):
@@ -113,25 +121,74 @@ def denial_hint(tool_name: str, reason_code: str, stage: str = "invoke") -> Opti
     return None
 
 
+def _record_transport_unverified_hint(tool_name: str, answer: str) -> str:
+    """Why an in-process call is refused when ``mcp.install`` says the tool may exist."""
+    return (
+        f'Guardian answered {answer} when asked to register "{tool_name}" as a '
+        "record-only tool, so a tool with that name may already be registered "
+        "on this connection. Guardian does not tell the SDK whether that entry "
+        "is record-only. If it makes an HTTP call, your code and Guardian would "
+        "both perform the action, so nothing ran. Automatic registration only "
+        "works while no entry with that name exists: a restarted process, "
+        "another worker or a new Guard cannot tell an entry the SDK registered "
+        f'earlier from any other. If "{tool_name}" is registered in the '
+        'Guardian console as a record-only tool ("My own code (record-only)") '
+        "and allowed for this agent, pass install_record_transport=False (the "
+        'default). If Guardian should perform the call, use mode="remote".'
+    )
+
+
 class GuardianExecutionFailed(Exception):
     """ALLOW was decided but redeeming the capability failed.
 
     ``local_effect_ran=True`` means your function already ran before
     Guardian's final redemption refused it. The effect happened without a
     recorded receipt; treat it as an incident.
+
+    In ``remote`` mode, Guardian performing the call with a receipt status
+    other than ``sent-verified`` is also an execution failure: ``reason_code``
+    is ``EXECUTION_<STATUS>`` (for example ``EXECUTION_OUTCOME_PENDING``) and
+    ``receipt`` holds Guardian's receipt.
     """
 
     def __init__(
-        self, tool_name: str, request_id: str, reason_code: str, local_effect_ran: bool = False
+        self,
+        tool_name: str,
+        request_id: str,
+        reason_code: str,
+        local_effect_ran: bool = False,
+        receipt: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.tool_name = tool_name
         self.request_id = request_id
         self.reason_code = reason_code
         self.local_effect_ran = local_effect_ran
+        self.receipt = receipt
         super().__init__(
             f'Guardian execution of "{tool_name}" failed (request_id={request_id}, '
             f"reason_code={reason_code}{', local_effect_ran=True' if local_effect_ran else ''})"
         )
+
+
+def execution_failed_message(err: GuardianExecutionFailed) -> str:
+    """What to tell a model after Guardian was asked to run or record a call.
+
+    The action ran (in-process) or may have run (remote), so the message
+    never invites a retry: calling the tool again would be a new request and
+    could repeat the effect.
+    """
+    rid = f", request_id {err.request_id}" if err.request_id else ""
+    if err.local_effect_ran:
+        return (
+            f"{err.tool_name} ran, but Guardian could not record it "
+            f"({err.reason_code}{rid}). Do not call it again; tell the user it ran "
+            "without a receipt."
+        )
+    return (
+        f"Guardian could not confirm that {err.tool_name} completed "
+        f"({err.reason_code}{rid}). It may have run. Do not call it again; "
+        "tell the user so they can check."
+    )
 
 
 @dataclass(frozen=True)
@@ -199,7 +256,14 @@ class _Options:
     on_ask: OnDecision
     on_deny: OnDecision
     install_record_transport: bool
+    #: "result" hands an execution failure back as data (see
+    #: ``execution_failed_message``) instead of raising it.
+    on_execution_failed: OnDecision
     modes: Mapping[str, Mode]
+    #: on_ask="result" only: held request ids by (kind, connection, tool, args),
+    #: so calling the tool again after approval claims the approved request
+    #: instead of proposing a fresh one that needs a fresh approval.
+    held: Dict[str, str] = field(default_factory=dict)
 
     def mode_for(self, tool_name: str) -> Mode:
         return self.modes.get(tool_name, self.mode)
@@ -218,10 +282,19 @@ def _deny(
     reason_code: str,
     request_id: Optional[str],
     stage: str = "invoke",
+    hint_override: Optional[str] = None,
 ) -> Any:
-    hint = denial_hint(tool_name, reason_code, stage)
+    hint = hint_override if hint_override is not None else denial_hint(tool_name, reason_code, stage)
     if opts.on_deny == "result":
-        message = f"Guardian denied {tool_name} ({reason_code}). Do not retry the same call."
+        if reason_code == "SERVICE_UNAVAILABLE":
+            # Guardian did not answer: not a decision, and nothing ran.
+            message = (
+                f"Guardian could not be reached to check {tool_name} "
+                f"({reason_code}), so it did not run. Try again later."
+            )
+            hint = None
+        else:
+            message = f"Guardian denied {tool_name} ({reason_code}). Do not retry the same call."
         return {
             "guardian": {
                 "decision": "DENY",
@@ -234,22 +307,97 @@ def _deny(
     raise GuardianDenied(tool_name, reason_code, request_id, hint)
 
 
+def _execution_failed(opts: _Options, err: GuardianExecutionFailed) -> Generator:
+    """Report a call that ran (or may have run) but could not be confirmed.
+
+    The app's ``on_execution_error`` hook always sees it. With
+    ``on_execution_failed="result"`` the model gets a result that says the
+    call ran or may have run and must not be repeated; otherwise it raises.
+    """
+    yield ("failed", err)
+    if opts.on_execution_failed != "result":
+        raise err
+    return {
+        "guardian": {
+            "decision": "ALLOW",
+            "outcome": "ran_unrecorded" if err.local_effect_ran else "unknown",
+            "tool_name": err.tool_name,
+            **({"request_id": err.request_id} if err.request_id else {}),
+            "reason_code": err.reason_code,
+            "local_effect_ran": err.local_effect_ran,
+            **({"receipt": err.receipt} if err.receipt is not None else {}),
+            "message": execution_failed_message(err),
+        }
+    }
+
+
+def _held_key(opts: _Options, kind: str, tool_name: str, args: Optional[Dict[str, Any]]) -> Optional[str]:
+    if opts.on_ask != "result":
+        return None
+    try:
+        body = "" if args is None else canonical_json(args)
+    except (CanonicalJsonError, TypeError, ValueError):
+        return None  # arguments Guardian cannot canonicalize are never matched
+    return f"{kind}\x00{opts.connection_id}\x00{tool_name}\x00{body}"
+
+
+def _ask_result(tool_name: str, request_id: str, install: bool = False) -> Dict[str, Any]:
+    what = f"Registering {tool_name} with Guardian" if install else f"{tool_name}"
+    return {
+        "guardian": {
+            "decision": "ASK",
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "message": f"{what} is held for human approval (request_id {request_id}). "
+            "After a person approves, call the tool again with the same arguments: "
+            "the approved request runs then. Calling it before then does not "
+            "create another approval.",
+        }
+    }
+
+
 def _as_held(result: RequestResult) -> RequestResult:
     if not result.ok and result.reason_code in _HELD and result.request_id:
         return RequestResult(ok=True, request_id=result.request_id, decision="ASK", reason_code=result.reason_code)
     return result
 
 
-def _settle(opts: _Options, tool_name: str, result: RequestResult) -> Generator:
+def _settle(
+    opts: _Options, tool_name: str, result: RequestResult, held_key: Optional[str] = None
+) -> Generator:
     result = _as_held(result)
     if not result.ok:
-        return _deny(opts, tool_name, result.reason_code or "DENIED", None)
+        # Keep Guardian's request id on a refusal so it can be traced.
+        return _deny(opts, tool_name, result.reason_code or "DENIED", result.request_id or None)
     if result.decision == "ALLOW" and result.capability_token:
         request_id = result.request_id or ""
         if opts.mode_for(tool_name) == "remote":
             executed = yield ("execute", request_id, result.capability_token)
             if not executed.ok:
-                raise GuardianExecutionFailed(tool_name, request_id, executed.reason_code or "EXECUTE_FAILED")
+                # Guardian was asked to perform the call; a lost or refused
+                # answer does not prove it did not happen.
+                return (
+                    yield from _execution_failed(
+                        opts,
+                        GuardianExecutionFailed(tool_name, request_id, executed.reason_code or "EXECUTE_FAILED"),
+                    )
+                )
+            # Guardian performed the call; only `sent-verified` means the
+            # upstream accepted it. Anything else (not-sent, outcome-pending,
+            # outcome-unconfirmed) is an execution failure, never an ALLOW.
+            status = executed.receipt.get("status") if isinstance(executed.receipt, dict) else None
+            if status != "sent-verified":
+                return (
+                    yield from _execution_failed(
+                        opts,
+                        GuardianExecutionFailed(
+                            tool_name,
+                            request_id,
+                            "EXECUTION_" + str(status or "unknown").upper().replace("-", "_"),
+                            receipt=executed.receipt,
+                        ),
+                    )
+                )
             yield ("receipt", request_id, executed.receipt)
             return {
                 "guardian": {
@@ -262,22 +410,22 @@ def _settle(opts: _Options, tool_name: str, result: RequestResult) -> Generator:
         output = yield ("run",)
         executed = yield ("execute", request_id, result.capability_token)
         if not executed.ok:
-            raise GuardianExecutionFailed(
-                tool_name, request_id, executed.reason_code or "EXECUTE_FAILED", local_effect_ran=True
+            # The function already ran: never report this as "did not run".
+            return (
+                yield from _execution_failed(
+                    opts,
+                    GuardianExecutionFailed(
+                        tool_name, request_id, executed.reason_code or "EXECUTE_FAILED", local_effect_ran=True
+                    ),
+                )
             )
         yield ("receipt", request_id, executed.receipt)
         return output
     if result.decision == "ASK" and result.request_id:
         if opts.on_ask == "result":
-            return {
-                "guardian": {
-                    "decision": "ASK",
-                    "request_id": result.request_id,
-                    "tool_name": tool_name,
-                    "message": f"Held for human approval. After approval, claim request_id "
-                    f"{result.request_id} and re-run the tool.",
-                }
-            }
+            if held_key is not None:
+                opts.held[held_key] = result.request_id
+            return _ask_result(tool_name, result.request_id)
         raise _Ask(result.request_id, "tool")
     return _deny(opts, tool_name, result.reason_code or "MISSING_CAPABILITY", result.request_id)
 
@@ -285,11 +433,38 @@ def _settle(opts: _Options, tool_name: str, result: RequestResult) -> Generator:
 def _ensure_record_transport(
     opts: _Options, ensured: Set[str], tool_name: str
 ) -> Generator:
+    """Register the record-only entry for an in-process tool (opt-in).
+
+    ``ensured`` holds the entries this Guard registered itself, in memory
+    only. An "already registered" answer is refused as
+    ``RECORD_TRANSPORT_UNVERIFIED`` before anything runs, because the
+    existing entry may be an HTTP tool. That includes an entry registered by
+    an earlier process, so automatic registration only works for a tool with
+    no entry yet.
+    """
     if not opts.install_record_transport:
         return None
     key = f"{opts.connection_id}:{tool_name}"
     if key in ensured:
         return None
+    held_key = _held_key(opts, "install", tool_name, None)
+    prior = opts.held.pop(held_key, None) if held_key else None
+    if prior is not None:
+        claimed = _as_held((yield ("claim", prior)))
+        if not claimed.ok and claimed.reason_code == "SERVICE_UNAVAILABLE":
+            # Guardian did not answer: keep the registration held for the next try.
+            opts.held[held_key] = prior
+            return _deny(opts, tool_name, "SERVICE_UNAVAILABLE", prior, "register")
+        if claimed.ok and claimed.decision == "ASK":
+            opts.held[held_key] = prior  # still waiting for the person
+            return _ask_result(tool_name, prior, install=True)
+        if claimed.ok and claimed.decision == "ALLOW" and claimed.capability_token:
+            executed = yield ("execute", claimed.request_id or prior, claimed.capability_token)
+            if not executed.ok:
+                raise GuardianExecutionFailed(tool_name, prior, executed.reason_code or "")
+            ensured.add(key)
+            return None
+        return _deny(opts, tool_name, claimed.reason_code or "MISSING_CAPABILITY", prior, "register")
     result = yield (
         "request",
         {
@@ -305,9 +480,17 @@ def _ensure_record_transport(
             "purpose": f"Register in-process tool {tool_name} for evidence recording",
         },
     )
-    if not result.ok and result.reason_code == "TOOL_ALREADY_INSTALLED":
-        ensured.add(key)
-        return None
+    if not result.ok and result.reason_code in _INSTALL_MAYBE_DONE:
+        # Fail closed: never run local code for an entry Guardian might
+        # perform as an HTTP call. Not remembered, so a retry asks again.
+        return _deny(
+            opts,
+            tool_name,
+            "RECORD_TRANSPORT_UNVERIFIED",
+            result.request_id or None,
+            "register",
+            _record_transport_unverified_hint(tool_name, result.reason_code),
+        )
     result = _as_held(result)
     if not result.ok:
         return _deny(opts, tool_name, result.reason_code or "DENIED", None, "register")
@@ -319,15 +502,9 @@ def _ensure_record_transport(
         return None
     if result.decision == "ASK" and result.request_id:
         if opts.on_ask == "result":
-            return {
-                "guardian": {
-                    "decision": "ASK",
-                    "request_id": result.request_id,
-                    "tool_name": tool_name,
-                    "message": f"Registering {tool_name} with Guardian needs human approval "
-                    f"(request_id {result.request_id}). Retry the tool call after approval.",
-                }
-            }
+            if held_key is not None:
+                opts.held[held_key] = result.request_id
+            return _ask_result(tool_name, result.request_id, install=True)
         raise _Ask(result.request_id, "install")
     return _deny(
         opts, tool_name, result.reason_code or "MISSING_CAPABILITY", result.request_id, "register"
@@ -339,6 +516,16 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
         gate = yield from _ensure_record_transport(opts, ensured, tool_name)
         if gate is not None:
             return gate
+    held_key = _held_key(opts, "tool", tool_name, args)
+    prior = opts.held.pop(held_key, None) if held_key else None
+    if prior is not None:
+        # The same call was held earlier: claim that request (approved →
+        # it runs; still pending → the same ASK, no second approval).
+        claimed = yield ("claim", prior)
+        if not claimed.ok and claimed.reason_code == "SERVICE_UNAVAILABLE":
+            # Guardian did not answer: keep the request held for the next try.
+            opts.held[held_key] = prior
+        return (yield from _settle(opts, tool_name, claimed, held_key))
     result = yield (
         "request",
         {
@@ -350,7 +537,7 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
             "purpose": opts.purpose_for(tool_name, args),
         },
     )
-    return (yield from _settle(opts, tool_name, result))
+    return (yield from _settle(opts, tool_name, result, held_key))
 
 
 def _resume_tool(opts: _Options, tool_name: str, request_id: str) -> Generator:
@@ -414,6 +601,18 @@ class _Run:
 
         return GuardianApprovalPending(self.tool_name, ask.request_id, self.args, resume)
 
+    def _report_failure(self, err: GuardianExecutionFailed) -> Any:
+        """Call the app's ``on_execution_error`` hook. It only observes: an
+        error it raises never changes what the caller or the model is told."""
+        hook = self.guard._on_execution_error
+        if hook is None:
+            return None
+        try:
+            result = hook(err)
+        except Exception:  # noqa: BLE001
+            return None
+        return result if inspect.isawaitable(result) else None
+
     def drive(self, machine: Generator) -> Any:
         client = self.guard.client
         value: Any = None
@@ -429,6 +628,12 @@ class _Run:
                     value = client.execute(request_id=op[1], capability_token=op[2])
                 elif kind == "run":
                     value = self.body()
+                elif kind == "failed":
+                    pending = self._report_failure(op[1])
+                    close = getattr(pending, "close", None)
+                    if callable(close):
+                        close()  # a sync guard does not await an async hook
+                    value = None
                 else:  # receipt
                     self.receipt = op[2]
                     if self.guard._on_receipt:
@@ -456,6 +661,14 @@ class _Run:
                     value = self.body()
                     if inspect.isawaitable(value):
                         value = await value
+                elif kind == "failed":
+                    pending = self._report_failure(op[1])
+                    if pending is not None:
+                        try:
+                            await pending
+                        except Exception:  # noqa: BLE001 — hooks only observe
+                            pass
+                    value = None
                 else:  # receipt
                     self.receipt = op[2]
                     if self.guard._on_receipt:
@@ -482,10 +695,25 @@ class Guard:
         the decision back as data, which is useful as a tool result for an LLM.
     :param on_receipt: ``callback(tool_name, request_id, receipt)`` after every
         recorded execution.
+    :param on_execution_failed: what to do when the call ran (in-process) or
+        Guardian was asked to perform it (remote) but it could not be
+        confirmed: redemption failed after your function ran, or a remote
+        receipt status is not ``sent-verified``. ``"raise"`` raises
+        :class:`GuardianExecutionFailed`; ``"result"`` returns
+        ``{"guardian": {"decision": "ALLOW", "outcome": …, "message": …}}``
+        whose message says the call ran or may have run and must not be
+        called again. Defaults to the ``on_deny`` setting.
+    :param on_execution_error: ``callback(error)`` with the
+        :class:`GuardianExecutionFailed` whenever that happens, in either
+        mode, so the app can raise an incident. Errors it raises are ignored.
     :param install_record_transport: propose registering the tool on first use
         (``mcp.install``). Default ``False``: production denies it unless
         the agent's grant pins ``mcp.install``, so register the tool once in the
-        console as "My own code (record-only)".
+        console as "My own code (record-only)". ``True`` only works for a tool
+        with no entry yet: which entries this Guard registered is kept in
+        memory, so after a restart, in another worker or in a new Guard an
+        "already registered" answer is refused as ``RECORD_TRANSPORT_UNVERIFIED``
+        and nothing runs, even for an entry the SDK created itself.
     """
 
     def __init__(
@@ -502,6 +730,8 @@ class Guard:
         on_deny: OnDecision = "raise",
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         install_record_transport: bool = False,
+        on_execution_failed: Optional[OnDecision] = None,
+        on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
     ) -> None:
         if not connection_id:
             raise ValueError("connection_id is required")
@@ -518,10 +748,13 @@ class Guard:
             on_ask=on_ask,
             on_deny=on_deny,
             install_record_transport=install_record_transport,
+            on_execution_failed=on_execution_failed or on_deny,
             modes=dict(modes or {}),
         )
+        #: Record-only entries this Guard registered itself (in memory only).
         self._ensured: Set[str] = set()
         self._on_receipt = on_receipt
+        self._on_execution_error = on_execution_error
 
     def run(self, tool_name: str, arguments: Any, fn: Callable[[], Any]) -> Any:
         """Govern one call of ``fn`` (no arguments) proposed as ``tool_name(arguments)``.

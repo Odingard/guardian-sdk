@@ -108,7 +108,7 @@ the agent.
   instead.
 - Guardian error, network failure, timeout or a cancelled call — your
   `execute` never runs, and a late answer from Guardian is ignored. The model
-  is told `Guardian could not check refund_order, so it did not run.`, and
+  is told `Guardian could not check refund_order, so it did not run. Try again later.`, and
   `onGuardianError` is called. `decisionTimeoutMs` (default 30000) bounds the
   wait for Guardian's decision; the Agents SDK's own `timeoutMs` and run
   cancellation stop the wait too, but only while Guardian is still deciding.
@@ -137,13 +137,22 @@ even with `onAsk: "result"`.
 In-process mode is decision-gated: `execute` runs after `ALLOW` and before
 the capability is redeemed, so a revocation at redemption lands after the
 effect. Use `mode: "remote"` where Guardian itself must hold the effect.
+In remote mode, a call Guardian performed whose receipt status is not
+`sent-verified` (for example the upstream answered with an error) is a
+`GuardianExecutionFailed`, and the model is told it did not complete; it is
+never reported as an `ALLOW` result.
 `modes` sets the mode per tool name. The Agents SDK renames tools: every
 character that is not a letter or a digit becomes `_` (`refund-order`
 becomes `refund_order`), and Guardian sees the new name. A `modes` entry
 under the name you wrote is applied to the new name; two entries for the
-same tool that disagree are refused when the tool is built. `installRecordTransport: true` makes the
-adapter propose the record-only entry itself on first use (this needs a
-grant that allows it; production usually does not).
+same tool that disagree are refused when the tool is built. `installRecordTransport`
+is off by default. `true` makes the adapter propose the record-only entry
+itself on first use (this needs a grant that allows it; production usually
+does not), and it only works for a tool that has no entry yet: an "already
+registered" answer is refused (`RECORD_TRANSPORT_UNVERIFIED`) and nothing
+runs, including after a restart for an entry the adapter created itself,
+because which entries it registered is kept in memory only. Once the entry
+exists, use it with the option off.
 
 Setting the Agents SDK's own `needsApproval` on a tool adds a local approval
 step before Guardian is asked. It never replaces Guardian's decision.

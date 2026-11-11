@@ -20,7 +20,12 @@ import {
   upstreamEnv,
   type UpstreamTarget,
 } from "./config.js";
-import type { Upstream, UpstreamCallResult, UpstreamTool } from "./proxy.js";
+import {
+  UpstreamCallCancelled,
+  type Upstream,
+  type UpstreamCallResult,
+  type UpstreamTool,
+} from "./proxy.js";
 
 export class UpstreamConnectError extends Error {
   constructor(message: string) {
@@ -106,7 +111,14 @@ export function toolListFailure(target: UpstreamTarget, err: unknown): string {
 export function clientUpstream(client: Client): Upstream {
   return {
     listTools: () => listAllTools(client),
-    async callTool(name, args) {
+    async callTool(name, args, options) {
+      // Last check before the call is sent: a cancelled request is never
+      // forwarded. The signal is not passed on to the upstream request:
+      // once sent, the call runs to its real outcome, so it is recorded
+      // instead of being reported as not done.
+      if (options?.signal?.aborted) {
+        throw new UpstreamCallCancelled(name);
+      }
       return (await client.callTool({
         name,
         arguments: args,

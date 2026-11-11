@@ -11,9 +11,9 @@ const tool = (name: string, annotations?: Record<string, unknown>) => ({
 
 describe("governed MCP setups: tool suggestions", () => {
   it("trusts the server's own annotations first", () => {
-    expect(suggestTool(tool("run", { readOnlyHint: true })).suggestedMode).toBe(
-      "allow",
-    );
+    expect(
+      suggestTool(tool("query", { readOnlyHint: true })).suggestedMode,
+    ).toBe("allow");
     expect(
       suggestTool(tool("list_files", { destructiveHint: true })).suggestedMode,
     ).toBe("ask");
@@ -52,5 +52,41 @@ describe("governed MCP setups: tool suggestions", () => {
       }),
     });
     expect(parseCli(["tools"], {}).ok).toBe(false);
+  });
+});
+
+describe("tool suggestions: a write verb anywhere means ask", () => {
+  const cases: [string, Record<string, unknown> | undefined][] = [
+    ["find_and_replace", undefined],
+    ["get_or_create_customer", undefined],
+    ["status_update", undefined],
+    ["fetch", undefined],
+    ["status", undefined],
+    ["list_and_delete_old_files", undefined],
+    ["delete_repository", { readOnlyHint: true }],
+    ["run", { readOnlyHint: true }],
+    ["getOrCreateUser", undefined],
+  ];
+  for (const [name, annotations] of cases) {
+    it(`${name} is suggested Ask`, () => {
+      expect(suggestTool(tool(name, annotations)).suggestedMode).toBe("ask");
+    });
+  }
+
+  it("still suggests Allow for plain reads", () => {
+    for (const name of [
+      "get_issue",
+      "list_files",
+      "search_code",
+      "read_file",
+    ]) {
+      expect(suggestTool(tool(name)).suggestedMode).toBe("allow");
+    }
+  });
+
+  it("names the write verb it found", () => {
+    expect(suggestTool(tool("get_or_create_customer")).why).toBe(
+      '"create" may change something',
+    );
   });
 });

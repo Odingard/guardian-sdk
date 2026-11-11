@@ -32,8 +32,9 @@ export class GuardianUnavailable extends Error {
  *
  * Once the tool starts (or Guardian is asked to execute the tool call) the
  * gate is committed and stops interfering, so a started action is always
- * recorded. Executing a record-transport install does not commit the gate:
- * the deadline and the abort signal still apply to the tool call after it.
+ * recorded. Executing a record-transport setup step (mcp.install or
+ * mcp.enable) does not commit the gate: the deadline and the abort signal
+ * still apply to the tool call after it.
  * Once the call has settled (for example an ASK handed back to the app),
  * the gate opens so `resume()` can claim the approval later.
  */
@@ -45,7 +46,7 @@ export class CallGate {
   #signal: AbortSignal | undefined;
   #onAbort: (() => void) | undefined;
   #rejecters = new Set<(err: unknown) => void>();
-  #installIds = new Set<string>();
+  #setupIds = new Set<string>();
 
   constructor(args: {
     client: GuardianClient;
@@ -91,33 +92,36 @@ export class CallGate {
           );
         });
       };
-    // Request ids of record-transport installs (mcp.install). Executing one
-    // of these only registers the tool; it is not the tool starting, so it
-    // keeps the deadline and the abort signal.
-    const installIds = this.#installIds;
-    const noteInstall = (result: unknown): void => {
+    // Request ids of record-transport setup steps (mcp.install and
+    // mcp.enable). Executing one of these only registers or switches on the
+    // tool; it is not the tool starting, so it keeps the deadline and the
+    // abort signal.
+    const setupIds = this.#setupIds;
+    const noteSetup = (result: unknown): void => {
       const id = (result as { requestId?: unknown } | null)?.requestId;
-      if (typeof id === "string" && id.length > 0) installIds.add(id);
+      if (typeof id === "string" && id.length > 0) setupIds.add(id);
     };
     const request = decide(
       async (i: Parameters<GuardianClient["request"]>[0]) => {
         const result = await client.request(i);
-        if (i.action === "mcp.install") noteInstall(result);
+        if (i.action === "mcp.install" || i.action === "mcp.enable") {
+          noteSetup(result);
+        }
         return result;
       },
     );
     const claim = decide(async (id: string) => {
       const result = await client.claim(id);
-      if (installIds.has(id)) noteInstall(result);
+      if (setupIds.has(id)) noteSetup(result);
       return result;
     });
-    const executeInstall = decide(
+    const executeSetup = decide(
       (input: Parameters<GuardianClient["execute"]>[0]) =>
         client.execute(input),
     );
     const execute = (input: Parameters<GuardianClient["execute"]>[0]) => {
-      if (installIds.has(input.requestId)) {
-        return executeInstall(input);
+      if (setupIds.has(input.requestId)) {
+        return executeSetup(input);
       }
       // Executing the tool call is the start of the action: refuse it if
       // the gate closed, and never abandon it once sent.

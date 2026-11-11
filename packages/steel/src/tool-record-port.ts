@@ -6,6 +6,8 @@ export interface ToolRecordPort {
     toolName: string;
     arguments: Record<string, unknown>;
   }): Promise<
-    { ok: true; result: unknown } | { ok: false; reason: string } | null
+    | { ok: true; result: unknown }
+    | { ok: false; reason: string; unknown?: boolean }
+    | null
   >;
 }

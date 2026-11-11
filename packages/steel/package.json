@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-steel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Guardian for Steel — govern a Steel browser agent's checkout through Guardian: ALLOW/ASK/DENY before the order is placed, a portable receipt after.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
@@ -27,7 +27,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "peerDependencies": {
-    "@odingard/guardian-sdk": "^0.2.0 || ^0.3.0",
+    "@odingard/guardian-sdk": "^0.3.9",
     "zod": "^4.0.0"
   },
   "devDependencies": {
