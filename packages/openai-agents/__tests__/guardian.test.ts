@@ -413,6 +413,43 @@ describe("guardianTool: ASK", () => {
   });
 });
 
+describe("guardianTool: approved arguments", () => {
+  it("runs the tool on the approved arguments even if the parsed object changes while Guardian decides", async () => {
+    let parsed: { orderId: string; amount: number } | undefined;
+    const run = vi.fn().mockResolvedValue("ok");
+    const request = vi.fn().mockImplementation(async () => {
+      parsed!.amount = 999_999; // other code holding the object edits it
+      return allow();
+    });
+    const t = guardianTool(
+      {
+        name: "refund_order",
+        description: "Refund an order",
+        parameters: z
+          .object({ orderId: z.string(), amount: z.number() })
+          .transform((value) => (parsed = value)),
+        execute: async (input) => run(input) as string,
+      },
+      {
+        client: stubClient({
+          request,
+          execute: vi.fn().mockResolvedValue(receipt()),
+        }),
+        connectionId: "con_1",
+      },
+    );
+    await expect(invoke(t, { orderId: "ord_9", amount: 1250 })).resolves.toBe(
+      "ok",
+    );
+    expect(parsed).toBeDefined();
+    expect(request.mock.calls[0]![0].arguments).toEqual({
+      orderId: "ord_9",
+      amount: 1250,
+    });
+    expect(run.mock.calls[0]![0]).toEqual({ orderId: "ord_9", amount: 1250 });
+  });
+});
+
 describe("guardianTool: DENY", () => {
   it("never runs and returns a plain refusal to the model", async () => {
     const run = vi.fn();

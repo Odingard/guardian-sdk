@@ -214,6 +214,37 @@ describe("guardianTool remote mode (default)", () => {
 
 describe("guardianTool inProcess mode", () => {
   const inProc = { mode: "inProcess" as const, connectionId: "con_1" };
+
+  it("runs the inner tool on the approved arguments even if the object changes while Guardian decides", async () => {
+    const run = vi.fn().mockResolvedValue("ok");
+    const inner = tool(run, {
+      name: "refund_order",
+      description: "Refund an order",
+      schema: z.object({ orderId: z.string(), amount: z.number() }),
+    });
+    const input = { orderId: "ord_9", amount: 1250 };
+    const request = vi.fn().mockImplementation(async () => {
+      input.amount = 999_999; // other code edits the object meanwhile
+      return allow();
+    });
+    const client = stubClient({
+      request,
+      execute: vi.fn().mockResolvedValue({ ok: true, receipt: { id: "r" } }),
+    });
+    const wrapped = guardianTool(inner, { client, ...inProc });
+    // The wrapper's own call, as LangChain makes it after parsing.
+    const func = (
+      wrapped as unknown as {
+        func: (i: unknown, m?: unknown, c?: unknown) => Promise<unknown>;
+      }
+    ).func;
+    await expect(func(input, undefined, {})).resolves.toBe("ok");
+    expect(request.mock.calls[0]![0].arguments).toEqual({
+      orderId: "ord_9",
+      amount: 1250,
+    });
+    expect(run.mock.calls[0]![0]).toEqual({ orderId: "ord_9", amount: 1250 });
+  });
   // Auto-install is opt-in and only works for a tool with no entry yet.
   const autoInstall = { ...inProc, installRecordTransport: true };
 

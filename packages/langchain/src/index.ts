@@ -219,7 +219,7 @@ function wrapWithContext(
       ? { verboseParsingErrors: source.verboseParsingErrors }
       : {}),
     // `input` is already parsed by the wrapper's schema (the inner tool's).
-    // The same value goes to Guardian and to the inner tool.
+    // Guardian decides on it; the inner tool gets Guardian's copy of it.
     func: async (input: unknown, runManager, config) => {
       const signal = (config as { signal?: AbortSignal } | undefined)?.signal;
       return abortable(ctx.options.client, signal, (client, startTool) =>
@@ -229,11 +229,13 @@ function wrapWithContext(
             : { ...ctx, options: { ...ctx.options, client } },
           inner.name,
           input,
-          () => {
+          (approved) => {
             startTool();
+            // The copy Guardian decided on, not the caller's object, which
+            // other code may have changed while the call waited.
             return runInner(
               inner,
-              input,
+              approved,
               runManager,
               config as Record<string, unknown> | undefined,
             );

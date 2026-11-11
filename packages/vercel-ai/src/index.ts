@@ -167,9 +167,11 @@ export function withGuardian<T extends ToolSet>(
                     : { ...ctx, options: { ...ctx.options, client } },
                   toolName,
                   input,
-                  () => {
+                  (approved) => {
                     startTool();
-                    return execute(input as never, callOptions as never);
+                    // The copy Guardian decided on, not the caller's
+                    // object, which other code may have changed meanwhile.
+                    return execute(approved as never, callOptions as never);
                   },
                 ),
               ),

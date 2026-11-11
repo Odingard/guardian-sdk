@@ -1,6 +1,12 @@
 # Changelog
 
-## sdk 0.3.9 / guardian-mcp 0.3.4 / guardian-hook 0.3.1 / guardian-langchain, guardian-vercel-ai 0.3.3 / guardian-openai-agents 0.1.1 / guardian-steel 0.1.1 / Python 0.1.6, not yet released
+## guardian-langchain 0.3.4 / guardian-vercel-ai 0.3.4 / guardian-openai-agents 0.1.2
+
+### Fixed: the tool runs on the arguments Guardian approved
+
+- **guardian-langchain, guardian-vercel-ai, guardian-openai-agents:** in `inProcess` mode the wrapped tool now receives the SDK's copy of the approved input, as `createGuard` already did. Before, these three wrappers passed the tool the original arguments object. If other code holding that object (application code, middleware or a hook) changed it while the call waited for a decision or an approval, the tool ran with the changed values while Guardian's record and receipt showed the approved ones. The model could not do this through a tool call, because each call's arguments are parsed afresh; it took code in the same process holding the object. No change is needed in your code.
+
+## sdk 0.3.9 / guardian-mcp 0.3.4 / guardian-hook 0.3.1 / guardian-langchain, guardian-vercel-ai 0.3.3 / guardian-openai-agents 0.1.1 / guardian-steel 0.1.1 / Python 0.1.6
 
 ### Changed: in-process auto-registration is off by default (read before upgrading)
 

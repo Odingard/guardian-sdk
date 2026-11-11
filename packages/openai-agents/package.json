@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-openai-agents",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenAI Agents SDK adapter — route an agent's tool calls through Guardian for a deterministic ALLOW/ASK/DENY decision before anything executes.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
