@@ -77,6 +77,16 @@ const MAX_TEXT = 2_000;
  * close, the gap: see the README's "What is not governed".
  */
 const CREDENTIAL_PROBE = /\/proc\/|environ|GUARDIAN_AGENT_CREDENTIAL/i;
+/**
+ * Start-up env files (`.env`, `.env.*`, `gateway.env`). Reading one in the
+ * state directory, a control root, OpenClaw's config dir or above the
+ * workspace goes to the Ask tier: such a file can hold settings for the
+ * Gateway, so it is treated like a process environment.
+ */
+const ENV_FILE = /(?:^|\/)(?:\.env(?:\.[^/]*)?|gateway\.env)$/i;
+const OPENCLAW_CONFIG_DIR = /(?:^|\/)\.config\/(?:openclaw|clawdbot)(?:\/|$)/i;
+/** Most file paths an apply_patch call lists for the approver. */
+const MAX_LISTED_PATHS = 50;
 
 /**
  * Commands that drive OpenClaw's own CLI (`openclaw plugins disable`,
@@ -462,9 +472,9 @@ function processInput(action: string, p: Record<string, unknown>): string {
 }
 
 /**
- * Paths an apply_patch envelope touches (`*** Add/Update/Delete File:`).
- * OpenClaw trims each line before reading a header, so leading whitespace
- * is accepted.
+ * Paths an apply_patch envelope touches (`*** Add/Update/Delete File:`),
+ * every one of them. OpenClaw trims each line before reading a header, so
+ * leading whitespace is accepted.
  */
 export function patchPaths(input: string): {
   path: string;
@@ -477,7 +487,7 @@ export function patchPaths(input: string): {
     if (m[3]) out.push({ operation: "move", path: m[3] });
     else out.push({ operation: m[1]!.toLowerCase(), path: m[2]! });
   }
-  return out.slice(0, 50);
+  return out;
 }
 
 /**
@@ -516,6 +526,25 @@ export function governOpenClawCall(
         toolName: "shell_destructive",
         arguments: { operation: "read", path: bounded(path, 500) },
         summary: `Read ${bounded(path, 160)} (a path Guardian could not resolve)`,
+      };
+    }
+    const target = norm ?? path;
+    if (
+      path !== "" &&
+      ENV_FILE.test(target) &&
+      (OPENCLAW_CONFIG_DIR.test(target) || classifyPath(path, roots).control)
+    ) {
+      return {
+        toolName: "shell_destructive",
+        arguments: {
+          operation: "read",
+          path: bounded(path, 500),
+          ...(norm && norm !== path
+            ? { resolvedPath: bounded(norm, 500) }
+            : {}),
+          touches: "openclaw-env-file",
+        },
+        summary: `Read ${bounded(path, 160)} (an OpenClaw start-up env file)`,
       };
     }
     if (!CREDENTIAL_PROBE.test(path) && !CREDENTIAL_PROBE.test(norm ?? "")) {
@@ -649,18 +678,32 @@ export function governOpenClawCall(
 
   if (tool === "apply_patch") {
     const input = required(p.input ?? p.patch, "input");
+    // Every header is classified; only the list shown to the approver is
+    // cut short (with a count of the rest).
     const files = patchPaths(input);
-    const paths = files.length
-      ? files.map((f) => f.path)
-      : [...(call.derivedPaths ?? [])].slice(0, 50);
-    const all = [...paths, ...(call.derivedPaths ?? [])];
+    const derived = [...(call.derivedPaths ?? [])];
+    const listed: { path: string; operation?: string }[] = files.length
+      ? files
+      : derived.map((path) => ({ path }));
+    const paths = listed.map((f) => f.path);
+    const control = [...new Set([...paths, ...derived])].filter(
+      (path) => classifyPath(path, roots).control,
+    );
+    const shown = listed.slice(0, MAX_LISTED_PATHS);
+    const more = listed.length - shown.length;
     return {
-      toolName: all.some((path) => classifyPath(path, roots).control)
-        ? "shell_destructive"
-        : "file_write",
+      toolName: control.length ? "shell_destructive" : "file_write",
       arguments: {
         operation: "apply_patch",
-        files: files.length ? files : paths.map((path) => ({ path })),
+        files: shown,
+        ...(more > 0 ? { morePaths: more } : {}),
+        ...(control.length
+          ? {
+              controlPlanePaths: control
+                .slice(0, 10)
+                .map((path) => bounded(path, 500)),
+            }
+          : {}),
         contentBytes: Buffer.byteLength(input),
         contentDigest: digest(input),
       },

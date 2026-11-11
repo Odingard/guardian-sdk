@@ -1,4 +1,6 @@
 // Generated file — do not edit.
+import { canonicalJson, sha256Text } from "./contracts/index.js";
+
 import type {
   GuardianClient,
   GuardianMcpInvocation,
@@ -31,8 +33,9 @@ type RecordTransportToolDescriptor = Readonly<{
  * - `inProcess` (opt-in): the local implementation is the tool. After ALLOW
  *   the impl runs first, then `client.execute` redeems the capability and
  *   records the evidence — which requires a `transport: "record"` catalog
- *   entry on the connection (auto-installed via `mcp.install`; needs a
- *   control plane with record-transport support).
+ *   entry on the connection, registered once in the Guardian console. The
+ *   SDK can propose it itself via `mcp.install` (`installRecordTransport:
+ *   true`, opt-in), but only while no entry with that name exists yet.
  */
 
 /** Thrown (or returned) when Guardian refuses an action before execution. */
@@ -93,6 +96,31 @@ export function denialHint(
   return undefined;
 }
 
+/**
+ * review: why an in-process call is refused when `mcp.install` says
+ * the tool may already exist. Display only.
+ */
+function recordTransportUnverifiedHint(
+  toolName: string,
+  answer: string,
+): string {
+  return (
+    `Guardian answered ${answer} when asked to register "${toolName}" as a ` +
+    `record-only tool, so a tool with that name may already be registered ` +
+    `on this connection. Guardian does not tell the SDK whether that entry ` +
+    `is record-only. If it makes an HTTP call, your code and Guardian would ` +
+    `both perform the action, so nothing ran. Automatic registration only ` +
+    `works while no entry with that name exists: a restarted process, ` +
+    `another worker or a new context cannot tell an entry the SDK ` +
+    `registered earlier from any other. If "${toolName}" is ` +
+    `registered in the Guardian console as a record-only tool ("My own ` +
+    `code (record-only)") and allowed for this agent, pass ` +
+    `installRecordTransport: false (the default). If Guardian should ` +
+    `perform the call, ` +
+    `use mode: "remote".`
+  );
+}
+
 /** ALLOW was decided but redeeming the capability failed. */
 export class GuardianExecutionFailed extends Error {
   readonly toolName: string;
@@ -104,25 +132,64 @@ export class GuardianExecutionFailed extends Error {
    * treat it as an incident, never as a successful governed action.
    */
   readonly localEffectRan: boolean;
+  /**
+   * The execution receipt Guardian returned when the outcome was not
+   * verified (`not-sent`, `outcome-pending`, `outcome-unconfirmed`); in
+   * inProcess mode, a `not-sent` receipt after the impl ran. Undefined when
+   * Guardian refused the redemption itself.
+   */
+  readonly receipt: unknown;
+  /**
+   * The action may have happened, but Guardian's answer was lost or did not
+   * confirm it (reasonCode `EXECUTION_OUTCOME_UNKNOWN`): the execute reply
+   * never arrived, was a 5xx or could not be read, or the receipt is
+   * `outcome-pending` / `outcome-unconfirmed`, and looking the request up
+   * did not settle it. Do not retry the call: a retry is a new request and
+   * may perform the action a second time. Check the requestId first.
+   */
+  readonly outcomeUnknown: boolean;
+  /**
+   * For an unknown outcome: what was observed (the client's failure code,
+   * such as `SERVICE_UNAVAILABLE`, or the receipt status).
+   */
+  readonly detail: string | undefined;
 
   constructor(args: {
     toolName: string;
     requestId: string;
     reasonCode: string;
     localEffectRan?: boolean;
+    receipt?: unknown;
+    outcomeUnknown?: boolean;
+    detail?: string;
   }) {
     super(
-      `Guardian execution of "${args.toolName}" failed` +
-        ` (requestId=${args.requestId}, reasonCode=${args.reasonCode}` +
-        `${args.localEffectRan ? ", localEffectRan=true" : ""})`,
+      args.outcomeUnknown
+        ? `Guardian execution of "${args.toolName}" may have happened; ` +
+            `do not retry; check requestId ${args.requestId}` +
+            ` (reasonCode=${args.reasonCode}` +
+            `${args.detail ? `, detail=${args.detail}` : ""}` +
+            `${args.localEffectRan ? ", localEffectRan=true" : ""})`
+        : args.localEffectRan
+          ? `"${args.toolName}" ran, but Guardian could not record it; ` +
+            `do not retry; check requestId ${args.requestId}` +
+            ` (reasonCode=${args.reasonCode}, localEffectRan=true)`
+          : `Guardian execution of "${args.toolName}" failed` +
+            ` (requestId=${args.requestId}, reasonCode=${args.reasonCode})`,
     );
     this.name = "GuardianExecutionFailed";
     this.toolName = args.toolName;
     this.requestId = args.requestId;
     this.reasonCode = args.reasonCode;
     this.localEffectRan = args.localEffectRan ?? false;
+    this.receipt = args.receipt;
+    this.outcomeUnknown = args.outcomeUnknown ?? false;
+    this.detail = args.detail;
   }
 }
+
+/** Reason code of an execution whose outcome is unknown. */
+export const EXECUTION_OUTCOME_UNKNOWN = "EXECUTION_OUTCOME_UNKNOWN";
 
 /**
  * `inProcess` mode needs a record-transport catalog entry on the tool
@@ -250,7 +317,15 @@ export type GuardianAdapterOptions = Readonly<{
   modes?: Readonly<Record<string, GuardianToolMode>>;
   /**
    * inProcess only: auto-propose `mcp.install` of a `transport: "record"`
-   * catalog entry for each wrapped tool that lacks one. Default true;
+   * catalog entry for each wrapped tool. Default false: register the tool
+   * once in the Guardian console as record-only instead. `true` is an
+   * opt-in that only works for a tool with no entry yet: the record of
+   * which entries the SDK registered lives in this process's memory, so
+   * after a restart, in another worker or in a fresh context Guardian's
+   * "already registered" answer is refused as RECORD_TRANSPORT_UNVERIFIED
+   * and nothing runs (the existing entry may be an HTTP tool), even for an
+   * entry the SDK created itself. Such a process must use the
+   * console-registered tool with this option off. Opting in
    * requires a control plane with record-transport support — an older SDK raises
    * `GuardianRecordTransportRequired` before any network call.
    */
@@ -259,24 +334,74 @@ export type GuardianAdapterOptions = Readonly<{
   onAsk?: GuardianMode;
   /** What DENY does inside the wrapped call. Default "throw". */
   onDeny?: GuardianMode;
-  /** Called with the execution receipt after every ALLOW. */
+  /**
+   * Called with the execution receipt after every ALLOW whose action
+   * completed. An error it throws never turns the completed call into a
+   * failure (a retry would repeat the action): it goes to `onReceiptError`,
+   * or to `console.warn` when that is not set, and the call still returns.
+   */
   onReceipt?: (event: {
     toolName: string;
     requestId: string;
     receipt: unknown;
   }) => void | PromiseLike<void>;
+  /** Receives an error thrown by `onReceipt`. Its own errors are ignored. */
+  onReceiptError?: (
+    error: unknown,
+    event: { toolName: string; requestId: string; receipt: unknown },
+  ) => void;
 }>;
 
 /** Per-wrapper state: which record-transport entries were already ensured. */
 export type GuardianContext = {
   options: GuardianAdapterOptions;
   ensured: Set<string>;
+  /**
+   * @deprecated No longer read: an "already installed" answer to
+   * `mcp.install` is now refused before `tool.invoke`. Kept so adapters that
+   * still set it compile.
+   */
+  unconfirmedInstalls?: Set<string>;
+  /**
+   * Record-transport entries this context installed itself (an
+   * `mcp.install` of `transport: "record"` it committed), by
+   * connection:tool. Only these are known to be record-only, so the next
+   * attempt goes straight to `mcp.enable` instead of proposing the install
+   * again (which would be refused as "already installed").
+   */
+  installed?: Set<string>;
+  /**
+   * Registration steps (mcp.install / mcp.enable) held for human approval,
+   * by connection:tool. A retry of the tool call claims the held request
+   * instead of proposing a new one, so the approval the person gave is used.
+   */
+  heldSetup?: Map<string, { step: SetupStep; requestId: string }>;
+  /**
+   * `tool.invoke` requests held for human approval, by connection, tool
+   * name and a digest of the canonical arguments. A retry of the same call
+   * with the same arguments claims the held request instead of proposing a
+   * new one, so the approval the person gave is used.
+   */
+  heldInvocations?: Map<string, string>;
 };
+
+type SetupStep = "install" | "enable";
 
 export function createGuardianContext(
   options: GuardianAdapterOptions,
 ): GuardianContext {
-  return { options, ensured: new Set() };
+  return {
+    // Auto-install is opt-in: it only works for an entry that does not exist
+    // yet, because `installed` does not survive a restart.
+    options: {
+      ...options,
+      installRecordTransport: options.installRecordTransport ?? false,
+    },
+    ensured: new Set(),
+    installed: new Set(),
+    heldSetup: new Map(),
+    heldInvocations: new Map(),
+  };
 }
 
 export function toolModeFor(
@@ -314,8 +439,9 @@ function deny(
   reasonCode: string,
   requestId: string | undefined,
   stage: "register" | "invoke" = "invoke",
+  hintOverride?: string,
 ): GuardianDecisionResult {
-  const hint = denialHint(toolName, reasonCode, stage);
+  const hint = hintOverride ?? denialHint(toolName, reasonCode, stage);
   if (options.onDeny === "result") {
     return {
       guardian: {
@@ -346,23 +472,73 @@ function isLocalValidationError(err: unknown): boolean {
 }
 
 /**
+ * Answers to `mcp.install` that mean "a tool with this name may already be
+ * registered". The hosted gateway collapses every mcp.install binding
+ * failure (TOOL_ALREADY_INSTALLED included) into ACTION_PARAMETERS_INVALID,
+ * reported to the agent as INVALID_REQUEST.
+ *
+ * review: in-process mode refuses on these. The existing entry may be
+ * an HTTP tool, and nothing the agent credential can read (the ALLOW or
+ * claim answer, the opaque capability, the execution receipt) says which
+ * transport it has. Running the local code and then redeeming an HTTP entry
+ * would perform the action twice, so the SDK fails closed instead of going
+ * on to `mcp.enable` and `tool.invoke`.
+ */
+const INSTALL_MAYBE_DONE: readonly string[] = [
+  "TOOL_ALREADY_INSTALLED",
+  "INVALID_REQUEST",
+];
+
+/**
+ * Answers to `mcp.enable` that mean "already enabled". Enable is proposed
+ * only for an entry this context installed (so it is record transport);
+ * `tool.invoke` stays the authority.
+ */
+const ENABLE_MAYBE_DONE: readonly string[] = [
+  "TOOL_ALREADY_ENABLED",
+  "INVALID_REQUEST",
+];
+
+/**
  * Ensure a `transport: "record"` catalog entry exists for an in-process tool
- * so a later `execute` commits evidence instead of an HTTP call. Idempotent
- * per connection+tool; a TOOL_ALREADY_INSTALLED denial counts as ensured.
+ * and is enabled for this agent, so a later `execute` commits evidence
+ * instead of an HTTP call. Idempotent per connection+tool.
+ *
+ * - A registration step held for approval earlier (onAsk "result", or a
+ *   retry instead of `resume()`) is claimed first, so the approval is used.
+ * - Runs only with `installRecordTransport: true` (opt-in).
+ * - `mcp.install` proposes the entry. An "already installed" answer
+ *   (including the hosted gateway's INVALID_REQUEST) is refused as
+ *   RECORD_TRANSPORT_UNVERIFIED before anything runs: the existing entry may
+ *   be an HTTP tool. That includes an entry this SDK registered in an
+ *   earlier process: `installed` is in memory only. A tool registered in
+ *   the console as record-only is used with `installRecordTransport` off
+ *   (the default), which skips this step.
+ * - After an install this context committed, `mcp.enable` goes through the
+ *   same ALLOW/ASK/DENY gate; "already enabled" (or INVALID_REQUEST) counts
+ *   as done. `tool.invoke` stays the authority either way.
  */
 async function ensureRecordTransport<Output>(
   ctx: GuardianContext,
   toolName: string,
   input: unknown,
-  runTool: () => Output | PromiseLike<Output>,
+  runTool: RunTool<Output>,
 ): Promise<GuardianDecisionResult | void> {
   const { options } = ctx;
-  if (options.installRecordTransport === false) {
+  if (options.installRecordTransport !== true) {
     return;
   }
   const key = `${options.connectionId}:${toolName}`;
   if (ctx.ensured.has(key)) {
     return;
+  }
+  const held = ctx.heldSetup?.get(key);
+  if (held) {
+    return claimHeldSetup(ctx, toolName, input, runTool, key, held);
+  }
+  if (ctx.installed?.has(key)) {
+    // This context installed the record entry; only enabling is left.
+    return enableRecordTransport(ctx, toolName, input, runTool, key);
   }
   let result: GuardianRequestResult;
   try {
@@ -388,11 +564,150 @@ async function ensureRecordTransport<Output>(
     }
     throw err;
   }
+  if (!result.ok && INSTALL_MAYBE_DONE.includes(result.reasonCode)) {
+    // Fail closed: never run local code for an entry Guardian might perform
+    // as an HTTP call. Not remembered, so a retry asks Guardian again.
+    return deny(
+      options,
+      toolName,
+      "RECORD_TRANSPORT_UNVERIFIED",
+      nonEmpty(result.requestId),
+      "register",
+      recordTransportUnverifiedHint(toolName, result.reasonCode),
+    );
+  }
+  return governSetupStep(ctx, toolName, input, runTool, result, "install", key);
+}
+
+/** Propose `mcp.enable` for the record-transport entry (step two). */
+async function enableRecordTransport<Output>(
+  ctx: GuardianContext,
+  toolName: string,
+  input: unknown,
+  runTool: RunTool<Output>,
+  key: string,
+): Promise<GuardianDecisionResult | void> {
+  const { options } = ctx;
+  const enabled = await options.client.request({
+    action: "mcp.enable",
+    connectionId: options.connectionId,
+    toolName,
+    ...(options.adapterId ? { adapterId: options.adapterId } : {}),
+    purpose: `Enable in-process tool ${toolName} for this agent`,
+  });
+  if (!enabled.ok && ENABLE_MAYBE_DONE.includes(enabled.reasonCode)) {
+    ctx.ensured.add(key);
+    return;
+  }
+  return governSetupStep(ctx, toolName, input, runTool, enabled, "enable", key);
+}
+
+/** The step after `step` once it has executed. */
+function afterSetupStep<Output>(
+  ctx: GuardianContext,
+  toolName: string,
+  input: unknown,
+  runTool: RunTool<Output>,
+  step: SetupStep,
+  key: string,
+): () => Promise<GuardianDecisionResult | void> {
+  if (step === "install") {
+    return () => {
+      (ctx.installed ??= new Set()).add(key);
+      return enableRecordTransport(ctx, toolName, input, runTool, key);
+    };
+  }
+  return async () => {
+    ctx.ensured.add(key);
+  };
+}
+
+function isStillHeld(answer: {
+  ok: boolean;
+  decision?: unknown;
+  reasonCode?: unknown;
+}): boolean {
+  return answer.ok
+    ? answer.decision === "ASK"
+    : answer.reasonCode === "APPROVAL_PENDING" ||
+        answer.reasonCode === "APPROVAL_REQUIRED";
+}
+
+/**
+ * A retry of the tool call while a registration step is held: claim that
+ * request. Approved → execute it and carry on; still held → ASK again (the
+ * same requestId); anything else is a denial. The held entry is cleared only
+ * after a definitive answer: an outage, or a claim that throws, keeps it.
+ */
+async function claimHeldSetup<Output>(
+  ctx: GuardianContext,
+  toolName: string,
+  input: unknown,
+  runTool: RunTool<Output>,
+  key: string,
+  held: { step: SetupStep; requestId: string },
+): Promise<GuardianDecisionResult | void> {
+  const { options } = ctx;
+  const claimed = (await options.client.claim(
+    held.requestId,
+  )) as GuardianRequestResult;
+  if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+    return deny(
+      options,
+      toolName,
+      "SERVICE_UNAVAILABLE",
+      held.requestId,
+      "register",
+    );
+  }
+  // Definitive: governSetupStep re-holds it if the claim is still an ASK.
+  forgetHeldSetup(ctx, key, held.requestId);
+  const answer: GuardianRequestResult = isStillHeld(claimed)
+    ? {
+        ok: true,
+        requestId: held.requestId,
+        decision: "ASK",
+        reasonCode: claimed.reasonCode ?? "APPROVAL_PENDING",
+      }
+    : claimed;
+  return governSetupStep(ctx, toolName, input, runTool, answer, held.step, key);
+}
+
+/** Clear a held setup step, only if it is still this request. */
+function forgetHeldSetup(
+  ctx: GuardianContext,
+  key: string,
+  requestId: string,
+): void {
+  if (ctx.heldSetup?.get(key)?.requestId === requestId) {
+    ctx.heldSetup.delete(key);
+  }
+}
+
+/**
+ * One registration step (mcp.install or mcp.enable) through the
+ * ALLOW/ASK/DENY gate. ALLOW → execute it, then `next()`. ASK → pending
+ * handle whose `resume()` claims + executes the step, runs `next()`, then
+ * continues the original tool call end to end. DENY → typed denial.
+ * Returns a decision result only when the original call must stop here.
+ */
+async function governSetupStep<Output>(
+  ctx: GuardianContext,
+  toolName: string,
+  input: unknown,
+  runTool: RunTool<Output>,
+  proposed: GuardianRequestResult,
+  step: SetupStep,
+  key: string,
+): Promise<GuardianDecisionResult | void> {
+  const { options } = ctx;
+  const label =
+    step === "install"
+      ? `Installing the record-transport catalog entry for ${toolName}`
+      : `Enabling ${toolName} for this agent`;
+  const next = afterSetupStep(ctx, toolName, input, runTool, step, key);
+  let result = proposed;
   if (!result.ok) {
-    if (result.reasonCode === "TOOL_ALREADY_INSTALLED") {
-      ctx.ensured.add(key);
-      return;
-    }
     // The gateway reports a held registration as APPROVAL_REQUIRED
     // carrying its requestId — that is an ASK, not a denial.
     const held = result.requestId;
@@ -408,26 +723,37 @@ async function ensureRecordTransport<Output>(
         reasonCode: result.reasonCode,
       };
     } else {
-      return deny(options, toolName, result.reasonCode, undefined, "register");
+      return deny(
+        options,
+        toolName,
+        result.reasonCode,
+        nonEmpty(result.requestId),
+        "register",
+      );
     }
   }
-  if (result.decision === "ALLOW" && result.capabilityToken) {
+  const commit = async (requestId: string, capabilityToken: string) => {
     const executed = await options.client.execute({
-      requestId: result.requestId,
-      capabilityToken: result.capabilityToken,
+      requestId,
+      capabilityToken,
     });
     if (!executed.ok) {
       throw new GuardianExecutionFailed({
         toolName,
-        requestId: result.requestId,
+        requestId,
         reasonCode: executed.reasonCode,
       });
     }
-    ctx.ensured.add(key);
-    return;
+    return executed.receipt;
+  };
+  if (result.decision === "ALLOW" && result.capabilityToken) {
+    await commit(result.requestId, result.capabilityToken);
+    return next();
   }
   if (result.decision === "ASK") {
     const requestId = result.requestId;
+    // Remembered so a retry of the tool call claims this request.
+    (ctx.heldSetup ??= new Map()).set(key, { step, requestId });
     if (options.onAsk === "result") {
       return {
         guardian: {
@@ -435,72 +761,66 @@ async function ensureRecordTransport<Output>(
           requestId,
           toolName,
           message:
-            `Installing the record-transport catalog entry for ` +
-            `${toolName} needs human approval (requestId ${requestId}). ` +
+            `${label} needs human approval (requestId ${requestId}). ` +
             `Retry the tool call after approval.`,
         },
       };
     }
-    // resume() claims the install, executes it, then continues the original
-    // tool call end to end (propose → triad → impl/receipt).
-    const resumeInstall = async (): Promise<{
+    // resume() claims the step, executes it, runs the next step, then
+    // continues the original tool call (propose → triad → impl/receipt).
+    const resumeStep = async (): Promise<{
       requestId: string;
       receipt: unknown;
       output: Output | GuardianDecisionResult;
     }> => {
+      // The held entry stays until the claim is definitive: an outage (or a
+      // claim that throws) leaves it, so a retry claims this same request
+      // instead of proposing a new registration step.
       const claimed = await options.client.claim(requestId);
+      if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+        throw new GuardianDenied({
+          toolName,
+          reasonCode: claimed.reasonCode,
+          requestId,
+        });
+      }
       if (
         claimed.ok &&
         claimed.decision === "ALLOW" &&
         claimed.capabilityToken
       ) {
-        const executed = await options.client.execute({
-          requestId: claimed.requestId,
-          capabilityToken: claimed.capabilityToken,
-        });
-        if (!executed.ok) {
-          throw new GuardianExecutionFailed({
-            toolName,
-            requestId: claimed.requestId,
-            reasonCode: executed.reasonCode,
-          });
-        }
-        ctx.ensured.add(key);
-        const output = await runThroughGuardian(ctx, toolName, input, runTool);
-        return {
-          requestId: claimed.requestId,
-          receipt: executed.receipt,
-          output,
-        };
-      }
-      if (claimed.ok && claimed.decision === "ASK") {
-        throw new GuardianApprovalPending(
-          { requestId: claimed.requestId, toolName, input },
-          resumeInstall,
+        forgetHeldSetup(ctx, key, requestId);
+        const receipt = await commit(
+          claimed.requestId,
+          claimed.capabilityToken,
         );
+        const gate = await next();
+        const output =
+          gate !== undefined
+            ? gate
+            : await runThroughGuardian(ctx, toolName, input, runTool);
+        return { requestId: claimed.requestId, receipt, output };
       }
       // Claimed before the human decided — still held, not denied.
-      if (
-        !claimed.ok &&
-        (claimed.reasonCode === "APPROVAL_PENDING" ||
-          claimed.reasonCode === "APPROVAL_REQUIRED")
-      ) {
+      if (isStillHeld(claimed)) {
+        (ctx.heldSetup ??= new Map()).set(key, { step, requestId });
         throw new GuardianApprovalPending(
           { requestId, toolName, input },
-          resumeInstall,
+          resumeStep,
         );
       }
+      forgetHeldSetup(ctx, key, requestId);
       throw new GuardianDenied({
         toolName,
         reasonCode: claimed.ok
           ? (claimed.reasonCode ?? "MISSING_CAPABILITY")
           : claimed.reasonCode,
-        ...(claimed.ok ? { requestId: claimed.requestId } : {}),
+        requestId: claimed.ok ? claimed.requestId : requestId,
       });
     };
     throw new GuardianApprovalPending(
       { requestId, toolName, input },
-      resumeInstall,
+      resumeStep,
     );
   }
   return deny(
@@ -512,19 +832,266 @@ async function ensureRecordTransport<Output>(
   );
 }
 
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The local tool. It receives its own fresh, unfrozen copy of the input
+ * that Guardian was asked to approve (a copy of the frozen snapshot); a
+ * runner that ignores it keeps its own reference.
+ */
+export type RunTool<Output> = (input: unknown) => Output | PromiseLike<Output>;
+
+/**
+ * A deep-frozen copy of the call's input. The same copy is proposed to
+ * Guardian and exposed as `GuardianApprovalPending.input`, so nothing can
+ * change the arguments between approval and execution. The tool runs on its
+ * own unfrozen clone of this copy, made just before it runs.
+ */
+function snapshotInput(toolName: string, input: unknown): unknown {
+  let copy: unknown;
+  try {
+    copy = structuredClone(input);
+  } catch {
+    throw new TypeError(
+      `Guardian could not copy the input of "${toolName}": it must be plain ` +
+        `data (structuredClone failed). Nothing was proposed or run.`,
+    );
+  }
+  if (!sameShape(input, copy, new Set())) {
+    throw new TypeError(
+      `Guardian could not copy the input of "${toolName}" faithfully: it ` +
+        `holds a class instance or other non-plain object whose methods a ` +
+        `copy would lose. Pass plain data. Nothing was proposed or run.`,
+    );
+  }
+  return deepFreeze(copy);
+}
+
+/**
+ * True when the copy kept every object's prototype. structuredClone turns a
+ * class instance into a plain object, so the impl would fail only after an
+ * ALLOW; refuse that before proposing instead.
+ */
+function sameShape(
+  original: unknown,
+  copy: unknown,
+  seen: Set<object>,
+): boolean {
+  if (original === null || typeof original !== "object") return true;
+  if (seen.has(original)) return true;
+  seen.add(original);
+  if (
+    copy === null ||
+    typeof copy !== "object" ||
+    Object.getPrototypeOf(original) !== Object.getPrototypeOf(copy)
+  ) {
+    return false;
+  }
+  if (original instanceof Map && copy instanceof Map) {
+    for (const [key, value] of original) {
+      if (!sameShape(value, copy.get(key), seen)) return false;
+    }
+    return true;
+  }
+  if (ArrayBuffer.isView(original) || original instanceof Set) return true;
+  for (const key of Object.keys(original)) {
+    if (
+      !sameShape(
+        (original as Record<string, unknown>)[key],
+        (copy as Record<string, unknown>)[key],
+        seen,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Object.isFrozen(value) ||
+    ArrayBuffer.isView(value)
+  ) {
+    return value;
+  }
+  Object.freeze(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreeze((value as Record<PropertyKey, unknown>)[key]);
+  }
+  return value;
+}
+
+/** Key of a held `tool.invoke` request; undefined if it cannot be formed. */
+function invocationKey(
+  connectionId: string,
+  toolName: string,
+  input: unknown,
+): string | undefined {
+  try {
+    const digest = sha256Text(canonicalJson(toArgumentsRecord(input)));
+    return `${connectionId}:${toolName}:${digest}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function forgetHeldInvocation(
+  ctx: GuardianContext,
+  key: string | undefined,
+  requestId: string,
+): void {
+  if (key !== undefined && ctx.heldInvocations?.get(key) === requestId) {
+    ctx.heldInvocations.delete(key);
+  }
+}
+
+/**
+ * Run `onReceipt` for a completed action. Its error is reported on the side
+ * and never changes the result: the action already happened.
+ */
+async function notifyReceipt(
+  options: GuardianAdapterOptions,
+  event: { toolName: string; requestId: string; receipt: unknown },
+): Promise<void> {
+  if (options.onReceipt === undefined) {
+    return;
+  }
+  try {
+    await options.onReceipt(event);
+  } catch (error) {
+    try {
+      if (options.onReceiptError !== undefined) {
+        options.onReceiptError(error, event);
+      } else {
+        console.warn(
+          `Guardian: onReceipt failed for "${event.toolName}" ` +
+            `(requestId=${event.requestId}); the action completed and its ` +
+            `result was returned.`,
+          error,
+        );
+      }
+    } catch {
+      // A failing error reporter changes nothing either.
+    }
+  }
+}
+
+/** True when an execute failure may hide a performed action. */
+function executeOutcomeUnknown(executed: {
+  reasonCode: string;
+  outcomeUnknown?: boolean;
+}): boolean {
+  return (
+    executed.outcomeUnknown === true ||
+    executed.reasonCode === "SERVICE_UNAVAILABLE" ||
+    /^HTTP_(0|5\d\d)$/.test(executed.reasonCode)
+  );
+}
+
+/**
+ * Turn a tool output that is an async iterable (an async generator, as AI
+ * SDK streaming tools return) or a generator into its final value. Calling a
+ * generator function runs none of its body, so redeeming the capability
+ * before it is consumed would record an action that never ran. The output
+ * is consumed to completion first; its last value is the result, as AI SDK
+ * treats a streaming tool. A throw while consuming propagates and nothing is
+ * redeemed, as for any tool that throws.
+ */
+async function drainIterable(output: unknown): Promise<unknown> {
+  if (output === null || typeof output !== "object") {
+    return output;
+  }
+  // Only generator functions (the AI SDK's streaming-tool shape) are run to
+  // completion. Streams and other async iterables (a web ReadableStream, a
+  // Node Readable) are data, not a tool body: return them unchanged.
+  const tag = Object.prototype.toString.call(output);
+  if (tag !== "[object AsyncGenerator]" && tag !== "[object Generator]") {
+    return output;
+  }
+  let last: unknown;
+  for await (const value of output as AsyncIterable<unknown>) {
+    last = value;
+  }
+  return last;
+}
+
+type LookupAnswer =
+  | { state: "verified"; receipt: unknown }
+  | { state: "not-sent" }
+  | { state: "unknown" };
+
+/**
+ * After a lost or unconfirmed execute: ask Guardian for the request's
+ * recorded attempts. Only a verified attempt or a definitive abort settles
+ * it; anything else (none recorded yet, still committing, the lookup
+ * failing) stays unknown.
+ */
+async function lookUpExecution(
+  client: GuardianClient,
+  requestId: string,
+): Promise<LookupAnswer> {
+  let answer: Awaited<ReturnType<GuardianClient["receipts"]>> | undefined;
+  try {
+    answer = await client.receipts(requestId);
+  } catch {
+    return { state: "unknown" };
+  }
+  if (answer?.ok !== true || !Array.isArray(answer.receipts)) {
+    return { state: "unknown" };
+  }
+  const records = answer.receipts as readonly {
+    state?: unknown;
+    attemptId?: unknown;
+  }[];
+  const verified = records.find((record) => record?.state === "verified");
+  if (verified !== undefined) {
+    return {
+      state: "verified",
+      receipt: {
+        schemaVersion: 1,
+        requestId,
+        receiptReference: verified.attemptId,
+        status: "sent-verified",
+      },
+    };
+  }
+  if (
+    records.length > 0 &&
+    records.every(
+      (record) =>
+        record?.state === "aborted" || record?.state === "commit-rejected",
+    )
+  ) {
+    return { state: "not-sent" };
+  }
+  return { state: "unknown" };
+}
+
 /**
  * The triad applied to an already-answered request (request or claim).
  * remote: ALLOW → execute (Guardian performs the call) → receipt is the
  * output; the local impl never runs.
  * inProcess: ALLOW → run the impl → execute redeems + records → impl output.
  * ASK → pending handle; DENY → typed denial.
+ *
+ * When the execute was sent but its outcome is unknown (no answer, a 5xx,
+ * an unreadable answer, or an `outcome-pending` / `outcome-unconfirmed`
+ * receipt), the request is looked up first. If that does not settle it,
+ * the call throws `GuardianExecutionFailed` with `outcomeUnknown: true` and
+ * reasonCode `EXECUTION_OUTCOME_UNKNOWN`: the action may have happened and
+ * must not be retried.
  */
 export async function settle<Output>(
   ctx: GuardianContext,
   toolName: string,
   input: unknown,
   result: GuardianRequestResult,
-  runTool: () => Output | PromiseLike<Output>,
+  runTool: RunTool<Output>,
 ): Promise<Output | GuardianDecisionResult> {
   const { options } = ctx;
   const mode = toolModeFor(options, toolName);
@@ -553,33 +1120,93 @@ export async function settle<Output>(
         runTool,
       );
     }
-    return deny(options, toolName, result.reasonCode, undefined);
+    // Keep the server's requestId on a refusal (e.g. NOT_AUTHORIZED
+    // for a grant that is off) so the agent can quote it and the operator
+    // can find Guardian's record of the denial.
+    return deny(
+      options,
+      toolName,
+      result.reasonCode,
+      nonEmpty(heldRequestId),
+      "invoke",
+    );
   }
   if (result.decision === "ALLOW" && result.capabilityToken) {
     const requestId = result.requestId;
+    const unknownOutcome = async (
+      localEffectRan: boolean,
+      detail: string,
+      receipt?: unknown,
+    ): Promise<unknown> => {
+      const found = await lookUpExecution(options.client, requestId);
+      if (found.state === "verified") {
+        return found.receipt;
+      }
+      if (found.state === "not-sent") {
+        throw new GuardianExecutionFailed({
+          toolName,
+          requestId,
+          reasonCode: localEffectRan ? detail : "EXECUTION_NOT_SENT",
+          localEffectRan,
+          ...(receipt === undefined ? {} : { receipt }),
+        });
+      }
+      throw new GuardianExecutionFailed({
+        toolName,
+        requestId,
+        reasonCode: EXECUTION_OUTCOME_UNKNOWN,
+        localEffectRan,
+        outcomeUnknown: true,
+        detail,
+        ...(receipt === undefined ? {} : { receipt }),
+      });
+    };
     if (mode === "remote") {
       const executed = await options.client.execute({
         requestId,
         capabilityToken: result.capabilityToken,
       });
+      let receipt: unknown;
       if (!executed.ok) {
-        throw new GuardianExecutionFailed({
-          toolName,
-          requestId,
-          reasonCode: executed.reasonCode,
-        });
+        if (!executeOutcomeUnknown(executed)) {
+          throw new GuardianExecutionFailed({
+            toolName,
+            requestId,
+            reasonCode: executed.reasonCode,
+          });
+        }
+        receipt = await unknownOutcome(false, executed.reasonCode);
+      } else {
+        // Guardian performed the call; only `sent-verified` means the
+        // upstream accepted it. `not-sent` is a definitive failure; any
+        // other status (`outcome-pending`, `outcome-unconfirmed`) means the
+        // action may have happened. Never an ALLOW success handed to the
+        // model.
+        receipt = executed.receipt;
+        const status = (executed.receipt as { status?: unknown }).status;
+        if (status === "not-sent") {
+          throw new GuardianExecutionFailed({
+            toolName,
+            requestId,
+            reasonCode: "EXECUTION_NOT_SENT",
+            receipt: executed.receipt,
+          });
+        }
+        if (status !== "sent-verified") {
+          receipt = await unknownOutcome(
+            false,
+            String(status ?? "unknown"),
+            executed.receipt,
+          );
+        }
       }
-      await options.onReceipt?.({
-        toolName,
-        requestId,
-        receipt: executed.receipt,
-      });
+      await notifyReceipt(options, { toolName, requestId, receipt });
       return {
         guardian: {
           decision: "ALLOW",
           requestId,
           toolName,
-          receipt: executed.receipt,
+          receipt,
         },
       };
     }
@@ -588,29 +1215,68 @@ export async function settle<Output>(
     // checks (revocation, expiry, single use) therefore land after the
     // effect. This is decision-gated, not pre-execution enforcement; use
     // `remote` mode where Guardian must hold the effect itself.
-    const output = await runTool();
+    // The execution receipt does not say which transport performed it, so
+    // the record-transport check cannot happen here, after the impl ran:
+    // ensureRecordTransport refuses an entry it did not install, and
+    // `installRecordTransport: false` means the developer registered it in
+    // the console as record-only.
+    // A streaming tool (async generator) runs to completion before the
+    // capability is redeemed, so the record never precedes the action.
+    // The impl gets its own unfrozen copy of the approved (frozen) input:
+    // an impl that mutates its input after its effect keeps working, and
+    // nothing outside can reach the object the impl runs on.
+    const output = (await drainIterable(
+      await runTool(structuredClone(input)),
+    )) as Output;
     const executed = await options.client.execute({
       requestId,
       capabilityToken: result.capabilityToken,
     });
+    let receipt: unknown;
     if (!executed.ok) {
-      throw new GuardianExecutionFailed({
-        toolName,
-        requestId,
-        reasonCode: executed.reasonCode,
-        localEffectRan: true,
-      });
+      if (!executeOutcomeUnknown(executed)) {
+        throw new GuardianExecutionFailed({
+          toolName,
+          requestId,
+          reasonCode: executed.reasonCode,
+          localEffectRan: true,
+        });
+      }
+      receipt = await unknownOutcome(true, executed.reasonCode);
+    } else {
+      // The impl already ran. `not-sent` means Guardian did not record it:
+      // a definitive failure after the effect (never success).
+      // `outcome-pending` / `outcome-unconfirmed` leave the record unknown.
+      receipt = executed.receipt;
+      const status = (executed.receipt as { status?: unknown }).status;
+      if (status === "not-sent") {
+        throw new GuardianExecutionFailed({
+          toolName,
+          requestId,
+          reasonCode: "EXECUTION_NOT_SENT",
+          localEffectRan: true,
+          receipt: executed.receipt,
+        });
+      }
+      if (status === "outcome-pending" || status === "outcome-unconfirmed") {
+        receipt = await unknownOutcome(true, status, executed.receipt);
+      }
     }
-    await options.onReceipt?.({
-      toolName,
-      requestId,
-      receipt: executed.receipt,
-    });
+    await notifyReceipt(options, { toolName, requestId, receipt });
     return output;
   }
   if (result.decision === "ASK") {
+    const heldKey = invocationKey(options.connectionId, toolName, input);
+    if (heldKey !== undefined) {
+      // Remembered so a retry with the same arguments claims this request.
+      (ctx.heldInvocations ??= new Map()).set(heldKey, result.requestId);
+    }
     const resume = async () => {
       const claimed = await options.client.claim(result.requestId);
+      if (claimed.ok || claimed.reasonCode !== "SERVICE_UNAVAILABLE") {
+        // Definitive: settle re-remembers it if it is still held.
+        forgetHeldInvocation(ctx, heldKey, result.requestId);
+      }
       let receipt: unknown;
       const output = await settle(
         {
@@ -637,8 +1303,10 @@ export async function settle<Output>(
           requestId: result.requestId,
           toolName,
           message:
-            `Held for human approval. After approval, claim requestId ` +
-            `${result.requestId} and re-run the tool.`,
+            `Held for human approval (requestId ${result.requestId}). ` +
+            `Once a person approves it, call this tool again with exactly ` +
+            `the same arguments: Guardian then uses the approved request ` +
+            `instead of opening a new one.`,
         },
       };
     }
@@ -648,37 +1316,67 @@ export async function settle<Output>(
     );
   }
   // DENY, or ALLOW with no capability — never run the tool either way.
-  return deny(
-    options,
-    toolName,
-    result.reasonCode ?? "MISSING_CAPABILITY",
-    result.requestId,
-  );
+  const reasonCode = result.reasonCode ?? "MISSING_CAPABILITY";
+  return deny(options, toolName, reasonCode, result.requestId, "invoke");
 }
 
-/** Ensure the record-transport entry (inProcess), propose, settle. */
+/**
+ * Ensure the record-transport entry (inProcess), propose, settle. The input
+ * is copied and frozen first (the impl later gets its own unfrozen clone); a retry of a call held for approval, with the
+ * same arguments, claims the held request instead of proposing a new one.
+ */
 export async function runThroughGuardian<Output>(
   ctx: GuardianContext,
   toolName: string,
   input: unknown,
-  runTool: () => Output | PromiseLike<Output>,
+  runTool: RunTool<Output>,
 ): Promise<Output | GuardianDecisionResult> {
   const { options } = ctx;
+  const snapshot = snapshotInput(toolName, input);
   if (toolModeFor(options, toolName) === "inProcess") {
-    const gate = await ensureRecordTransport(ctx, toolName, input, runTool);
+    const gate = await ensureRecordTransport(ctx, toolName, snapshot, runTool);
     if (gate !== undefined) {
       return gate;
     }
+  }
+  const heldKey = invocationKey(options.connectionId, toolName, snapshot);
+  const heldRequestId =
+    heldKey === undefined ? undefined : ctx.heldInvocations?.get(heldKey);
+  if (heldRequestId !== undefined) {
+    const claimed = await options.client.claim(heldRequestId);
+    if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") {
+      // Not definitive: keep it held so the next retry claims it again.
+      return deny(
+        options,
+        toolName,
+        "SERVICE_UNAVAILABLE",
+        heldRequestId,
+        "invoke",
+      );
+    }
+    // Definitive: settle remembers it again if it is still held.
+    forgetHeldInvocation(ctx, heldKey, heldRequestId);
+    const answer: GuardianRequestResult = isStillHeld(claimed)
+      ? {
+          ok: true,
+          requestId: heldRequestId,
+          decision: "ASK",
+          reasonCode: claimed.reasonCode ?? "APPROVAL_PENDING",
+        }
+      : claimed.ok
+        ? claimed
+        : { ...claimed, requestId: claimed.requestId ?? heldRequestId };
+    return settle(ctx, toolName, snapshot, answer, runTool);
   }
   const result = await options.client.request({
     action: "tool.invoke",
     connectionId: options.connectionId,
     toolName,
-    arguments: toArgumentsRecord(input),
+    arguments: toArgumentsRecord(snapshot),
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
-    purpose: resolvePurpose(options, toolName, input),
+    purpose: resolvePurpose(options, toolName, snapshot),
   });
-  return settle(ctx, toolName, input, result, runTool);
+  return settle(ctx, toolName, snapshot, result, runTool);
 }
 
 /**
@@ -719,19 +1417,20 @@ export type Guard = <Input, Output>(
 export function createGuard(options: GuardOptions): Guard {
   // Production denies first-use auto-registration unless the grant
   // pins mcp.install, so createGuard expects the tool to be registered once
-  // in the console (record-only). Pass installRecordTransport: true to opt
-  // back in.
+  // in the console (record-only). installRecordTransport: true opts in, for
+  // a tool with no entry yet (createGuardianContext's default is off too).
   const ctx = createGuardianContext({
     ...options,
     mode: options.mode ?? "inProcess",
-    installRecordTransport: options.installRecordTransport ?? false,
   });
   return <Input, Output>(
       toolName: string,
       impl: (input: Input) => Output | PromiseLike<Output>,
     ): GuardedFunction<Input, Output> =>
     (input: Input) =>
-      runThroughGuardian<Output>(ctx, toolName, input, () => impl(input));
+      runThroughGuardian<Output>(ctx, toolName, input, (approved) =>
+        impl(approved as Input),
+      );
 }
 
 /** One-off form of `createGuard(options)(toolName, impl)`. */

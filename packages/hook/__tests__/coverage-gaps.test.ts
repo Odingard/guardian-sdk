@@ -95,9 +95,13 @@ describe("interactive sessions go to the Ask tier (Codex write_stdin gap)", () =
     "telnet prod-1 25",
     "bash -c 'bash'",
     'sh -c "python3"',
-    "bash -c 'while read l; do eval \"$l\"; done'",
   ])("%s → shell_session", (command) => {
     expect(classifyCommand(command)).toBe("shell_session");
+  });
+
+  it("a read-eval loop is Ask tier (eval of run-time text cannot be parsed)", () => {
+    const tool = classifyCommand("bash -c 'while read l; do eval \"$l\"; done'");
+    expect(tierOf(tool)).toBe("ask");
   });
 
   it.each([
@@ -218,12 +222,14 @@ describe("the dsh matcher selects every tool the hook governs", () => {
     }
   });
 
-  it("dsh apply_patch ({input: patch}) is governed as file_write with its paths", () => {
+  it("dsh apply_patch ({input: patch}) is governed with its paths", () => {
     const call = governedCall({
       tool: "apply_patch",
       input: { input: PATCH },
     })!;
-    expect(call.toolName).toBe("file_write");
+    // The patch adds .codex/hooks.json (agent hook config): Ask tier.
+    expect(call.toolName).toBe("shell_destructive");
+    expect(call.arguments.touches).toBe("agent-config");
     expect(call.arguments.operations).toEqual([
       "delete src/auth.ts",
       "add .codex/hooks.json",

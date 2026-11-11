@@ -19,11 +19,12 @@ INSTALLED = RequestResult(ok=False, reason_code="TOOL_ALREADY_INSTALLED")
 
 
 class FakeClient:
-    def __init__(self, invoke, claims=(), execute_ok=True, install=INSTALLED):
+    def __init__(self, invoke, claims=(), execute_ok=True, install=INSTALLED, receipt_status="sent-verified"):
         self.invoke = invoke
         self.claims = list(claims)
         self.execute_ok = execute_ok
         self.install = install
+        self.receipt_status = receipt_status
         self.calls = []
 
     def request(self, invocation):
@@ -41,7 +42,9 @@ class FakeClient:
         self.calls.append(f"execute:{request_id}")
         if not self.execute_ok:
             return ExecuteResult(ok=False, reason_code="CAPABILITY_REVOKED")
-        return ExecuteResult(ok=True, receipt={"schemaVersion": 1, "requestId": request_id})
+        return ExecuteResult(
+            ok=True, receipt={"schemaVersion": 1, "requestId": request_id, "status": self.receipt_status}
+        )
 
 
 class AsyncFake(AsyncGuardianClient):
@@ -225,10 +228,13 @@ def test_wo050_denied_registration_explains_how_to_register_and_nothing_runs():
     )
     with pytest.raises(GuardianDenied) as err:
         pay()
-    assert err.value.reason_code == "INVALID_REQUEST"
+    # INVALID_REQUEST is how hosted Guardian answers for a tool already
+    # registered: the entry may be an HTTP tool, so nothing runs.
+    assert err.value.reason_code == "RECORD_TRANSPORT_UNVERIFIED"
     assert "record-only" in err.value.hint
     assert "install_record_transport=False" in str(err.value)
     assert ran == []
+    assert client.calls == ["request:mcp.install"]
 
 
 def test_wo050_invalid_request_and_plan_limit_hints():
@@ -247,3 +253,203 @@ def test_wo050_policy_deny_has_no_hint():
     with pytest.raises(GuardianDenied) as err:
         Guard(client, connection_id=CONNECTION)("x")(lambda: None)()
     assert err.value.hint is None
+
+
+def test_on_ask_result_rerun_after_approval_claims_the_held_request():
+    # Before the fix, calling the tool again (as the ASK message says) proposed a
+    # fresh request that needed a fresh approval, so the approved one never ran.
+    approved = RequestResult(ok=True, request_id="req_ask", decision="ALLOW", capability_token="cap")
+    client = FakeClient(HELD, claims=[RequestResult(ok=False, request_id="req_ask", reason_code="APPROVAL_PENDING"), approved])
+    guard = Guard(client, connection_id=CONNECTION, on_ask="result")
+    ran = []
+
+    @guard("pay_invoice")
+    def pay(invoice_id: str):
+        ran.append(invoice_id)
+        return "paid"
+
+    first = pay("INV-1")
+    assert first["guardian"]["decision"] == "ASK" and first["guardian"]["request_id"] == "req_ask"
+    # Still pending: the same request, no second proposal.
+    again = pay("INV-1")
+    assert again["guardian"]["request_id"] == "req_ask"
+    assert pay("INV-1") == "paid"
+    assert ran == ["INV-1"]
+    assert client.calls == ["request:tool.invoke", "claim:req_ask", "claim:req_ask", "execute:req_ask"]
+    # Different arguments are a different proposal.
+    client.invoke = ALLOW
+    assert pay("INV-2") == "paid"
+    assert client.calls[-2:] == ["request:tool.invoke", "execute:req_allow"]
+
+
+def test_on_ask_result_rerun_after_denial_returns_deny_once():
+    denied = RequestResult(ok=False, request_id="req_ask", reason_code="NOT_AUTHORIZED")
+    client = FakeClient(HELD, claims=[denied])
+    guard = Guard(client, connection_id=CONNECTION, on_ask="result", on_deny="result")
+
+    @guard("pay_invoice")
+    def pay(invoice_id: str):
+        raise AssertionError("must not run")
+
+    assert pay("INV-1")["guardian"]["decision"] == "ASK"
+    out = pay("INV-1")
+    assert out["guardian"]["decision"] == "DENY" and out["guardian"]["reason_code"] == "NOT_AUTHORIZED"
+
+
+def test_on_ask_result_outage_while_claiming_keeps_the_request_held():
+    approved = RequestResult(ok=True, request_id="req_ask", decision="ALLOW", capability_token="cap")
+    down = RequestResult(ok=False, reason_code="SERVICE_UNAVAILABLE")
+    client = FakeClient(HELD, claims=[down, approved])
+    guard = Guard(client, connection_id=CONNECTION, on_ask="result", on_deny="result")
+    ran = []
+
+    @guard("pay_invoice")
+    def pay(invoice_id: str):
+        ran.append(invoice_id)
+        return "paid"
+
+    assert pay("INV-1")["guardian"]["decision"] == "ASK"
+    assert pay("INV-1")["guardian"]["reason_code"] == "SERVICE_UNAVAILABLE"
+    assert ran == []
+    # The next try claims the same request instead of proposing a new one.
+    assert pay("INV-1") == "paid"
+    assert ran == ["INV-1"]
+    assert client.calls.count("request:tool.invoke") == 1
+
+
+def test_refusal_keeps_guardians_request_id():
+    client = FakeClient(RequestResult(ok=False, request_id="req_denied", reason_code="NOT_AUTHORIZED"))
+    with pytest.raises(GuardianDenied) as err:
+        Guard(client, connection_id=CONNECTION)("pay_invoice")(lambda: None)()
+    assert err.value.request_id == "req_denied"
+
+
+@pytest.mark.parametrize("status", ["outcome-pending", "not-sent", "outcome-unconfirmed"])
+def test_remote_mode_unverified_receipt_is_an_execution_failure_not_an_allow(status):
+    client = FakeClient(ALLOW, receipt_status=status)
+    receipts = []
+    guard = Guard(client, connection_id=CONNECTION, mode="remote", on_receipt=lambda t, r, rc: receipts.append(r))
+    with pytest.raises(GuardianExecutionFailed) as err:
+        guard("pay")(lambda: None)()
+    assert err.value.reason_code == "EXECUTION_" + status.upper().replace("-", "_")
+    assert err.value.receipt["status"] == status
+    assert receipts == []
+
+
+def test_remote_mode_sent_verified_is_an_allow_with_its_receipt():
+    client = FakeClient(ALLOW)
+    receipts = []
+    guard = Guard(client, connection_id=CONNECTION, mode="remote", on_receipt=lambda t, r, rc: receipts.append(r))
+    out = guard("pay")(lambda: None)()
+    assert out["guardian"]["decision"] == "ALLOW" and receipts == ["req_allow"]
+
+
+def test_outage_while_claiming_a_held_registration_keeps_it_held():
+    approved = RequestResult(ok=True, request_id="req_install", decision="ALLOW", capability_token="capi")
+    down = RequestResult(ok=False, reason_code="SERVICE_UNAVAILABLE")
+    client = FakeClient(
+        ALLOW,
+        install=RequestResult(ok=False, request_id="req_install", reason_code="APPROVAL_REQUIRED"),
+        claims=[down, approved],
+    )
+    guard = Guard(client, connection_id=CONNECTION, install_record_transport=True, on_ask="result", on_deny="result")
+    ran = []
+    pay = guard("pay")(lambda: ran.append(1) or "paid")
+    assert pay()["guardian"]["decision"] == "ASK"
+    out = pay()["guardian"]
+    assert out["reason_code"] == "SERVICE_UNAVAILABLE"
+    assert "could not be reached" in out["message"] and "Do not retry" not in out["message"]
+    assert ran == []
+    # The next try claims the same registration; no second approval is needed.
+    assert pay() == "paid"
+    assert client.calls.count("request:mcp.install") == 1
+    assert client.calls.count("claim:req_install") == 2
+
+
+def test_outage_result_wording_says_try_again_not_denied():
+    client = FakeClient(RequestResult(ok=False, reason_code="SERVICE_UNAVAILABLE"))
+    out = Guard(client, connection_id=CONNECTION, on_deny="result")("pay")(lambda: None)()
+    assert out["guardian"]["decision"] == "DENY"
+    assert "Try again later" in out["guardian"]["message"]
+    assert "Do not retry" not in out["guardian"]["message"]
+
+
+@pytest.mark.parametrize("answer", ["TOOL_ALREADY_INSTALLED", "INVALID_REQUEST"])
+def test_already_installed_is_refused_before_anything_runs(answer):
+    # The existing entry could be an HTTP tool: running the function and then
+    # redeeming would make Guardian perform the call too.
+    client = FakeClient(ALLOW, install=RequestResult(ok=False, request_id="req_i", reason_code=answer))
+    ran = []
+    pay = Guard(client, connection_id=CONNECTION, install_record_transport=True)("send_note")(
+        lambda: ran.append(1)
+    )
+    with pytest.raises(GuardianDenied) as err:
+        pay()
+    assert err.value.reason_code == "RECORD_TRANSPORT_UNVERIFIED"
+    assert err.value.request_id == "req_i"
+    assert answer in err.value.hint
+    assert "install_record_transport=False" in err.value.hint
+    assert ran == []
+    # Not proposed, not redeemed: no effect at all. A retry asks again.
+    assert client.calls == ["request:mcp.install"]
+    with pytest.raises(GuardianDenied):
+        pay()
+    assert ran == []
+    assert "request:tool.invoke" not in client.calls
+
+
+class SharedGuardian(FakeClient):
+    """One Guardian seen by several Guards (a restart, another worker)."""
+
+    def __init__(self):
+        super().__init__(ALLOW)
+        self.entry = False
+
+    def request(self, invocation):
+        if invocation["action"] == "mcp.install":
+            self.calls.append("request:mcp.install")
+            if self.entry:
+                return INSTALLED
+            return RequestResult(ok=True, request_id="req_install", decision="ALLOW", capability_token="capi")
+        return super().request(invocation)
+
+    def execute(self, *, request_id, capability_token):
+        if request_id == "req_install":
+            self.entry = True
+        return super().execute(request_id=request_id, capability_token=capability_token)
+
+
+def test_a_new_guard_opted_in_is_refused_for_an_entry_an_earlier_guard_installed():
+    client = SharedGuardian()
+    ran = []
+
+    def body():
+        ran.append(1)
+        return "sent"
+
+    # Run 1: no entry yet, so this Guard registers it and remembers it.
+    first = Guard(client, connection_id=CONNECTION, install_record_transport=True)("send_note")(body)
+    assert first() == "sent"
+    assert first() == "sent"
+    assert client.calls.count("request:mcp.install") == 1
+    assert ran == [1, 1]
+
+    # Run 2, after a restart: the in-memory record is gone, so the SDK
+    # cannot tell its own entry from an HTTP tool and refuses.
+    client.calls.clear()
+    second = Guard(client, connection_id=CONNECTION, install_record_transport=True, on_deny="result")(
+        "send_note"
+    )(body)
+    out = second()["guardian"]
+    assert out["decision"] == "DENY"
+    assert out["reason_code"] == "RECORD_TRANSPORT_UNVERIFIED"
+    assert "Automatic registration only works while no entry with that name exists" in out["message"]
+    assert client.calls == ["request:mcp.install"]
+    assert ran == [1, 1]
+
+    # Run 3, with the default (the tool is registered as record-only): runs.
+    client.calls.clear()
+    third = Guard(client, connection_id=CONNECTION)("send_note")(body)
+    assert third() == "sent"
+    assert client.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert ran == [1, 1, 1]

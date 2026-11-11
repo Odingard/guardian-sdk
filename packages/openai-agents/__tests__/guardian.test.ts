@@ -49,7 +49,12 @@ const denyResult = (reasonCode = "POLICY_DENY") => ({
   requestId: "req_deny",
   reasonCode,
 });
-const receipt = (id = "rcpt_1") => ({ ok: true as const, receipt: { id } });
+// "sent-verified" is the status Guardian gives a call it performed and the
+// upstream accepted; remote mode treats any other status as a failure.
+const receipt = (id = "rcpt_1") => ({
+  ok: true as const,
+  receipt: { id, status: "sent-verified" },
+});
 
 function refundTool(
   run: (input: { orderId: string; amount: number }) => unknown,
@@ -182,6 +187,29 @@ describe("guardianTool: ALLOW", () => {
     expect(out).toMatchObject({
       guardian: { decision: "ALLOW", receipt: { id: "rcpt_r" } },
     });
+  });
+
+  it("remote mode: a call the upstream did not accept is not reported as ALLOW", async () => {
+    const run = vi.fn();
+    const onReceipt = vi.fn();
+    const t = refundTool(run, {
+      client: stubClient({
+        request: vi.fn().mockResolvedValue(allow()),
+        execute: vi.fn().mockResolvedValue({
+          ok: true,
+          receipt: { id: "rcpt_r", status: "outcome-pending" },
+        }),
+      }),
+      connectionId: "con_1",
+      mode: "remote",
+      onReceipt,
+    });
+    const out = await invoke(t, { orderId: "o", amount: 1 });
+    expect(run).not.toHaveBeenCalled();
+    expect(onReceipt).not.toHaveBeenCalled();
+    expect(String(out)).toMatch(
+      /^Guardian could not confirm that refund_order completed \(EXECUTION_OUTCOME_UNKNOWN, requestId [^)]+\)\. It may have run\. Do not call it again/,
+    );
   });
 
   it("ALLOW without a capability never runs", async () => {
@@ -501,7 +529,7 @@ describe("guardianTool: hooks and default error handling", () => {
       },
     });
     await expect(invoke(t, { orderId: "o", amount: 1 })).resolves.toBe(
-      "Guardian could not check refund_order, so it did not run.",
+      "Guardian could not check refund_order, so it did not run. Try again later.",
     );
     expect(run).not.toHaveBeenCalled();
   });
@@ -520,7 +548,27 @@ describe("guardianTool: Guardian errors fail closed", () => {
     });
     const out = await invoke(t, { orderId: "o", amount: 1 });
     expect(out).toBe(
-      "Guardian could not check refund_order, so it did not run.",
+      "Guardian could not check refund_order, so it did not run. Try again later.",
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(onGuardianError).toHaveBeenCalledOnce();
+  });
+
+  it("an unreachable Guardian as the real client reports it (ok:false SERVICE_UNAVAILABLE) is not a denial", async () => {
+    const run = vi.fn();
+    const onGuardianError = vi.fn();
+    const t = refundTool(run, {
+      client: stubClient({
+        request: vi
+          .fn()
+          .mockResolvedValue({ ok: false, reasonCode: "SERVICE_UNAVAILABLE" }),
+      }),
+      connectionId: "con_1",
+      onGuardianError,
+    });
+    const out = await invoke(t, { orderId: "o", amount: 1 });
+    expect(out).toBe(
+      "Guardian could not check refund_order, so it did not run. Try again later.",
     );
     expect(run).not.toHaveBeenCalled();
     expect(onGuardianError).toHaveBeenCalledOnce();
@@ -543,7 +591,7 @@ describe("guardianTool: Guardian errors fail closed", () => {
     });
     const out = await invoke(t, { orderId: "o", amount: 1 });
     expect(out).toBe(
-      "Guardian could not check refund_order, so it did not run.",
+      "Guardian could not check refund_order, so it did not run. Try again later.",
     );
     answer(allow());
     await new Promise((r) => setTimeout(r, 20));
@@ -782,22 +830,29 @@ describe("in an Agents SDK run", () => {
     await runner().run(agent, "deploy");
     expect(run).not.toHaveBeenCalled();
     expect(toolOutputs(model.requests[1]!).call_1).toBe(
-      "Guardian could not check deploy, so it did not run.",
+      "Guardian could not check deploy, so it did not run. Try again later.",
     );
   });
 });
 
 describe("review fixes", () => {
   const installAllow = () => allow("req_install", "cap_install");
+  // A fresh install is then enabled for the agent (mcp.enable).
+  const alreadyEnabled = () => ({
+    ok: false as const,
+    reasonCode: "TOOL_ALREADY_ENABLED",
+  });
 
   function hungInvoke() {
     let answer!: (v: unknown) => void;
     const request = vi.fn((input: { action: string }) =>
       input.action === "mcp.install"
         ? Promise.resolve(installAllow())
-        : new Promise((resolve) => {
-            answer = resolve;
-          }),
+        : input.action === "mcp.enable"
+          ? Promise.resolve(alreadyEnabled())
+          : new Promise((resolve) => {
+              answer = resolve;
+            }),
     );
     return { request, answer: (v: unknown) => answer(v) };
   }
@@ -814,10 +869,11 @@ describe("review fixes", () => {
     });
     const out = await invoke(t, { orderId: "o", amount: 1 });
     expect(out).toBe(
-      "Guardian could not check refund_order, so it did not run.",
+      "Guardian could not check refund_order, so it did not run. Try again later.",
     );
     expect(request.mock.calls.map((c) => c[0].action)).toEqual([
       "mcp.install",
+      "mcp.enable",
       "tool.invoke",
     ]);
     // Only the install was executed.
@@ -847,13 +903,55 @@ describe("review fixes", () => {
       JSON.stringify({ orderId: "o", amount: 1 }),
       { signal: controller.signal },
     );
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
     controller.abort(new Error("run cancelled"));
     answer(allow());
     await pending.catch(() => undefined);
     await new Promise((r) => setTimeout(r, 10));
     expect(run).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("an executed mcp.enable does not detach the abort signal either", async () => {
+    const run = vi.fn();
+    let answer!: (v: unknown) => void;
+    const request = vi.fn((input: { action: string }) =>
+      input.action === "mcp.install"
+        ? Promise.resolve(installAllow())
+        : input.action === "mcp.enable"
+          ? Promise.resolve(allow("req_enable", "cap_enable"))
+          : new Promise((resolve) => {
+              answer = resolve;
+            }),
+    );
+    const execute = vi.fn().mockResolvedValue(receipt());
+    const onGuardianError = vi.fn();
+    const controller = new AbortController();
+    const t = refundTool(run, {
+      client: stubClient({ request: request as never, execute }),
+      connectionId: "con_1",
+      installRecordTransport: true,
+      onGuardianError,
+    });
+    const pending = t.invoke(
+      new RunContext(),
+      JSON.stringify({ orderId: "o", amount: 1 }),
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(execute.mock.calls.map((c) => c[0].requestId)).toEqual([
+      "req_install",
+      "req_enable",
+    ]);
+    controller.abort(new Error("run cancelled"));
+    answer(allow());
+    await expect(pending).resolves.toBe(
+      "Guardian could not check refund_order, so it did not run. Try again later.",
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(onGuardianError).toHaveBeenCalledOnce();
   });
 
   it("the SDK's own tool timeout after an install cannot let a late ALLOW run the tool", async () => {
@@ -886,7 +984,11 @@ describe("review fixes", () => {
     const run = vi.fn().mockResolvedValue("refunded");
     const request = vi.fn((input: { action: string }) =>
       Promise.resolve(
-        input.action === "mcp.install" ? installAllow() : allow(),
+        input.action === "mcp.install"
+          ? installAllow()
+          : input.action === "mcp.enable"
+            ? allow("req_enable", "cap_enable")
+            : allow(),
       ),
     );
     const execute = vi.fn().mockResolvedValue(receipt());
@@ -901,6 +1003,7 @@ describe("review fixes", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(execute.mock.calls.map((c) => c[0].requestId)).toEqual([
       "req_install",
+      "req_enable",
       "req_1",
     ]);
   });
@@ -1053,9 +1156,7 @@ describe("documented edge cases", () => {
           parameters: z.object({ orderId: z.string() }),
           outputSchema: z.object({ refunded: z.boolean() }),
           execute: async () => run() as { refunded: boolean },
-          ...(errorFunction
-            ? { errorFunction: errorFunction as never }
-            : {}),
+          ...(errorFunction ? { errorFunction: errorFunction as never } : {}),
         },
         { client, connectionId: "con_1", ...extra },
       ) as FunctionTool<any, any, any>;

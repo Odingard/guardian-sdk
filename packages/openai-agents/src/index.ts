@@ -81,7 +81,10 @@ type AnyErrorFunction = (
 
 type Shared = {
   options: GuardianOpenAIAgentsOptions;
+  /** Setup state kept across calls (see the SDK's GuardianContext). */
   ensured: Set<string>;
+  installed: NonNullable<GuardianContext["installed"]>;
+  heldSetup: NonNullable<GuardianContext["heldSetup"]>;
 };
 
 function askMessage(toolName: string, requestId: string): string {
@@ -100,7 +103,7 @@ function denyMessage(err: GuardianDenied): string {
 }
 
 function unavailableMessage(toolName: string): string {
-  return `Guardian could not check ${toolName}, so it did not run.`;
+  return `Guardian could not check ${toolName}, so it did not run. Try again later.`;
 }
 
 function executionFailedMessage(err: GuardianExecutionFailed): string {
@@ -109,6 +112,13 @@ function executionFailedMessage(err: GuardianExecutionFailed): string {
       `${err.toolName} ran, but Guardian could not record it ` +
       `(${err.reasonCode}). Do not call it again; tell the user it ran ` +
       `without a receipt.`
+    );
+  }
+  if (err.outcomeUnknown) {
+    return (
+      `Guardian could not confirm that ${err.toolName} completed ` +
+      `(${err.reasonCode}, requestId ${err.requestId}). It may have run. ` +
+      `Do not call it again; tell the user so they can check.`
     );
   }
   return (
@@ -185,6 +195,8 @@ function buildTool(
     const ctx: GuardianContext = {
       options: { ...coreOptions, client: gate.client },
       ensured: shared.ensured,
+      installed: shared.installed,
+      heldSetup: shared.heldSetup,
     };
     try {
       // `input` is the call's own arguments, parsed by the Agents SDK from
@@ -211,7 +223,16 @@ function buildTool(
         }
         throw err;
       }
-      if (err instanceof GuardianDenied) {
+      // The Guardian client reports a network failure as ok:false
+      // SERVICE_UNAVAILABLE (it never throws), which the triad turns into
+      // GuardianDenied. That is Guardian not answering, not a decision: the
+      // model must be told Guardian could not check the call, and
+      // onGuardianError must fire.
+      const guardianDidNotAnswer =
+        err instanceof GuardianDenied &&
+        err.reasonCode === "SERVICE_UNAVAILABLE" &&
+        !startedBeforeError;
+      if (err instanceof GuardianDenied && !guardianDidNotAnswer) {
         if (onDeny === "result" && !hasOutputSchema) {
           return denyMessage(err);
         }
@@ -262,7 +283,7 @@ function buildTool(
     if (error instanceof GuardianExecutionFailed) {
       return executionFailedMessage(error);
     }
-    // A denial or an unavailable Guardian is never a reason to retry.
+    // A denial is never a reason to retry; an unavailable Guardian is, later.
     if (error instanceof GuardianDenied) {
       return denyMessage(error);
     }
@@ -326,7 +347,12 @@ export function guardianTool<
   options: GuardianOpenAIAgentsOptions,
 ): GuardedTool<TParameters, Context, Result, TOutputSchema> {
   return buildTool(
-    { options, ensured: new Set() },
+    {
+      options,
+      ensured: new Set(),
+      installed: new Set(),
+      heldSetup: new Map(),
+    },
     toolOptions as ToolOptions<any, any, any>,
   ) as GuardedTool<TParameters, Context, Result, TOutputSchema>;
 }
@@ -341,7 +367,12 @@ export function guardianTool<
  * ```
  */
 export function createGuardianTool(options: GuardianOpenAIAgentsOptions) {
-  const shared: Shared = { options, ensured: new Set() };
+  const shared: Shared = {
+    options,
+    ensured: new Set(),
+    installed: new Set(),
+    heldSetup: new Map(),
+  };
   return <
     TParameters extends ToolInputParameters = undefined,
     Context = UnknownContext,

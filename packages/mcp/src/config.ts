@@ -308,6 +308,22 @@ export function secretsOf(target: UpstreamTarget): string[] {
   const parsed = new URL(url);
   if (parsed.search) out.add(parsed.search.slice(1));
   for (const v of parsed.searchParams.values()) if (v.length >= 4) out.add(v);
+  // Each query value also as typed (`AbC+dEf/gh12==` keeps its "+", which
+  // searchParams turns into a space), percent-decoded, and with "+" read as
+  // a space: an upstream error can echo any of these forms.
+  for (const pair of parsed.search.slice(1).split("&")) {
+    const raw = pair.slice(pair.indexOf("=") + 1);
+    if (pair.indexOf("=") < 0 || raw.length < 4) continue;
+    const forms = [raw, raw.replace(/\+/g, " ")];
+    for (const form of [...forms]) {
+      try {
+        forms.push(decodeURIComponent(form));
+      } catch {
+        // not valid percent-encoding: the raw form is enough
+      }
+    }
+    for (const form of forms) if (form.length >= 4) out.add(form);
+  }
   // Path segments that look like identifiers (Composio-style
   // /v3/mcp/<server-id>/mcp URLs carry the server id in the path).
   for (const segment of parsed.pathname.split("/")) {

@@ -3,9 +3,11 @@
  *
  * `guardian-mcp tools -- <server command>` connects to a real MCP server,
  * lists its tools and suggests a Guardian mode for each, so registering a
- * server's tools in the console is a copy job, not guesswork. Suggestions
- * come first from the server's own MCP annotations (readOnlyHint,
- * destructiveHint), then from the tool's verb; anything unclear is "ask".
+ * server's tools in the console is a copy job, not guesswork. A tool the
+ * server marks destructive, or whose name contains a verb that changes
+ * something anywhere in it (`get_or_create_customer`, `find_and_replace`),
+ * is "ask". Otherwise the server's readOnlyHint, then a read verb at the
+ * start of the name, suggests "allow"; anything unclear is "ask".
  * They are suggestions only: the human sets the modes in the console.
  */
 import type { UpstreamTool } from "./proxy.js";
@@ -25,8 +27,87 @@ const READ_VERBS = new Set([
   "lookup",
   "count",
   "inspect",
-  "status",
-  "fetch",
+]);
+
+/**
+ * Verbs that change something or send data out. Any of them anywhere in the
+ * name makes the suggestion "ask", whatever the first word or the server's
+ * readOnlyHint says.
+ */
+const WRITE_VERBS = new Set([
+  "add",
+  "append",
+  "apply",
+  "approve",
+  "archive",
+  "assign",
+  "buy",
+  "cancel",
+  "charge",
+  "clear",
+  "close",
+  "commit",
+  "copy",
+  "create",
+  "delete",
+  "deploy",
+  "destroy",
+  "disable",
+  "drop",
+  "edit",
+  "enable",
+  "exec",
+  "execute",
+  "fork",
+  "grant",
+  "import",
+  "insert",
+  "install",
+  "invite",
+  "kill",
+  "lock",
+  "merge",
+  "modify",
+  "move",
+  "notify",
+  "patch",
+  "pay",
+  "post",
+  "publish",
+  "purge",
+  "push",
+  "put",
+  "refund",
+  "remove",
+  "rename",
+  "replace",
+  "reply",
+  "reset",
+  "restart",
+  "restore",
+  "revoke",
+  "rm",
+  "run",
+  "save",
+  "schedule",
+  "sell",
+  "send",
+  "set",
+  "share",
+  "sign",
+  "start",
+  "stop",
+  "submit",
+  "sync",
+  "transfer",
+  "trigger",
+  "truncate",
+  "uninstall",
+  "unlock",
+  "update",
+  "upload",
+  "upsert",
+  "write",
 ]);
 
 export type ToolSuggestion = Readonly<{
@@ -37,14 +118,12 @@ export type ToolSuggestion = Readonly<{
   governable: boolean;
 }>;
 
-function firstWord(name: string): string {
-  return (
-    name
-      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .find(Boolean) ?? ""
-  );
+function words(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 }
 
 export function suggestTool(tool: UpstreamTool): ToolSuggestion {
@@ -62,6 +141,16 @@ export function suggestTool(tool: UpstreamTool): ToolSuggestion {
       governable,
     };
   }
+  const tokens = words(tool.name);
+  const writeVerb = tokens.find((token) => WRITE_VERBS.has(token));
+  if (writeVerb) {
+    return {
+      name: tool.name,
+      suggestedMode: "ask",
+      why: `"${writeVerb}" may change something`,
+      governable,
+    };
+  }
   if (annotations.readOnlyHint === true) {
     return {
       name: tool.name,
@@ -70,7 +159,7 @@ export function suggestTool(tool: UpstreamTool): ToolSuggestion {
       governable,
     };
   }
-  const verb = firstWord(tool.name);
+  const verb = tokens[0] ?? "";
   if (READ_VERBS.has(verb)) {
     return {
       name: tool.name,

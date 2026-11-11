@@ -57,7 +57,9 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
 
 3. Merge [`config.yaml`](config.yaml) into Hermes' `config.yaml`
    (`plugins.enabled: [guardian]`, `plugins.hook_callback_timeout: 130`).
-   `hermes plugins enable guardian` does the first part.
+   Edit `plugins.enabled` by hand. `hermes plugins enable guardian` is
+   unverified: in the only real attempt it answered that the plugin was "not
+   installed or bundled".
 4. `hermes chat -q "List the files here, then run terraform apply -auto-approve in ./infra"`.
    `ls` runs. `terraform apply` is held: approve it in the Guardian app while
    the hook waits, and the command runs once. If nobody approves in time, the

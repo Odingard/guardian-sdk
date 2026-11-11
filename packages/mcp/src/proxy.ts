@@ -24,6 +24,7 @@ import {
   GuardianExecutionFailed,
   GuardianRecordTransportRequired,
   type GuardianClient,
+  type GuardianContext,
   type GuardianDecisionResult,
   type GuardianRequestResult,
 } from "@odingard/guardian-sdk";
@@ -41,12 +42,22 @@ export type UpstreamCallResult = {
   [key: string]: unknown;
 };
 
+/** Per-call options passed from the MCP request to the upstream. */
+export type UpstreamCallOptions = Readonly<{
+  /**
+   * The agent's request was cancelled (or timed out). Checked right before
+   * the call is sent; once it has been sent it runs to its real outcome.
+   */
+  signal?: AbortSignal;
+}>;
+
 /** The two upstream operations the proxy needs (an MCP Client satisfies this). */
 export type Upstream = {
   listTools(): Promise<UpstreamTool[]>;
   callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: UpstreamCallOptions,
   ): Promise<UpstreamCallResult>;
 };
 
@@ -60,6 +71,9 @@ export type GovernedProxyOptions = Readonly<{
    * Propose an `mcp.install` record-transport registration for each upstream
    * tool on first use (default false). Production denies it unless the
    * agent's grant pins mcp.install; register the tools in the console instead.
+   * It only works for a tool with no entry yet: after a restart the proxy
+   * cannot tell an entry it registered earlier from any other, so the call
+   * is refused (RECORD_TRANSPORT_UNVERIFIED) and nothing is forwarded.
    */
   autoRegister?: boolean;
   /** Diagnostics sink (stderr in the CLI). Never receives credentials. */
@@ -73,6 +87,32 @@ type ToolResult = {
 
 const CLAIM_TOOL = "guardian_claim";
 const RECEIPT_TOOL = "guardian_receipt";
+
+/**
+ * `_meta` key under which an allowed call's result carries Guardian's
+ * requestId (`{ requestId }`), so the client can fetch the receipt with
+ * `guardian_receipt`. The upstream's `content` is left untouched.
+ */
+export const GUARDIAN_RESULT_META = "com.odingard/guardian";
+
+/**
+ * Guardian did not answer (network failure, outage). Fail closed, but never
+ * word it as a decision: nothing was decided, so the agent may try later.
+ */
+const UNAVAILABLE = "SERVICE_UNAVAILABLE";
+
+function unreachableResult(toolName: string, requestId?: string): ToolResult {
+  return jsonResult(
+    {
+      decision: "DENY",
+      toolName,
+      reasonCode: UNAVAILABLE,
+      ...(requestId ? { requestId } : {}),
+      message: `Guardian could not be reached, so ${toolName} was not checked and nothing was forwarded. Try again later.`,
+    },
+    true,
+  );
+}
 
 export const PROXY_GOVERNANCE_TOOLS: UpstreamTool[] = [
   {
@@ -103,6 +143,22 @@ function jsonResult(payload: unknown, isError = false): ToolResult {
   return {
     ...(isError ? { isError: true } : {}),
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  };
+}
+
+/** The upstream result, unchanged, plus Guardian's requestId in `_meta`. */
+function withRequestId(
+  result: UpstreamCallResult,
+  requestId: string | undefined,
+): UpstreamCallResult {
+  if (!requestId) return result;
+  const meta =
+    typeof result._meta === "object" && result._meta !== null
+      ? (result._meta as Record<string, unknown>)
+      : {};
+  return {
+    ...result,
+    _meta: { ...meta, [GUARDIAN_RESULT_META]: { requestId } },
   };
 }
 
@@ -147,6 +203,17 @@ function upstreamRan(value: unknown): value is UpstreamRan {
   );
 }
 
+/**
+ * The agent's request was cancelled before the call was sent upstream.
+ * Nothing was forwarded and the capability is not redeemed.
+ */
+export class UpstreamCallCancelled extends Error {
+  constructor(readonly toolName: string) {
+    super("the call was cancelled before it was forwarded");
+    this.name = "UpstreamCallCancelled";
+  }
+}
+
 /** Tools/list failed upstream; the message never carries upstream text. */
 export class UpstreamListFailed extends Error {
   constructor() {
@@ -157,15 +224,34 @@ export class UpstreamListFailed extends Error {
   }
 }
 
+/** Whether a call was handed to the upstream (set just before it is sent). */
+type Forwarding = { sent: boolean };
+
 function callUpstream(
   upstream: Upstream,
   name: string,
   args: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  forwarding: Forwarding,
 ): () => Promise<UpstreamRan> {
   return async () => {
+    if (signal?.aborted) {
+      throw new UpstreamCallCancelled(name);
+    }
+    forwarding.sent = true;
     try {
-      return { [UPSTREAM_RESULT]: await upstream.callTool(name, args) };
-    } catch {
+      return {
+        [UPSTREAM_RESULT]: await upstream.callTool(
+          name,
+          args,
+          signal ? { signal } : undefined,
+        ),
+      };
+    } catch (err) {
+      if (err instanceof UpstreamCallCancelled) {
+        forwarding.sent = false;
+        throw err;
+      }
       // The error text is dropped on purpose: transport errors can quote
       // the upstream URL or response.
       throw new UpstreamCallFailed(name);
@@ -173,7 +259,28 @@ function callUpstream(
   };
 }
 
-function failure(err: unknown, toolName: string): ToolResult {
+function cancelledResult(toolName: string, requestId?: string): ToolResult {
+  return jsonResult(
+    {
+      toolName,
+      ...(requestId ? { requestId } : {}),
+      cancelled: true,
+      message: requestId
+        ? `The request was cancelled before ${toolName} was forwarded. Nothing was forwarded; the approved call is still held, so call ${CLAIM_TOOL} with this requestId to forward it.`
+        : `The request was cancelled before ${toolName} was forwarded. Nothing was forwarded.`,
+    },
+    true,
+  );
+}
+
+function failure(
+  err: unknown,
+  toolName: string,
+  forwarding: Forwarding,
+): ToolResult {
+  if (err instanceof UpstreamCallCancelled) {
+    return cancelledResult(toolName);
+  }
   if (err instanceof UpstreamCallFailed) {
     return jsonResult(
       {
@@ -193,14 +300,22 @@ function failure(err: unknown, toolName: string): ToolResult {
         requestId: err.requestId,
         executionFailed: err.reasonCode,
         localEffectRan: err.localEffectRan,
-        message: err.localEffectRan
-          ? "The upstream call ran but Guardian refused to redeem the capability. Treat this as an incident, not a success."
-          : "Guardian could not redeem the capability; the call was not completed.",
+        ...(err.outcomeUnknown ? { outcomeUnknown: true } : {}),
+        message: err.outcomeUnknown
+          ? err.localEffectRan
+            ? `The upstream call ran, but Guardian could not confirm that it was recorded. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
+            : `Guardian could not confirm whether the call completed. It may have run. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
+          : err.localEffectRan
+            ? "The upstream call ran but Guardian refused to redeem the capability. Do not call it again. Treat this as an incident, not a success."
+            : "Guardian could not redeem the capability; the call was not completed.",
       },
       true,
     );
   }
   if (err instanceof GuardianDenied) {
+    if (err.reasonCode === UNAVAILABLE) {
+      return unreachableResult(toolName, err.requestId);
+    }
     return jsonResult(
       {
         decision: "DENY",
@@ -222,10 +337,15 @@ function failure(err: unknown, toolName: string): ToolResult {
       message: `Held for human approval. Call ${CLAIM_TOOL} with this requestId after approval.`,
     });
   }
+  // An unexpected error after the call was handed to the upstream (for
+  // example while its evidence was being recorded) must not say it was not
+  // forwarded.
   return jsonResult(
     {
       toolName,
-      error: "Guardian proxy error; the call was not forwarded.",
+      error: forwarding.sent
+        ? "Guardian proxy error after the call was forwarded. It may have run; check before retrying."
+        : "Guardian proxy error; the call was not forwarded.",
     },
     true,
   );
@@ -236,8 +356,12 @@ export type GovernedProxy = {
   callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: UpstreamCallOptions,
   ): Promise<UpstreamCallResult | ToolResult>;
 };
+
+/** How many claimed requestIds the proxy remembers (oldest are forgotten). */
+export const CLAIMED_REQUESTS_LIMIT = 1000;
 
 export function createGovernedProxy(
   options: GovernedProxyOptions,
@@ -253,6 +377,41 @@ export function createGovernedProxy(
     { name: string; args: Record<string, unknown> }
   >();
   const pendingInstalls = new Map<string, string>();
+  /**
+   * Held calls whose capability was claimed, with the claim's result, kept
+   * while the call is put back after a cancel before forwarding: the
+   * approval was already used, so the next claim reuses it.
+   */
+  const claimedCapabilities = new Map<string, GuardianRequestResult>();
+  /**
+   * Claimed requestIds (bounded): "forwarding" while the call runs, then
+   * "done" with the result returned. A second claim of the same id is told
+   * the call was already forwarded (and gets that result again) instead of
+   * "nothing was forwarded", which would invite proposing it again.
+   */
+  const claimedRequests = new Map<
+    string,
+    {
+      toolName: string;
+      state: "forwarding" | "done";
+      result?: UpstreamCallResult | ToolResult;
+    }
+  >();
+  const rememberClaim = (
+    requestId: string,
+    entry: {
+      toolName: string;
+      state: "forwarding" | "done";
+      result?: UpstreamCallResult | ToolResult;
+    },
+  ) => {
+    claimedRequests.delete(requestId);
+    claimedRequests.set(requestId, entry);
+    while (claimedRequests.size > CLAIMED_REQUESTS_LIMIT) {
+      const oldest = claimedRequests.keys().next().value as string;
+      claimedRequests.delete(oldest);
+    }
+  };
 
   const recordingClient: GuardianClient = {
     ...options.client,
@@ -279,6 +438,37 @@ export function createGovernedProxy(
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     ...(options.agentName ? { agentName: options.agentName } : {}),
   });
+  // Shared by the per-call contexts below.
+  ctx.installed ??= new Set();
+
+  /** The registration step the SDK holds under this requestId, if any. */
+  function heldSetupStep(
+    toolName: string,
+    requestId: string,
+  ): "install" | "enable" | undefined {
+    const held = ctx.heldSetup?.get(`${options.connectionId}:${toolName}`);
+    return held?.requestId === requestId ? held.step : undefined;
+  }
+
+  /** A context for one call that remembers the requestId Guardian allowed. */
+  function tracked(): {
+    ctx: GuardianContext;
+    allowedRequestId: () => string | undefined;
+  } {
+    let allowed: string | undefined;
+    return {
+      ctx: {
+        ...ctx,
+        options: {
+          ...ctx.options,
+          onReceipt: (event) => {
+            allowed = event.requestId;
+          },
+        },
+      },
+      allowedRequestId: () => allowed,
+    };
+  }
 
   let upstreamTools: Map<string, UpstreamTool> | null = null;
 
@@ -302,9 +492,13 @@ export function createGovernedProxy(
     toolName: string,
     args: Record<string, unknown>,
     output: UpstreamRan | GuardianDecisionResult,
+    allowedRequestId?: string,
   ): UpstreamCallResult | ToolResult {
-    // The upstream ran: its result is returned verbatim, whatever it contains.
-    if (upstreamRan(output)) return output[UPSTREAM_RESULT];
+    // The upstream ran: its content is returned verbatim, whatever it
+    // contains; only Guardian's requestId is added under `_meta`.
+    if (upstreamRan(output)) {
+      return withRequestId(output[UPSTREAM_RESULT], allowedRequestId);
+    }
     // Anything else must be the SDK's own decision; if not, fail closed.
     if (!isDecisionResult(output)) {
       return jsonResult(
@@ -327,43 +521,110 @@ export function createGovernedProxy(
         });
       }
       pendingInstalls.set(g.requestId, toolName);
+      const step = heldSetupStep(toolName, g.requestId);
       return jsonResult({
         decision: "ASK",
         toolName,
         requestId: g.requestId,
-        message: `First use of ${toolName} needs a human to approve registering it with Guardian. After approval call ${CLAIM_TOOL} with this requestId, then retry the original call.`,
+        message:
+          step === "enable"
+            ? `Switching on ${toolName} for this agent needs a human to approve it in Guardian. After approval call ${CLAIM_TOOL} with this requestId (or retry the original call).`
+            : `First use of ${toolName} needs a human to approve registering it with Guardian. After approval call ${CLAIM_TOOL} with this requestId, then retry the original call.`,
       });
     }
     if (g.decision === "DENY") {
-      return jsonResult({
-        decision: "DENY",
-        toolName,
-        reasonCode: g.reasonCode,
-        ...(g.requestId ? { requestId: g.requestId } : {}),
-        message: g.message,
-      });
+      if (g.reasonCode === UNAVAILABLE) {
+        return unreachableResult(toolName, g.requestId);
+      }
+      // A refusal is reported as a tool error (MCP `isError`), so the
+      // client and the model see that the call did not happen.
+      return jsonResult(
+        {
+          decision: "DENY",
+          toolName,
+          reasonCode: g.reasonCode,
+          ...(g.requestId ? { requestId: g.requestId } : {}),
+          message: g.message,
+        },
+        true,
+      );
     }
     return jsonResult({ decision: "ALLOW", toolName, requestId: g.requestId });
   }
 
+  function alreadyClaimed(
+    requestId: string,
+  ): ToolResult | UpstreamCallResult | undefined {
+    const seen = claimedRequests.get(requestId);
+    if (!seen) return undefined;
+    if (seen.state === "forwarding" || !seen.result) {
+      return jsonResult(
+        {
+          toolName: seen.toolName,
+          requestId,
+          alreadyClaimed: true,
+          message: `This approved call is already being forwarded by an earlier ${CLAIM_TOOL}. Do not propose ${seen.toolName} again; wait, then call ${RECEIPT_TOOL} with this requestId to see what happened.`,
+        },
+        true,
+      );
+    }
+    // Hand back the result the earlier claim returned, with a notice first.
+    const notice = {
+      type: "text",
+      text: `This requestId was already claimed and ${seen.toolName} was already forwarded. Do not propose it again. The earlier result follows.`,
+    };
+    const earlier = seen.result as UpstreamCallResult;
+    // isError: this claim did nothing; the earlier claim did the work.
+    return {
+      ...earlier,
+      isError: true,
+      content: [
+        notice,
+        ...(Array.isArray(earlier.content) ? earlier.content : []),
+      ],
+    };
+  }
+
   async function claim(
     requestId: string,
+    signal?: AbortSignal,
   ): Promise<UpstreamCallResult | ToolResult> {
+    const repeat = alreadyClaimed(requestId);
+    if (repeat) return repeat;
     const held = pendingCalls.get(requestId);
     if (held) {
+      if (signal?.aborted) {
+        return cancelledResult(held.name, requestId);
+      }
       // Taken out before the await, so two concurrent claims for one
       // requestId cannot both forward the call; put back only while it is
       // still held.
       pendingCalls.delete(requestId);
-      let claimed: GuardianRequestResult;
-      try {
-        claimed = await options.client.claim(requestId);
-      } catch {
+      const putBack = () => {
+        claimedRequests.delete(requestId);
         pendingCalls.set(requestId, held);
-        return jsonResult(
-          { requestId, error: "Guardian unreachable; nothing was forwarded." },
-          true,
-        );
+      };
+      rememberClaim(requestId, { toolName: held.name, state: "forwarding" });
+      let claimed: GuardianRequestResult;
+      const reused = claimedCapabilities.get(requestId);
+      if (reused) {
+        // An earlier claim got the capability but was cancelled before
+        // forwarding: use that approval, do not claim it again.
+        claimedCapabilities.delete(requestId);
+        claimed = reused;
+      } else {
+        try {
+          claimed = await options.client.claim(requestId);
+        } catch {
+          putBack();
+          return unreachableResult(held.name, requestId);
+        }
+      }
+      // Guardian did not answer: keep the call held so the claim can be
+      // retried, forward nothing.
+      if (!claimed.ok && claimed.reasonCode === UNAVAILABLE) {
+        putBack();
+        return unreachableResult(held.name, requestId);
       }
       // Still waiting for the human: keep it held, forward nothing.
       if (
@@ -372,7 +633,7 @@ export function createGovernedProxy(
           (claimed.reasonCode === "APPROVAL_PENDING" ||
             claimed.reasonCode === "APPROVAL_REQUIRED"))
       ) {
-        pendingCalls.set(requestId, held);
+        putBack();
         return jsonResult({
           decision: "ASK",
           toolName: held.name,
@@ -380,45 +641,126 @@ export function createGovernedProxy(
           message: "Still awaiting human approval. Nothing was sent.",
         });
       }
+      let result: UpstreamCallResult | ToolResult;
+      const forwarding: Forwarding = { sent: false };
       try {
+        const call = tracked();
         const output = await settle<UpstreamRan>(
-          ctx,
+          call.ctx,
           held.name,
           held.args,
           claimed,
-          callUpstream(upstream, held.name, held.args),
+          callUpstream(upstream, held.name, held.args, signal, forwarding),
         );
-        return toCallResult(held.name, held.args, output);
+        result = toCallResult(
+          held.name,
+          held.args,
+          output,
+          call.allowedRequestId(),
+        );
       } catch (err) {
-        return failure(err, held.name);
+        if (err instanceof UpstreamCallCancelled) {
+          // Cancelled before forwarding: nothing was sent and nothing was
+          // redeemed. Keep the call held, with the approval already claimed.
+          putBack();
+          if (claimed.ok && claimed.decision === "ALLOW") {
+            claimedCapabilities.set(requestId, claimed);
+          }
+          return cancelledResult(held.name, requestId);
+        }
+        result = failure(err, held.name, forwarding);
       }
+      if (
+        !claimed.ok ||
+        claimed.decision !== "ALLOW" ||
+        !claimed.capabilityToken
+      ) {
+        // Refused: nothing was forwarded, so a later claim is not told
+        // it was.
+        claimedRequests.delete(requestId);
+      } else {
+        rememberClaim(requestId, {
+          toolName: held.name,
+          state: "done",
+          result,
+        });
+      }
+      return result;
     }
     const installFor = pendingInstalls.get(requestId);
     if (installFor) {
-      const claimed = await options.client.claim(requestId);
+      if (signal?.aborted) {
+        return jsonResult(
+          {
+            toolName: installFor,
+            requestId,
+            cancelled: true,
+            message: `The request was cancelled. Nothing was claimed; call ${CLAIM_TOOL} with this requestId again.`,
+          },
+          true,
+        );
+      }
+      const key = `${options.connectionId}:${installFor}`;
+      // Which registration step this is (mcp.install or mcp.enable). A
+      // request the SDK no longer holds is treated as an install, so the
+      // retry runs the enable step again rather than skipping it.
+      const step = heldSetupStep(installFor, requestId) ?? "install";
+      // This claim uses the approval; a retry must not claim it again.
+      const forgetHeld = () => {
+        if (ctx.heldSetup?.get(key)?.requestId === requestId) {
+          ctx.heldSetup.delete(key);
+        }
+      };
+      let claimed: GuardianRequestResult;
+      try {
+        claimed = await options.client.claim(requestId);
+      } catch {
+        return unreachableResult(installFor, requestId);
+      }
+      if (!claimed.ok && claimed.reasonCode === UNAVAILABLE) {
+        return unreachableResult(installFor, requestId);
+      }
       if (
         claimed.ok &&
         claimed.decision === "ALLOW" &&
         claimed.capabilityToken
       ) {
+        forgetHeld();
+        pendingInstalls.delete(requestId);
         const executed = await options.client.execute({
           requestId: claimed.requestId,
           capabilityToken: claimed.capabilityToken,
         });
-        pendingInstalls.delete(requestId);
-        ctx.ensured.add(`${options.connectionId}:${installFor}`);
+        // Only a done mcp.enable completes setup. After an install, the
+        // retry still proposes mcp.enable: a fresh entry is not yet on for
+        // this agent. The entry this proxy installed is record-only, so the
+        // retry goes straight to mcp.enable (a second mcp.install would be
+        // answered "already installed" and refused).
+        if (executed.ok && step === "enable") {
+          ctx.ensured.add(key);
+        } else if (executed.ok) {
+          ctx.installed?.add(key);
+        }
         return jsonResult(
           executed.ok
             ? {
                 decision: "ALLOW",
                 toolName: installFor,
-                message: `${installFor} is registered with Guardian. Retry the original call.`,
+                message:
+                  step === "enable"
+                    ? `${installFor} is switched on for this agent. Retry the original call.`
+                    : `${installFor} is registered with Guardian. Retry the original call; switching it on for this agent may need one more approval.`,
               }
             : { toolName: installFor, executionFailed: executed.reasonCode },
           !executed.ok,
         );
       }
-      if (claimed.ok && claimed.decision === "ASK") {
+      if (
+        (claimed.ok && claimed.decision === "ASK") ||
+        (!claimed.ok &&
+          (claimed.reasonCode === "APPROVAL_PENDING" ||
+            claimed.reasonCode === "APPROVAL_REQUIRED"))
+      ) {
         return jsonResult({
           decision: "ASK",
           toolName: installFor,
@@ -426,20 +768,25 @@ export function createGovernedProxy(
           message: "Still awaiting human approval.",
         });
       }
+      forgetHeld();
       pendingInstalls.delete(requestId);
-      return jsonResult({
-        decision: "DENY",
-        toolName: installFor,
-        reasonCode: claimed.ok
-          ? (claimed.reasonCode ?? "MISSING_CAPABILITY")
-          : claimed.reasonCode,
-      });
+      return jsonResult(
+        {
+          decision: "DENY",
+          toolName: installFor,
+          reasonCode: claimed.ok
+            ? (claimed.reasonCode ?? "MISSING_CAPABILITY")
+            : claimed.reasonCode,
+        },
+        true,
+      );
     }
     return jsonResult(
       {
         requestId,
         error:
-          "No held call with this requestId in this proxy session. Nothing was forwarded.",
+          "This proxy holds no call with this requestId, so this claim forwarded nothing. " +
+          `If it was claimed before (in this or an earlier proxy session), the call may already have been forwarded: call ${RECEIPT_TOOL} with this requestId before proposing it again.`,
       },
       true,
     );
@@ -469,13 +816,14 @@ export function createGovernedProxy(
       ];
     },
 
-    async callTool(name, args) {
+    async callTool(name, args, callOptions) {
+      const signal = callOptions?.signal;
       if (name === CLAIM_TOOL) {
         const requestId = args.requestId;
         if (typeof requestId !== "string" || requestId.length === 0) {
           return jsonResult({ error: "requestId is required" }, true);
         }
-        return claim(requestId);
+        return claim(requestId, signal);
       }
       if (name === RECEIPT_TOOL) {
         const requestId = args.requestId;
@@ -506,16 +854,21 @@ export function createGovernedProxy(
       if (!tools.has(name)) {
         return jsonResult({ error: `unknown tool: ${name}` }, true);
       }
+      if (signal?.aborted) {
+        return cancelledResult(name);
+      }
+      const forwarding: Forwarding = { sent: false };
       try {
+        const call = tracked();
         const output = await runThroughGuardian<UpstreamRan>(
-          ctx,
+          call.ctx,
           name,
           args,
-          callUpstream(upstream, name, args),
+          callUpstream(upstream, name, args, signal, forwarding),
         );
-        return toCallResult(name, args, output);
+        return toCallResult(name, args, output, call.allowedRequestId());
       } catch (err) {
-        return failure(err, name);
+        return failure(err, name, forwarding);
       }
     },
   };

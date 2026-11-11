@@ -51,6 +51,12 @@ except GuardianDenied as denied:             # DENY: your function never ran
 | **ASK**   | Does not run. `GuardianApprovalPending.resume()` runs it after approval; before approval it raises pending again. |
 | **DENY**  | Never runs. `GuardianDenied.reason_code` says why. An unreachable Guardian is a DENY (fail closed).               |
 
+An unreachable Guardian, or one that answers with a server error (HTTP 5xx),
+is refused with `reason_code` `SERVICE_UNAVAILABLE`: nothing ran, and it is
+reported as Guardian not answering, not as a denial. An answer whose
+`decision` is anything other than `ALLOW`, `ASK` or `DENY` is refused with
+`MALFORMED_RESPONSE`.
+
 The proposal carries the tool name plus the call's bound arguments
 (`{"invoice_id": …, "amount_cents": …, "payee_id": …}`). The arguments are
 bound into the action and the receipt, so an approval does not carry over to
@@ -78,27 +84,71 @@ await send_whatsapp("+15550100", "Your invoice is ready")
 guard = Guard(client, connection_id=..., on_ask="result", on_deny="result")
 # ASK/DENY now return {"guardian": {"decision": "ASK", "request_id": …, "message": …}}
 # so a framework that turns tool output into model context can tell the model what happened.
+# After a person approves, calling the tool again with the same arguments runs
+# the approved request (it is claimed, not proposed again). Calling it again
+# before then returns the same ASK and does not create a second approval.
+# (0.1.6 and later. In 0.1.5 an approved call never ran in this mode.)
 ```
+
+With `on_deny="result"` a call that ran but could not be confirmed is also
+handed back as data instead of raising `GuardianExecutionFailed`. That covers
+an in-process call whose receipt could not be recorded after your function
+ran, and a `remote` call whose receipt status is not `sent-verified` (or whose
+answer was lost). The result is
+`{"guardian": {"decision": "ALLOW", "outcome": "ran_unrecorded" | "unknown", "message": …}}`,
+and the message says the call ran (or may have run) and must not be called
+again, because calling it again is a new request and can repeat the action.
+Set `on_execution_failed="raise"` or `"result"` to choose this separately
+from `on_deny`, and pass `on_execution_error=callback(error)` to see every
+such `GuardianExecutionFailed` in your app (for example to open an incident),
+in either mode.
 
 ### Framework recipes
 
 `@guard(...)` returns an ordinary function, so register the guarded function
-wherever your framework expects a tool:
+wherever your framework expects a tool. These are recipes, not separate
+integrations, and they are not all tested to the same level:
 
-- **LangChain / LangGraph:** `StructuredTool.from_function(pay_invoice)`, or
-  `@tool` on top of `@guard`. Map `GuardianApprovalPending` to a LangGraph
-  `interrupt`.
-- **OpenAI Agents SDK:** `function_tool(pay_invoice)`.
-- **CrewAI:** `@tool("Pay invoice")` on top of `@guard`.
-- **Claude Agent SDK / MCP:** guard the handler, or put any MCP server behind
-  `guardian-mcp proxy` (see the [MCP package](../mcp)).
+- **LangChain / LangGraph** (tested against Guardian; production proof
+  pending): `StructuredTool.from_function(pay_invoice)`, or `@tool` on top of
+  `@guard`. Map `GuardianApprovalPending` to a LangGraph `interrupt`.
+- **OpenAI Agents SDK** (tested against Guardian; production proof pending):
+
+  ```python
+  from agents import function_tool
+  from odingard_guardian.openai_agents import guardian_failure_error_function
+
+  guard = Guard(client, connection_id=..., on_ask="result", on_deny="result")
+  tool = function_tool(pay_invoice, failure_error_function=guardian_failure_error_function)
+  ```
+
+  Use 0.1.6 or later, so an approved call runs when the model calls the tool
+  again. `guardian_failure_error_function` replaces the Agents SDK's default,
+  which answers every exception with "An error occurred while running the
+  tool. Please try again." After a call that ran, that message makes the
+  model call the tool again, and the action can happen twice. The Guardian
+  version tells the model that a call ran or may have run
+  (`GuardianExecutionFailed`) and must not be called again, that a denied
+  call did not run, and re-raises `GuardianApprovalPending` so the pending
+  approval reaches your code. Other errors keep the Agents SDK's message.
+  `make_guardian_failure_error_function(on_execution_failed=..., fallback=...)`
+  adds an incident hook and your own message for other errors. With the
+  default `"raise"` the same function works, or pass
+  `failure_error_function=None` so every exception reaches your code. Do not
+  use the Agents SDK's default `failure_error_function` with a guarded tool.
+
+- **CrewAI** (example, not yet tested): `@tool("Pay invoice")` on top of
+  `@guard`.
+- **Claude Agent SDK** (example, not yet tested): guard the handler, or put
+  any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
 
 ### Honest limits
 
 - **In-process mode is decision-gated.** Your function runs after ALLOW and
   before the capability is redeemed. A revocation in that window is detected
-  after the effect and raised as `GuardianExecutionFailed(local_effect_ran=True)`.
-  Treat that as an incident. Where Guardian itself must perform the call, use
+  after the effect and raised as `GuardianExecutionFailed(local_effect_ran=True)`
+  (or returned as a result that says the call ran, with
+  `on_execution_failed="result"`). Treat that as an incident. Where Guardian itself must perform the call, use
   `mode="remote"` with a tool registered in your Guardian connection.
 - Guardian governs what goes through it. An agent or app that never calls
   Guardian is not governed by it.
@@ -110,7 +160,13 @@ wherever your framework expects a tool:
 
   Since 0.1.1, `Guard` does not try to register tools itself.
   `install_record_transport=True` turns that back on, but it is denied unless
-  the agent's grant pins `mcp.install`. Denials carry a `hint` with the next
+  the agent's grant pins `mcp.install`, and it only works for a tool that has
+  no entry yet. If Guardian answers that the tool is already registered, the
+  call is refused (`RECORD_TRANSPORT_UNVERIFIED`) and nothing runs, because
+  the existing entry may make an HTTP call. Which entries a `Guard`
+  registered is kept in memory only, so a restarted process, another worker
+  or a new `Guard` is refused that way even for an entry the SDK created
+  itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
@@ -120,7 +176,7 @@ wherever your framework expects a tool:
 hook as the Hermes plugin `guardian`:
 
 ```yaml
-# Hermes config.yaml
+# Hermes config.yaml (add guardian to plugins.enabled by hand)
 plugins:
   enabled: [guardian]
   hook_callback_timeout: 130 # Hermes blocks a hook that runs longer; 130 s fits a 2-minute ASK
@@ -146,7 +202,12 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the
 Hosted setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
-Not yet proven live.
+Example, not yet tested against Guardian. The install step is unverified: in
+the only real attempt, `hermes plugins enable guardian` answered that the
+plugin was "not installed or bundled". Install `odingard-guardian` into the
+same Python environment Hermes runs in, list `guardian` under
+`plugins.enabled` in `config.yaml` yourself, and check that Hermes loads it
+before relying on it.
 
 ## Lower-level client
 

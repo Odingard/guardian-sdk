@@ -23,6 +23,7 @@ from .guard import (
     GuardianExecutionFailed,
     ResumeResult,
     denial_hint,
+    execution_failed_message,
     to_arguments_record,
 )
 from .lifecycle import GuardianDecision, classify_request_result
@@ -39,7 +40,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 __all__ = [
     "DEFAULT_RECEIPT_MAX_AGE_MS",
@@ -66,6 +67,7 @@ __all__ = [
     "canonical_sha256",
     "classify_request_result",
     "denial_hint",
+    "execution_failed_message",
     "fetch_receipt_verification_keys",
     "to_arguments_record",
     "verify_receipt_offline",

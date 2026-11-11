@@ -32,9 +32,10 @@ describe("guardian-mcp dispatch", () => {
       requestId: "req_1",
       capabilityToken: "cap_1",
     });
-    const execute = vi
-      .fn()
-      .mockResolvedValue({ ok: true, receipt: { id: "rcpt_1" } });
+    const execute = vi.fn().mockResolvedValue({
+      ok: true,
+      receipt: { id: "rcpt_1", status: "sent-verified" },
+    });
     const client = stubClient({ request, execute });
     const result = await handleToolCall(
       { client, defaultConnectionId: "conn_1" },
@@ -87,10 +88,11 @@ describe("guardian-mcp dispatch", () => {
       "guardian_invoke_tool",
       { toolName: "rm_rf" },
     );
-    expect(payload(result)).toEqual({
+    expect(payload(result)).toMatchObject({
       decision: "DENY",
       reasonCode: "POLICY_DENY",
     });
+    expect(result.isError).toBe(true);
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -101,15 +103,14 @@ describe("guardian-mcp dispatch", () => {
       requestId: "req_9",
       capabilityToken: "cap_9",
     });
-    const execute = vi
-      .fn()
-      .mockResolvedValue({ ok: true, receipt: { id: "rcpt_9" } });
+    const execute = vi.fn().mockResolvedValue({
+      ok: true,
+      receipt: { id: "rcpt_9", status: "sent-verified" },
+    });
     const client = stubClient({ claim, execute });
-    const result = await handleToolCall(
-      { client },
-      "guardian_claim",
-      { requestId: "req_9" },
-    );
+    const result = await handleToolCall({ client }, "guardian_claim", {
+      requestId: "req_9",
+    });
     expect(payload(result)).toMatchObject({
       decision: "ALLOW",
       receipt: { id: "rcpt_9" },
@@ -119,11 +120,9 @@ describe("guardian-mcp dispatch", () => {
   it("rejects invokes without a connection id", async () => {
     const request = vi.fn();
     const client = stubClient({ request });
-    const result = await handleToolCall(
-      { client },
-      "guardian_invoke_tool",
-      { toolName: "anything" },
-    );
+    const result = await handleToolCall({ client }, "guardian_invoke_tool", {
+      toolName: "anything",
+    });
     expect(result.isError).toBe(true);
     expect(request).not.toHaveBeenCalled();
   });

@@ -24,8 +24,8 @@ ship, so Guardian goes where that framework calls tools. There are two ways in:
    and LangGraph.js.
 
 guardian-mcp needs Node.js 22 or later in the container (`npm i -g
-@odingard/guardian-mcp`). `--url` ships in the next guardian-mcp release; see
-the CHANGELOG.
+@odingard/guardian-mcp`). `--url` (remote MCP servers) ships in guardian-mcp
+0.3.3 and later.
 
 ## Keep one MCP session open
 

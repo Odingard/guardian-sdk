@@ -113,10 +113,13 @@ if (config.mode.kind === "proxy") {
   }));
   server.setRequestHandler(
     CallToolRequestSchema,
-    async (request) =>
+    async (request, extra) =>
       (await proxy.callTool(
         request.params.name,
         (request.params.arguments ?? {}) as Record<string, unknown>,
+        // Cancelled (notifications/cancelled) or timed-out requests are
+        // not forwarded if the signal fires before the call is sent.
+        { signal: extra.signal },
       )) as never,
   );
 } else {

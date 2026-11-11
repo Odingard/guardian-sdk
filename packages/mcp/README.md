@@ -39,6 +39,18 @@ npm i -g @odingard/guardian-mcp
 
 Nothing executes without a Guardian capability — the model's output is a proposal, never an action.
 
+Only a call whose receipt status is `sent-verified` is returned as a plain
+result. Every other outcome is an MCP tool error (`isError: true`) that says
+what happened:
+
+- DENY, or Guardian could not be reached: nothing was done. A denial says not
+  to retry the same call; an outage says to try again later.
+- Receipt status `not-sent`: `outcome: "not-done"`, the call was not done.
+- Receipt status `outcome-pending` or `outcome-unconfirmed`, or an execute
+  answer that was refused or lost: `outcome: "unknown"`. The call may have
+  been done, so check (`guardian_receipt`, or the target system) before
+  retrying.
+
 ## Govern an existing MCP server: `guardian-mcp proxy` (0.3)
 
 Put Guardian in front of any stdio MCP server you already use, such as
@@ -62,11 +74,12 @@ upstream server's tools unchanged, and every call is decided first:
 }
 ```
 
-| Decision  | What happens                                                                                                                                 |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ALLOW** | The call is forwarded to the upstream server, then the capability is redeemed and the receipt recorded.                                      |
-| **ASK**   | Nothing is forwarded. The exact call is held under a `requestId`; after a human approves, `guardian_claim` forwards exactly that call, once. |
-| **DENY**  | Nothing is forwarded, ever. The same applies if Guardian is unreachable.                                                                     |
+| Decision                 | What happens                                                                                                                                                                                                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ALLOW**                | The call is forwarded to the upstream server, then the capability is redeemed and the receipt recorded. The upstream result is returned unchanged, with Guardian's `requestId` under `_meta["com.odingard/guardian"]`, so the client can fetch the receipt with `guardian_receipt`.                    |
+| **ASK**                  | Nothing is forwarded. The exact call is held under a `requestId`; after a human approves, `guardian_claim` forwards exactly that call, once.                                                                                                                                                           |
+| **DENY**                 | Nothing is forwarded, ever. The result is an MCP tool error (`isError: true`) with the reason code and, when Guardian made a record of it, the `requestId`.                                                                                                                                            |
+| **Guardian unreachable** | Nothing is forwarded. The result is a tool error (`isError: true`) whose JSON keeps `decision: "DENY"` with `reasonCode: "SERVICE_UNAVAILABLE"`, and its message says Guardian could not be reached and the call can be tried again later. A held call stays held, so `guardian_claim` can be retried. |
 
 - `guardian_claim` and `guardian_receipt` are added to the tool list.
 - The upstream server never receives `GUARDIAN_*` settings, so it never sees
@@ -79,20 +92,42 @@ upstream server's tools unchanged, and every call is decided first:
   for the agent.
   - Since 0.3.1 the proxy does not try to register tools itself.
   - `GUARDIAN_AUTO_REGISTER=true` turns that back on, but it is denied unless
-    the agent's grant pins `mcp.install`.
+    the agent's grant pins `mcp.install`, and it only works for a tool that
+    has no entry yet. An "already registered" answer is refused
+    (`RECORD_TRANSPORT_UNVERIFIED`) and nothing is forwarded, including after
+    a proxy restart for an entry the proxy created itself. Once the entries
+    exist, run the proxy without it.
   - When Guardian refuses, the result says what to fix.
 - Held calls live in the proxy process. Restarting the proxy drops them, and
   nothing is forwarded.
+- **Cancelled requests are not forwarded.** If the client cancels a
+  `tools/call` (or it times out) before the call is sent upstream, for
+  example while Guardian is still deciding, the call is not forwarded and the
+  capability is not redeemed. A `guardian_claim` cancelled that way keeps the
+  call held with its approval, so the next `guardian_claim` forwards it
+  without asking the person again. Once a call has been sent upstream it runs
+  to its real outcome, which is recorded.
+- **A second `guardian_claim` of the same `requestId`** says the call was
+  already forwarded and must not be proposed again. If the first claim has
+  finished, its result is returned again after that notice; if it is still
+  running, the answer says to check `guardian_receipt`. The proxy remembers
+  the last 1000 claimed requests. A `requestId` it does not hold is answered
+  with "this claim forwarded nothing", and a reminder to check
+  `guardian_receipt` if it was claimed before.
+- An unexpected proxy error after a call was forwarded says the call may
+  have run, never that it was not forwarded.
 
 `guardian-mcp --help` prints usage. A missing setting prints a one-line
 message naming it instead of a stack trace.
 
-## Govern a remote MCP server: `guardian-mcp proxy --url` (unreleased)
+## Govern a remote MCP server: `guardian-mcp proxy --url` (0.3.3 and later)
 
-**Status: not yet proven live.** This is tested against local Streamable
-HTTP and SSE MCP servers and a fake Guardian only. Nothing has run against a
-real Guardian or a real hosted server such as Composio. Composio's
-`x-api-key` header is unconfirmed.
+**Status: tested against a real Guardian; production proof pending.** It ran
+end to end over Streamable HTTP against the real Guardian server code (allow,
+ask then approve, deny, outage), not yet on hosted production. SSE is tested
+against local servers and a stand-in Guardian only, and no real hosted server
+such as Composio has been tried. Composio's `x-api-key` header is
+unconfirmed.
 
 The proxy can also front an MCP server that runs online, such as Composio.
 The agent still starts `guardian-mcp` over stdio like any
@@ -157,7 +192,8 @@ A server that takes a Bearer key: `--url https://mcp.example.com/mcp --header
   unavailable" error. The upstream's error text (which can quote its URL
   path, response body or headers) is not shown to the agent or logged;
   `guardian-mcp tools --url` prints it with the URL, its path identifiers,
-  query values and header values scrubbed.
+  query values and header values scrubbed. Each query value is scrubbed as
+  typed (a `+` stays a `+`), percent-decoded, and with `+` read as a space.
 
 What is **not** governed: a remote server the agent connects to directly
 (for example an MCP client's own `"url"` entry, or a model provider's hosted
@@ -175,9 +211,8 @@ MCP connector), and anything the agent does without MCP. Also not covered:
   [ZeroClaw](../../examples/zeroclaw/README.md) and
   [your own container (CrewAI, LangGraph, AutoGen)](../../examples/byo/README.md).
   Runnable example: `examples/remote-mcp.mjs` (SIMULATED by default, LIVE with
-  Guardian settings). It runs inside this repository, where the workspace
-  links the unreleased guardian-mcp; the published `@odingard/guardian-mcp`
-  0.3.2 does not have `--url` yet.
+  Guardian settings). `--url` is in the published `@odingard/guardian-mcp`
+  from 0.3.3.
 
 ## See what you are about to govern: `guardian-mcp tools`
 
@@ -197,8 +232,10 @@ createIssue     Ask me first  "create" may change something  ⚠ name not accept
 
 How the suggestions are made:
 
-- The server's own MCP annotations (`readOnlyHint`, `destructiveHint`) are used first.
-- Otherwise the tool's verb decides. `get`, `list` and `search` suggest Allow; everything else suggests Ask.
+- A tool the server marks destructive (`destructiveHint`) suggests Ask.
+- So does a tool whose name contains a verb that changes something or sends data out, anywhere in the name (`create`, `update`, `delete`, `replace`, `send`, `run`, `write` and similar), even when the server marks it read-only. `get_or_create_customer`, `find_and_replace` and `list_and_delete_old_files` suggest Ask.
+- Otherwise a tool the server marks read-only (`readOnlyHint`) suggests Allow, and so does a name that starts with a read verb (`get`, `list`, `search`, `read`, `describe`, `show`, `view`, `find`, `lookup`, `count`, `inspect`).
+- Everything else suggests Ask, including `fetch` (it can send data to any URL) and `status`.
 
 They are suggestions only: you set the real modes in the console. Tool names that break Guardian's naming rule are flagged, because every call to them would be denied. Add `--json` for machine-readable output.
 

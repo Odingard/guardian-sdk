@@ -81,16 +81,26 @@ export function createSteelBrowser(config: SteelBrowserConfig): BrowserPort {
         await releaseSteel();
         throw error;
       }
-      const target = await cdp.send("Target.createTarget", {
-        url: "about:blank",
-      });
-      const targetId = String(target.targetId);
-      const attached = await cdp.send("Target.attachToTarget", {
-        targetId,
-        flatten: true,
-      });
-      const pageSession = String(attached.sessionId);
-      await cdp.send("Page.enable", {}, pageSession);
+      let targetId: string;
+      let pageSession: string;
+      try {
+        const target = await cdp.send("Target.createTarget", {
+          url: "about:blank",
+        });
+        targetId = String(target.targetId);
+        const attached = await cdp.send("Target.attachToTarget", {
+          targetId,
+          flatten: true,
+        });
+        pageSession = String(attached.sessionId);
+        await cdp.send("Page.enable", {}, pageSession);
+      } catch (error) {
+        // No page means no checkout. Do not leave a live (billed)
+        // Steel session or an open CDP socket behind.
+        cdp.close();
+        await releaseSteel();
+        throw error;
+      }
 
       const evaluate = async (expression: string) => {
         const evaluated = await cdp.send(
@@ -131,7 +141,20 @@ export function createSteelBrowser(config: SteelBrowserConfig): BrowserPort {
               pageSession,
               navigationTimeoutMs,
             );
-            const value = await evaluate(expression);
+            let value: unknown;
+            try {
+              value = await evaluate(expression);
+            } catch (error) {
+              loaded.catch(() => undefined);
+              throw error;
+            }
+            // The expression reports `true` only when it submitted. Anything
+            // else means no navigation is coming: stop waiting, so a form
+            // that never submitted is not mistaken for a lost submit.
+            if (value !== true) {
+              loaded.catch(() => undefined);
+              return value;
+            }
             await loaded;
             return value;
           },

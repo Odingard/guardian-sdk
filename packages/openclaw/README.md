@@ -64,7 +64,18 @@ command maps to the same Guardian tool under OpenClaw and Claude Code.
 | `read`, `web_search`, `x_search`, `session_status`, `sessions_list`, `sessions_history`, `agents_list`, `get_goal`, `tool_search`, `tool_describe`, `process` list / poll / log / status               | not sent to Guardian (read-only)                                                                                         | —              |
 
 Commands or reads that touch a process environment (`/proc/…`, `environ`,
-`GUARDIAN_AGENT_CREDENTIAL`) go to the Ask tier as `shell_destructive`.
+`GUARDIAN_AGENT_CREDENTIAL`) go to the Ask tier as `shell_destructive`. So
+does a `read` of a start-up env file (`.env`, `.env.*`, `gateway.env`) in the
+state directory, a control root, OpenClaw's config directory
+(`~/.config/openclaw`) or above the workspace (`../.env`); the Guardian
+arguments carry `touches: "openclaw-env-file"`. A `.env` inside the agent
+workspace is read without asking.
+
+`apply_patch` classifies every `*** Add/Update/Delete File:` and
+`*** Move to:` header in the patch, however many there are. The Guardian
+arguments list the first 50 files; `morePaths` counts the rest, and
+`controlPlanePaths` names (up to 10 of) the paths that sent the call to the
+Ask tier.
 
 **OpenClaw's own control plane is Ask-tier (a backstop).** The primary
 defence is the install-integrity check below; these patterns only narrow the
@@ -210,9 +221,15 @@ OpenClaw 2026.7.1 loads `.env` from the Gateway's working directory into its
 environment at start-up and does not filter `GUARDIAN_*` keys. So any
 `GUARDIAN_*` key named in that file (the opt-out, the credential, the
 connection ids, the agent name, the base URL, the approval timeout) is
-ignored, whatever its value, and the Gateway log says so. Set them in the
-environment the Gateway is started with (the container or service
-definition) or in the protected `<state dir>/.env`.
+ignored, whatever its value, and the Gateway log says so. Set them only in
+the environment the Gateway is started with: the container or service
+definition (for example a systemd `Environment=`/`EnvironmentFile=` owned by
+root and readable only by root, or the container's secret environment). Do
+not put `GUARDIAN_AGENT_CREDENTIAL` in `<state dir>/.env` or any other file in
+the state directory: the protection below makes those files read-only, not
+unreadable, and the agent's `read` tool runs as the Gateway user. Keep the
+`.env` files there empty (the recipe below creates them only so the agent
+cannot).
 
 ### The official OpenClaw image
 
@@ -245,7 +262,9 @@ rm -f /data/.npmrc && : > /data/.npmrc
 rm -rf /data/.npm
 # The directories OpenClaw loads plugin code, hooks or plugin catalogs from,
 # the start-up env files and the config backup (OpenClaw restores the config
-# from openclaw.json.bak) must exist, so the agent cannot create them.
+# from openclaw.json.bak) must exist, so the agent cannot create them. Leave
+# the env files empty: they stay readable by the Gateway user, so no secret
+# (such as GUARDIAN_AGENT_CREDENTIAL) belongs in them.
 mkdir -p "$S/extensions" "$S/npm" "$S/hooks" "$S/mpm" "$S/plugins" /data/.config/openclaw
 touch "$S/.env" /data/.config/openclaw/gateway.env
 rm -f "$S"/openclaw.json.bak* && cp "$S/openclaw.json" "$S/openclaw.json.bak"
@@ -380,9 +399,10 @@ plugin does not read `openclaw.json` and does not check them.
 - Prefer a state directory outside a home the Gateway user can write, e.g.
   `OPENCLAW_STATE_DIR=/srv/openclaw` with `/srv/openclaw` owned by
   `root:openclaw` and mode `1775`, set in the service's environment (not in a
-  file the Gateway user can write). Put `openclaw.json`, `.env`,
+  file the Gateway user can write). Put `openclaw.json`, an empty `.env`,
   `extensions/`, `npm/` and `hooks/` there, root-owned and read-only, as
-  above.
+  above. Keep `GUARDIAN_AGENT_CREDENTIAL` in the service's environment, not in
+  a file the Gateway user can read.
 - If the state directory stays in the Gateway user's home (`~/.openclaw`),
   the home directory itself must be root-owned and sticky, or the user can
   rename `~/.openclaw` away.

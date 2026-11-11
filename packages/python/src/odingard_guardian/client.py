@@ -193,6 +193,10 @@ def build_proposal(invocation: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _request_result(status: int, data: Any, request_id: Optional[str]) -> RequestResult:
+    if status >= 500:
+        # A server error is Guardian failing to answer, not a decision: the
+        # call is still refused (fail closed) but reported as an outage.
+        return RequestResult(ok=False, reason_code="SERVICE_UNAVAILABLE", request_id=request_id)
     if not isinstance(data, dict) or data.get("ok") is not True:
         reason = (data.get("reasonCode") or data.get("code")) if isinstance(data, dict) else None
         return RequestResult(
@@ -201,6 +205,11 @@ def _request_result(status: int, data: Any, request_id: Optional[str]) -> Reques
             request_id=request_id,
         )
     decision = data.get("decision")
+    if decision is not None and decision not in ("ALLOW", "ASK", "DENY"):
+        # Only ALLOW (or the hosted gateway's ALLOW body, which carries a
+        # token and no decision) can run anything. Any other decision value
+        # is refused.
+        return RequestResult(ok=False, reason_code="MALFORMED_RESPONSE", request_id=request_id)
     token = data.get("capabilityToken")
     if not isinstance(token, str):
         token = data.get("token") if isinstance(data.get("token"), str) else None
@@ -208,7 +217,7 @@ def _request_result(status: int, data: Any, request_id: Optional[str]) -> Reques
     return RequestResult(
         ok=True,
         request_id=rid if isinstance(rid, str) else (request_id or ""),
-        decision=decision if decision in ("ASK", "DENY") else "ALLOW",
+        decision="ALLOW" if decision is None else decision,
         capability_token=token,
         reason_code=data.get("reasonCode") if isinstance(data.get("reasonCode"), str) else None,
     )

@@ -19,16 +19,49 @@ tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Fre
 
 ## Packages
 
-| Package                                                                                      | Use it when                                                                                                                                           | Docs                                             |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)             | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, receipts and approvals                      | [packages/sdk](packages/sdk)                     |
-| [`odingard-guardian`](packages/python) (PyPI)                                                | You build in Python (LangChain, CrewAI, OpenAI Agents, Claude Agent SDK, plain code), sync or async                                                   | [packages/python](packages/python)               |
-| [`@odingard/guardian-mcp`](https://www.npmjs.com/package/@odingard/guardian-mcp)             | Your agent speaks MCP (Claude, Cursor, …), with no code needed. `guardian-mcp proxy` governs any existing MCP server, local or remote                 | [packages/mcp](packages/mcp)                     |
-| [`@odingard/guardian-langchain`](https://www.npmjs.com/package/@odingard/guardian-langchain) | You build with LangChain.js / LangGraph                                                                                                               | [packages/langchain](packages/langchain)         |
-| [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai) | You build with the Vercel AI SDK                                                                                                                      | [packages/vercel-ai](packages/vercel-ai)         |
-| [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)         | Your browser agent checks out on Steel                                                                                                                | [packages/steel](packages/steel)                 |
-| `@odingard/guardian-openai-agents` (not yet published)                                       | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Not yet proven live | [packages/openai-agents](packages/openai-agents) |
-| `@odingard/guardian-openclaw` (not yet published)                                            | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools. Not yet proven live                                      | [packages/openclaw](packages/openclaw)           |
+| Package                                                                                              | Use it when                                                                                                                                                                                                                       | Docs                                             |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)                     | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, receipts and approvals                                                                                                  | [packages/sdk](packages/sdk)                     |
+| [`odingard-guardian`](packages/python) (PyPI)                                                        | You build in Python (LangChain, CrewAI, OpenAI Agents, Claude Agent SDK, plain code), sync or async                                                                                                                               | [packages/python](packages/python)               |
+| [`@odingard/guardian-mcp`](https://www.npmjs.com/package/@odingard/guardian-mcp)                     | Your agent speaks MCP (Claude, Cursor, …), with no code needed. `guardian-mcp proxy` governs an existing MCP server: local (stdio) is proven on production; remote (`--url`) is tested against Guardian, production proof pending | [packages/mcp](packages/mcp)                     |
+| [`@odingard/guardian-langchain`](https://www.npmjs.com/package/@odingard/guardian-langchain)         | You build with LangChain.js / LangGraph                                                                                                                                                                                           | [packages/langchain](packages/langchain)         |
+| [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai)         | You build with the Vercel AI SDK                                                                                                                                                                                                  | [packages/vercel-ai](packages/vercel-ai)         |
+| [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)                 | Your browser agent checks out on Steel. Not yet available on hosted Guardian                                                                                                                                                      | [packages/steel](packages/steel)                 |
+| [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
+| [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested against Guardian; production proof pending                                               | [packages/openai-agents](packages/openai-agents) |
+| `@odingard/guardian-openclaw` (not yet published)                                                    | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
+
+## Works with
+
+Any agent can use Guardian by one of three routes: put its MCP servers behind
+the **MCP proxy** (`guardian-mcp proxy`), add the **coding-agent hook**
+(`guardian-hook`), or call the **SDK / HTTP API** in front of any action
+(`createGuard`, Python `@guard`). The table lists the integrations we ship or
+document, and how far each has been tested.
+
+| Integration                                     | Package                                                | Status                                            |
+| ----------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
+| Claude Code                                     | `@odingard/guardian-hook`                              | Proven on production                              |
+| Claude Agent SDK (TypeScript)                   | `@odingard/guardian-hook`                              | Proven on production                              |
+| Any MCP server, local (stdio)                   | `@odingard/guardian-mcp`                               | Proven on production                              |
+| Any MCP server, remote (`--url`)                | `@odingard/guardian-mcp`                               | Tested against Guardian; production proof pending |
+| LangChain.js / LangGraph                        | `@odingard/guardian-langchain`                         | Tested against Guardian; production proof pending |
+| Vercel AI SDK                                   | `@odingard/guardian-vercel-ai`                         | Tested against Guardian; production proof pending |
+| OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                     | Tested against Guardian; production proof pending |
+| Python with LangChain / OpenAI Agents SDK       | `odingard-guardian`                                    | Tested against Guardian; production proof pending |
+| Python with CrewAI                              | `odingard-guardian`                                    | Example, not yet tested                           |
+| Claude Agent SDK (Python)                       | `odingard-guardian`                                    | Example, not yet tested                           |
+| Codex CLI                                       | `@odingard/guardian-hook`                              | Example, not yet tested                           |
+| DeepSeek Harness                                | `@odingard/guardian-hook`                              | Example, not yet tested                           |
+| Hermes Agent                                    | `odingard-guardian`                                    | Example, not yet tested                           |
+| ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Example, not yet tested                           |
+| Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
+| Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
+| OpenClaw                                        | `@odingard/guardian-openclaw`                          | Unpublished                                       |
+
+"Tested against Guardian" means the integration ran end to end against the
+real Guardian server code, with real approvals and receipts verified offline,
+but not yet on hosted production.
 
 ## Quickstart
 
@@ -101,13 +134,17 @@ guardian-mcp proxy -- npx -y your-whatsapp-mcp-server
 
 ```bash
 pip install odingard-guardian   # in Hermes' Python; ships the Hermes plugin "guardian"
-hermes plugins enable guardian  # plus plugins.hook_callback_timeout: 130 in config.yaml
+# then list guardian under plugins.enabled in Hermes' config.yaml,
+# with plugins.hook_callback_timeout: 130
 ```
 
 Hermes calls the plugin before every tool call (terminal, file edits,
 `execute_code`, the browser, MCP tools, …). Guardian decides; a block holds.
 Read-only tools are not routed, and anything outside Hermes' tool dispatch is
-not governed. Not yet proven live. See [examples/hermes](examples/hermes/README.md).
+not governed. Example, not yet tested against Guardian. The install step is
+unverified: `hermes plugins enable guardian` failed with "not installed or
+bundled" in the only real attempt, so check that Hermes loads the plugin. See
+[examples/hermes](examples/hermes/README.md).
 
 Full guides: [packages/sdk](packages/sdk/README.md) ·
 [packages/python](packages/python/README.md) · [packages/mcp](packages/mcp/README.md).
@@ -128,14 +165,14 @@ node prompt-injection-deny.mjs  # injected "export contacts" → DENY
 node coding-agent-ask.mjs       # consequential command → ASK
 node invoice-agent.mjs          # B2B invoices: ALLOW under $5k, ASK above, DENY unknown payee (createGuard)
 python python/invoice_agent.py  # the same, in Python (pip install odingard-guardian)
-node remote-mcp.mjs             # guardian-mcp in front of a remote (HTTP) MCP server; SIMULATED fail-closed, LIVE with Guardian env (not yet proven live; needs this repo's unreleased guardian-mcp)
+node remote-mcp.mjs             # guardian-mcp in front of a remote (HTTP) MCP server; SIMULATED fail-closed, LIVE with Guardian env (tested against Guardian; production proof pending)
 node agent-hooks.mjs codex       # Codex CLI hook: shell, apply_patch, MCP → ALLOW / ASK / DENY (guardian-hook codex)
 node agent-hooks.mjs dsh         # DeepSeek Harness hook via its Claude Code bridge (guardian-hook dsh)
 python hermes/hermes_hook_demo.py  # Hermes Agent's pre_tool_call hook: ALLOW / ASK / DENY (SIMULATED unless env set)
 (cd openclaw && npm install && npm run simulated)  # OpenClaw plugin in OpenClaw's real hook runtime (SIMULATED Guardian)
 ```
 
-Recipes (LIVE, not yet proven live): [ZeroClaw](examples/zeroclaw/README.md) ·
+Recipes (LIVE, examples not yet tested): [ZeroClaw](examples/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](examples/byo/README.md).
 
 ## Repository layout

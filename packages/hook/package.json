@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-hook",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Guardian for coding agents: a Claude Code PreToolUse hook (also for OpenAI Codex CLI, DeepSeek Harness and Claude Agent SDK agents) that sends shell commands, file writes and MCP calls to Guardian for a deterministic ALLOW/ASK/DENY decision. Deploys and destructive commands wait for a human approval on your phone; every allowed call carries a verifiable receipt.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",

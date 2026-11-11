@@ -167,6 +167,23 @@ export type GuardianRequestResult =
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * The execution receipt, read leniently: fields a newer Guardian adds are
+ * ignored instead of making a successful execute unreadable. Every field
+ * this SDK reads is still checked.
+ */
+const LenientExecutionReceiptSchema =
+  AgentExecutionReceiptSchema.strip().extend({
+    delivered: AgentExecutionReceiptSchema.shape.delivered
+      .unwrap()
+      .strip()
+      .optional(),
+  });
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function randomId(prefix: "req" | "cor"): string {
   return `${prefix}_${randomBytes(16).toString("hex")}`;
 }
@@ -180,13 +197,21 @@ export interface GuardianClient {
   request(invocation: GuardianInvocation): Promise<GuardianRequestResult>;
   /** Collect a capability after human approval of a prior ASK. */
   claim(requestId: string): Promise<GuardianRequestResult>;
-  /** Execute a held capability; resolves to the execution receipt. */
+  /**
+   * Execute a held capability; resolves to the execution receipt.
+   *
+   * `outcomeUnknown: true` on a failure means the execute call was sent but
+   * no usable answer came back (the connection failed, Guardian answered
+   * 5xx, or an `ok: true` answer could not be read). Guardian may have
+   * redeemed the capability and performed the action: do not retry it as a
+   * new request; look it up by requestId (`receipts`) first.
+   */
   execute(input: {
     requestId: string;
     capabilityToken: string;
   }): Promise<
     | { ok: true; receipt: AgentExecutionReceipt }
-    | { ok: false; reasonCode: string }
+    | { ok: false; reasonCode: string; outcomeUnknown?: boolean }
   >;
   /**
    * The signed portable authority receipt (`greceipt.v1`) for a
@@ -322,24 +347,43 @@ export function createGuardianClient(
         ...(typeof requestId === "string" ? { requestId } : {}),
       };
     }
+    const answeredRequestId =
+      typeof data.requestId === "string"
+        ? data.requestId
+        : ((body as { requestId?: string }).requestId ?? "");
+    const reasonCode =
+      typeof data.reasonCode === "string" ? data.reasonCode : undefined;
+    if (data.decision === "ASK" || data.decision === "DENY") {
+      return {
+        ok: true,
+        requestId: answeredRequestId,
+        decision: data.decision,
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+      };
+    }
+    // An ALLOW needs a capability token. The hosted gateway answers an ALLOW
+    // with `token` and no `decision`; `capabilityToken` and
+    // `decision: "ALLOW"` are accepted too. Any other decision value, or no
+    // token, is a malformed answer and fails closed as a denial.
+    const capabilityToken =
+      nonEmptyString(data.capabilityToken) ?? nonEmptyString(data.token);
+    if (
+      (data.decision === undefined || data.decision === "ALLOW") &&
+      capabilityToken !== undefined
+    ) {
+      return {
+        ok: true,
+        requestId: answeredRequestId,
+        decision: "ALLOW",
+        capabilityToken,
+        ...(reasonCode === undefined ? {} : { reasonCode }),
+      };
+    }
     return {
       ok: true,
-      requestId:
-        typeof data.requestId === "string"
-          ? data.requestId
-          : ((body as { requestId?: string }).requestId ?? ""),
-      decision:
-        data.decision === "ASK" || data.decision === "DENY"
-          ? data.decision
-          : "ALLOW",
-      ...(typeof data.capabilityToken === "string"
-        ? { capabilityToken: data.capabilityToken }
-        : typeof data.token === "string"
-          ? { capabilityToken: data.token }
-          : {}),
-      ...(typeof data.reasonCode === "string"
-        ? { reasonCode: data.reasonCode }
-        : {}),
+      requestId: answeredRequestId,
+      decision: "DENY",
+      reasonCode: "MALFORMED_RESPONSE",
     };
   };
 
@@ -415,19 +459,32 @@ export function createGuardianClient(
       });
       const response = await call("/v1/agent/execute", request);
       const data = response.body;
-      const receipt = AgentExecutionReceiptSchema.safeParse(data?.receipt);
-      if (!data || data.ok !== true || !receipt.success) {
-        return {
-          ok: false,
-          reasonCode:
-            typeof data?.reasonCode === "string"
-              ? data.reasonCode
-              : typeof data?.code === "string"
-                ? data.code
-                : `HTTP_${response.status}`,
-        };
+      const receipt = LenientExecutionReceiptSchema.safeParse(data?.receipt);
+      if (data?.ok === true && receipt.success) {
+        return { ok: true, receipt: receipt.data as AgentExecutionReceipt };
       }
-      return { ok: true, receipt: receipt.data };
+      const reasonCode =
+        typeof data?.reasonCode === "string"
+          ? data.reasonCode
+          : typeof data?.code === "string"
+            ? data.code
+            : data?.ok === true
+              ? "RECEIPT_UNREADABLE"
+              : `HTTP_${response.status}`;
+      // The execute was sent. Unless Guardian answered with a readable
+      // refusal (a 4xx, or a 2xx `ok: false`), it may have performed the
+      // action: no answer, a 5xx, an unreadable body, or an `ok: true`
+      // whose receipt cannot be read.
+      const definitiveRefusal =
+        response.status >= 200 &&
+        response.status < 500 &&
+        data !== null &&
+        data.ok === false;
+      return {
+        ok: false,
+        reasonCode,
+        ...(definitiveRefusal ? {} : { outcomeUnknown: true }),
+      };
     },
 
     async portableReceipt(requestId) {

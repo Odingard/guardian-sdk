@@ -653,3 +653,97 @@ describe("exec env overrides and Code Mode", () => {
     });
   });
 });
+
+describe("start-up env files and long patches", () => {
+  it("read of an OpenClaw start-up env file goes to the Ask tier", () => {
+    for (const path of [
+      "/data/.openclaw/.env",
+      "~/.openclaw/.env",
+      "../.env",
+      "/data/.config/openclaw/gateway.env",
+      "~/.config/openclaw/.env",
+      "/data/.openclaw/.env.local",
+    ]) {
+      const read = governOpenClawCall({ toolName: "read", params: { path } });
+      expect(read?.toolName, path).toBe("shell_destructive");
+      expect(read?.arguments.touches, path).toBe("openclaw-env-file");
+      expect(tierOf(read!.toolName as never)).toBe("ask");
+    }
+    // A control root from the environment counts too.
+    expect(
+      governOpenClawCall({
+        toolName: "read",
+        params: { path: "/srv/openclaw/.env" },
+        controlRoots: ["/srv/openclaw"],
+      })?.toolName,
+    ).toBe("shell_destructive");
+  });
+
+  it("read of other files, and of a .env in the workspace, stays ungoverned", () => {
+    for (const path of [
+      "/data/.openclaw/workspace/.env",
+      "src/app.ts",
+      ".env.example.md/notes.txt",
+      "/data/.openclaw/openclaw.json",
+    ]) {
+      expect(
+        governOpenClawCall({ toolName: "read", params: { path } }),
+        path,
+      ).toBeNull();
+    }
+  });
+
+  it("apply_patch classifies every header, lists 50 and counts the rest", () => {
+    const benign = Array.from(
+      { length: 50 },
+      (_, i) => `*** Add File: notes/f${i}.txt\n+x`,
+    );
+    const patch = [
+      "*** Begin Patch",
+      ...benign,
+      "*** Update File: /data/.openclaw/openclaw.json\n@@\n-a\n+b",
+      "*** End Patch",
+    ].join("\n");
+    const call = governOpenClawCall({
+      toolName: "apply_patch",
+      params: { input: patch },
+    })!;
+    expect(call.toolName).toBe("shell_destructive");
+    expect(call.arguments.files).toHaveLength(50);
+    expect(call.arguments.morePaths).toBe(1);
+    expect(call.arguments.controlPlanePaths).toEqual([
+      "/data/.openclaw/openclaw.json",
+    ]);
+    expect(patchPaths(patch)).toHaveLength(51);
+  });
+
+  it("apply_patch with up to 50 files has no morePaths", () => {
+    const patch = Array.from(
+      { length: 50 },
+      (_, i) => `*** Add File: notes/f${i}.txt\n+x`,
+    ).join("\n");
+    const call = governOpenClawCall({
+      toolName: "apply_patch",
+      params: { input: patch },
+    })!;
+    expect(call.toolName).toBe("file_write");
+    expect(call.arguments.files).toHaveLength(50);
+    expect(call.arguments).not.toHaveProperty("morePaths");
+    expect(call.arguments).not.toHaveProperty("controlPlanePaths");
+  });
+
+  it("apply_patch derived paths past the 50th are classified too", () => {
+    const derivedPaths = [
+      ...Array.from({ length: 60 }, (_, i) => `notes/f${i}.txt`),
+      "~/.openclaw/extensions/guardian/index.js",
+    ];
+    const call = governOpenClawCall({
+      toolName: "apply_patch",
+      params: { input: "not a patch envelope" },
+      derivedPaths,
+    })!;
+    expect(call.toolName).toBe("shell_destructive");
+    expect(call.arguments.files).toHaveLength(50);
+    expect(call.arguments.morePaths).toBe(11);
+  });
+});
