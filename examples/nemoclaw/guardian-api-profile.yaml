@@ -1,0 +1,43 @@
+# OpenShell provider profile for the Guardian agent credential.
+# OpenShell keeps the real credential outside the sandbox. The sandbox sees a
+# placeholder (openshell:resolve:env:...), and OpenShell's proxy swaps in the
+# real value wherever the placeholder appears in a request's headers (any
+# header, not only the one named below), URL path or query string, only for
+# this host and these paths.
+#
+#   openshell provider profile lint   -f guardian-api-profile.yaml
+#   openshell provider profile import -f guardian-api-profile.yaml
+#
+# Then register the credential through NemoClaw and rebuild (guide, step 3).
+#
+# Verified with Guardian staging: this file with host
+# guardian-api-staging.odingard.com. The production host below was not part
+# of that run.
+id: guardian-api
+display_name: Guardian API
+description: Guardian agent API used by @odingard/guardian-openclaw
+category: other
+inference_capable: false
+credentials:
+  - name: agent_credential
+    description: Guardian agent credential (gak_...)
+    env_vars: [GUARDIAN_AGENT_CREDENTIAL]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+endpoints:
+  - host: guardian-api.odingard.com
+    port: 443
+    protocol: rest
+    enforcement: enforce
+    rules:
+      - allow: { method: POST, path: "/v1/agent/requests" }
+      - allow: { method: POST, path: "/v1/agent/claims" }
+      - allow: { method: POST, path: "/v1/agent/execute" }
+      - allow: { method: GET, path: "/v1/agent/receipts/**" }
+# When OpenShell's providers_v2_enabled setting is on, this profile adds its
+# own policy layer for the host, for these binaries. OpenShell sees the
+# Gateway as /usr/local/bin/node, so this layer admits nothing on its own:
+# the Gateway reaches Guardian through the preset in guardian-api.yaml.
+binaries:
+  - /usr/local/bin/openclaw

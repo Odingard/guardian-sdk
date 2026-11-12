@@ -75,6 +75,7 @@ document, and how far each has been tested.
 | Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
+| NVIDIA NemoClaw (guide)                         | `@odingard/guardian-openclaw` ([guide](examples/nemoclaw)) | Verified on staging with NemoClaw v0.0.143 (shell commands); not tamper-proof |
 | x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. |
 | AP2 mandates (TypeScript)                       | `@odingard/guardian-ap2`                               | Live proof pending (no public AP2 sandbox) |
 

@@ -1,0 +1,37 @@
+# NemoClaw custom policy preset: the one egress rule Guardian needs.
+# It lets Node.js processes in the sandbox (the OpenClaw Gateway runs as one)
+# reach the Guardian API host, on port 443, for the four Guardian agent API
+# calls the plugin makes. TLS stays inspected (no `tls: skip`), which
+# OpenShell needs to put the real credential in place of its placeholder.
+#
+#   nemoclaw <sandbox> policy add --from-file ./guardian-api.yaml --dry-run
+#   nemoclaw <sandbox> policy add --from-file ./guardian-api.yaml --yes
+#
+# Using a different Guardian host? Change `host` here and in
+# guardian-api-profile.yaml, and set `baseUrl` in the plugin config.
+#
+# Verified with Guardian staging: this file with host
+# guardian-api-staging.odingard.com. The production host below was not part
+# of that run.
+preset:
+  name: guardian-api
+  description: "Guardian decision API for @odingard/guardian-openclaw"
+network_policies:
+  guardian_api:
+    name: guardian_api
+    endpoints:
+      - host: guardian-api.odingard.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/agent/requests" }
+          - allow: { method: POST, path: "/v1/agent/claims" }
+          - allow: { method: POST, path: "/v1/agent/execute" }
+          - allow: { method: GET, path: "/v1/agent/receipts/**" }
+    binaries:
+      # OpenShell sees the OpenClaw Gateway's requests as coming from Node.js,
+      # so this is /usr/local/bin/node, not /usr/local/bin/openclaw. It means
+      # any Node.js process in the sandbox can reach this host on these paths
+      # (see the guide, step 4); curl and other tools are still refused.
+      - { path: /usr/local/bin/node }
