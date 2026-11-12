@@ -513,6 +513,150 @@ ignored (see above).
 
 Running on the official image: see [examples/openclaw](../../examples/openclaw).
 
+## NVIDIA NemoClaw (OpenShell)
+
+**Status: not yet run end to end on NVIDIA NemoClaw.** This section follows
+NemoClaw v0.0.143, OpenShell 0.0.116 and the OpenClaw that NemoClaw release
+ships, 2026.10.5, as read from their source, and the plugin's own tests. The
+plugin was proven live only on OpenClaw 2026.7.1, and the rest of this
+README describes OpenClaw 2026.7.1. The OpenClaw behaviour this section
+relies on has not been run on 2026.10.5: an in-place Gateway restart after
+`openclaw config set` and `openclaw plugins enable`, loading the state
+directory's `.env`, and loading `.env` from the Gateway's working directory
+(where the plugin ignores `GUARDIAN_*` keys).
+
+In a NemoClaw sandbox the Gateway never sees the raw credential. OpenShell
+gives it a placeholder, `openshell:resolve:env:v<N>_GUARDIAN_AGENT_CREDENTIAL`,
+and OpenShell's proxy puts the real value into the `Authorization` header,
+only on the endpoints of the credential's provider profile. The raw value
+stays outside the sandbox.
+
+**Register the credential through NemoClaw, then rebuild.** Import an
+OpenShell provider profile for the Guardian API on the host (endpoint: your
+Guardian API host on port 443, the agent paths `POST /v1/agent/requests`,
+`POST /v1/agent/claims`, `POST /v1/agent/execute` and
+`GET /v1/agent/receipts/**`; credential env var `GUARDIAN_AGENT_CREDENTIAL`,
+bearer; `binaries: [/usr/local/bin/openclaw]`), then:
+
+```bash
+nemoclaw credentials add <name> --type <profile id> --credential GUARDIAN_AGENT_CREDENTIAL
+nemoclaw <sandbox> rebuild
+```
+
+so the provider is attached when the sandbox is created. Do not use
+`openshell provider create` with `openshell sandbox provider attach`
+instead: NemoClaw does not record that provider, so its next rebuild drops
+it, and an attachment made after the Gateway started never reaches the
+running Gateway. Set `plugins.entries.guardian.config.baseUrl` in
+`openclaw.json` to the same Guardian API host as the profile. Do not rely on
+`GUARDIAN_BASE_URL` here: NemoClaw has no general way to set a Gateway
+environment variable (see the opt-out paragraph below).
+
+**Allow the Guardian API host in the sandbox's network policy.** The
+sandbox's network policy refuses the Guardian API host until a rule allows
+it. Add a NemoClaw custom policy preset with one host, the same four agent
+paths and one binary, for example:
+
+```yaml
+preset:
+  name: guardian-api
+  description: "Guardian decision API for @odingard/guardian-openclaw"
+network_policies:
+  guardian_api:
+    name: guardian_api
+    endpoints:
+      - host: guardian-api.odingard.com   # your Guardian API host
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/agent/requests" }
+          - allow: { method: POST, path: "/v1/agent/claims" }
+          - allow: { method: POST, path: "/v1/agent/execute" }
+          - allow: { method: GET, path: "/v1/agent/receipts/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+```
+
+```bash
+nemoclaw <sandbox> policy add --from-file ./guardian-api.yaml --dry-run
+nemoclaw <sandbox> policy add --from-file ./guardian-api.yaml --yes
+```
+
+Check the dry-run preview (one host, four rules, one binary) before you
+apply it. Leave TLS inspected (no `tls: skip`): OpenShell must see the
+request to put the credential in. When OpenShell's `providers_v2_enabled`
+setting is on, the attached provider also adds its own policy layer for the
+same host (from the profile); when it is off, this preset is the only rule.
+Without either, the Gateway cannot reach Guardian and every governed call is
+blocked. Which binary the Gateway calls Guardian as (`openclaw` or `node`)
+has not been confirmed on NemoClaw: if OpenShell's sandbox log shows the
+Guardian host refused for `/usr/local/bin/node`, see the `binaries`
+paragraph below before you widen the rule.
+
+**In-place Gateway restarts.**
+
+- **0.1.1 and later:** when `GUARDIAN_AGENT_CREDENTIAL` is exactly an
+  OpenShell placeholder (`v<N>_` revision or `s<64 hex>_` digest form, for
+  this variable only), the plugin leaves it in the Gateway's environment
+  and logs that it kept an OpenShell placeholder (it never logs the value).
+  NemoClaw restarts the Gateway in place by re-executing it with a copy of
+  that environment (`nemoclaw <sandbox> gateway restart`, and config reloads
+  that need a restart, such as after `openclaw config set` or
+  `openclaw plugins enable`), so the new Gateway finds the placeholder again
+  and stays configured. A raw credential is still removed from the
+  environment, as before. A hand-written
+  `openshell:resolve:env:GUARDIAN_AGENT_CREDENTIAL` (no revision) is treated
+  as raw, and OpenShell would not resolve it anyway.
+- **0.1.0:** the plugin removes the placeholder too, so after an in-place
+  restart the Gateway logs "Guardian plugin is not configured" and blocks
+  every governed call. Use `nemoclaw <sandbox> stop` then
+  `nemoclaw <sandbox> start`, not `gateway restart`. A container start
+  should give the Gateway a fresh environment from OpenShell (read from
+  OpenShell's source, not yet tested); check that the Gateway log has no
+  "Guardian plugin is not configured" after the start. Make no OpenClaw
+  config change after the last start.
+
+**Opt-out mode is required, and it is not tamper-proof.** NemoClaw runs the
+Gateway as the `sandbox` user and keeps `/sandbox/.openclaw` (the OpenClaw
+config included) writable by that user by design, so the install check in
+[Required: protect the install](#required-protect-the-install) cannot pass
+and every tool call is blocked. The plugin then runs only in its opt-out
+mode, `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`. NemoClaw has no general
+way to set a Gateway environment variable; the route found is
+`/sandbox/.openclaw/.env`, which OpenClaw loads into the Gateway's
+environment if 2026.10.5 still loads the state directory's `.env` (not yet
+confirmed). The plugin ignores `GUARDIAN_*` keys from `<cwd>/.env`, so the
+route works only while the Gateway's working directory is not
+`/sandbox/.openclaw`. The one time it was read (from the host; the sandbox
+user cannot read the Gateway's `/proc` entries) it was `/sandbox`; NemoClaw
+does not guarantee that. Check: after the next start, the Gateway log shows
+the plugin's one opt-out warning
+("`GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`, so the install-integrity
+check is off"). The flag is ignored if the Gateway's cwd is
+`/sandbox/.openclaw`, and then every tool call stays blocked ("the install
+is not protected"). **In this mode the agent can switch Guardian off** (see
+[Opting out](#opting-out-not-tamper-proof)): do not describe a NemoClaw
+deployment as tamper-proof or tamper-resistant. Never put credential
+material in that `.env` file; a placeholder written there by hand would
+not resolve.
+
+**Which processes can use the placeholder (`binaries`).** With the
+placeholder kept in the Gateway's environment, every process the Gateway
+starts inherits it, `exec` commands included. OpenShell does not check
+which binary is calling when it resolves the placeholder; what limits it
+is the binary allowlist on every policy rule for the Guardian API host (the
+preset above, and the provider's own layer when `providers_v2_enabled` is
+on). With `/usr/local/bin/openclaw` as the only allowed binary in each of
+them, `curl` and other tools are refused before anything is resolved, but
+any process that runs as
+an allowed binary can use the credential on the same four agent endpoints
+the Gateway can: today that includes an `openclaw` command the agent runs
+through `exec`, and, if you widen the allowlist to `/usr/local/bin/node`,
+any Node.js process. That is the reach the agent already has through the
+Gateway: the agent credential can propose actions and redeem approved ones,
+but it cannot approve anything; approvals need a person in Guardian.
+
 ## What is not governed
 
 Say this plainly to anyone relying on it.
@@ -616,6 +760,9 @@ inspect` for lower priorities), and if another plugin returned
   rewrite tool parameters.
 - **The credential.** It is read from the Gateway environment at start-up and
   removed from `process.env`, so commands the agent runs do not inherit it.
+  An OpenShell placeholder (NVIDIA NemoClaw) is the exception: it is kept,
+  and children inherit it (see
+  [NVIDIA NemoClaw (OpenShell)](#nvidia-nemoclaw-openshell)).
   The Gateway's original environment is still readable at
   `/proc/<gateway pid>/environ` by anything running as the same user;
   commands and reads that mention `/proc`, `environ` or the variable name go
