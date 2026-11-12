@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.3
+
+- Date: 2026-11-12
+- SHA-256: `327d10915c4aba8559ba5c6495669431ef471416bb2a383e5ce010f258ff0af9`
+- Pins: `@odingard/guardian-hook` and `@odingard/guardian-mcp` 0.4.0; `@odingard/guardian-sdk`, `@odingard/guardian-langchain` and `@odingard/guardian-vercel-ai` 0.5.0; `@odingard/guardian-openai-agents` 0.3.0; `@odingard/guardian-openclaw` 0.1.1; `odingard-guardian` 0.3.0.
+- Pins guardian-openclaw 0.1.1 (an OpenShell credential placeholder stays in the Gateway environment). No other change.
+
 ## 1.0.2
 
 - Date: 2026-11-12

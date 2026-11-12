@@ -81,9 +81,31 @@ import { workspaceDotEnvGuardianKeys } from "./integrity.js";
  * this process so a plugin reload can still find it. A credential that may
  * have come from the working directory's .env (`ignore`) is removed but not
  * kept.
+ *
+ * One exception: an OpenShell revision-scoped placeholder (NVIDIA NemoClaw
+ * sandboxes) stays in `process.env`. It is not the secret (OpenShell's proxy
+ * swaps it for the real value only on the credential's own endpoints), and
+ * NemoClaw restarts the Gateway in place with `execve` and a copy of
+ * `process.env`, which a symbol slot does not survive.
  */
 const CREDENTIAL_SLOT = Symbol.for("odingard.guardian-openclaw.credential");
 const SCRUBBED_ENV = ["GUARDIAN_AGENT_CREDENTIAL"] as const;
+
+/**
+ * The exact placeholder OpenShell issues for GUARDIAN_AGENT_CREDENTIAL: a
+ * revision (`v<N>`) or digest (`s<64 hex>`) scope. The canonical form with no
+ * scope, another key's placeholder or any extra text does not match.
+ */
+export const OPENSHELL_PLACEHOLDER_RE =
+  /^openshell:resolve:env:(v[0-9]{1,20}|s[0-9a-f]{64})_GUARDIAN_AGENT_CREDENTIAL$/;
+
+/** Logged (once per registration) when a placeholder is kept. No value. */
+export const PLACEHOLDER_KEPT_MESSAGE =
+  "Guardian: GUARDIAN_AGENT_CREDENTIAL is an OpenShell placeholder; kept in the Gateway environment so in-place restarts keep it.";
+
+export function isOpenShellPlaceholder(value: string | undefined): boolean {
+  return typeof value === "string" && OPENSHELL_PLACEHOLDER_RE.test(value);
+}
 
 export function takeCredential(
   env: Record<string, string | undefined> = process.env,
@@ -91,8 +113,14 @@ export function takeCredential(
   ignore = false,
 ): string | undefined {
   const fromEnv = env.GUARDIAN_AGENT_CREDENTIAL?.trim();
+  const keep = !ignore && isOpenShellPlaceholder(fromEnv);
   if (fromEnv && !ignore) slot[CREDENTIAL_SLOT] = fromEnv;
-  for (const name of SCRUBBED_ENV) delete env[name];
+  if (keep) {
+    // Normalised to the trimmed placeholder, so an execve copy matches too.
+    env.GUARDIAN_AGENT_CREDENTIAL = fromEnv;
+  } else {
+    for (const name of SCRUBBED_ENV) delete env[name];
+  }
   const kept = slot[CREDENTIAL_SLOT];
   return typeof kept === "string" && kept ? kept : undefined;
 }
@@ -146,7 +174,12 @@ export type OpenClawPluginApiLike = {
 export function register(
   api: OpenClawPluginApiLike,
   /** Tests: the Gateway's working directory and environment. */
-  host: { cwd?: string; env?: Record<string, string | undefined> } = {},
+  host: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+    /** Tests: the per-process credential slot (default `globalThis`). */
+    slot?: Record<symbol, unknown>;
+  } = {},
 ): void {
   if (typeof api?.on !== "function") return;
   const cwd = host.cwd ?? process.cwd();
@@ -154,9 +187,12 @@ export function register(
   const untrusted = workspaceDotEnvGuardianKeys(cwd);
   const credential = takeCredential(
     processEnv,
-    undefined,
+    host.slot,
     untrusted.has("GUARDIAN_AGENT_CREDENTIAL"),
   );
+  if (isOpenShellPlaceholder(processEnv.GUARDIAN_AGENT_CREDENTIAL)) {
+    api.logger?.info?.(PLACEHOLDER_KEPT_MESSAGE);
+  }
   // The handler drops (and logs) every GUARDIAN_* key named in <cwd>/.env.
   const env = { ...processEnv, GUARDIAN_AGENT_CREDENTIAL: credential };
   const hookTimeoutMs = effectiveHookTimeoutMs(api.config, api.id ?? PLUGIN_ID);
