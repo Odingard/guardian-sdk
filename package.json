@@ -13,6 +13,7 @@
     "packages/openai-agents",
     "packages/steel",
     "packages/x402",
+    "packages/ap2",
     "examples"
   ],
   "scripts": {
