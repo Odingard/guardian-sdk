@@ -1,0 +1,91 @@
+{
+  "name": "@odingard/guardian-x402",
+  "version": "0.1.0",
+  "description": "Guardian for x402: Guardian decides x402 payments made through the guarded official x402 clients (ALLOW/ASK/DENY on the exact terms), before the wallet signs.",
+  "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./fetch": {
+      "types": "./dist-dts/fetch.d.ts",
+      "default": "./dist/fetch.js"
+    },
+    "./axios": {
+      "types": "./dist-dts/axios.d.ts",
+      "default": "./dist/axios.js"
+    },
+    "./mcp": {
+      "types": "./dist-dts/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && esbuild src/index.ts src/fetch.ts src/axios.ts src/mcp.ts --bundle --splitting --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --external:@x402/* --external:axios --external:@modelcontextprotocol/* --outdir=dist && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "peerDependencies": {
+    "@odingard/guardian-sdk": "^0.4.1 || ^0.5.0",
+    "@x402/axios": "~2.30.0",
+    "@x402/core": "~2.30.0",
+    "@x402/evm": "~2.30.0",
+    "@x402/fetch": "~2.30.0",
+    "@x402/mcp": "~2.30.0"
+  },
+  "peerDependenciesMeta": {
+    "@x402/axios": {
+      "optional": true
+    },
+    "@x402/fetch": {
+      "optional": true
+    },
+    "@x402/mcp": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@odingard/guardian-sdk": "^0.4.1 || ^0.5.0",
+    "@types/node": "^22.20.5",
+    "@x402/axios": "2.30.0",
+    "@x402/core": "2.30.0",
+    "@x402/evm": "2.30.0",
+    "@x402/fetch": "2.30.0",
+    "@x402/mcp": "2.30.0",
+    "axios": "^1.21.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "viem": "^2.57.17",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "guardian",
+    "x402",
+    "payments",
+    "ai-agents",
+    "authorization",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/x402"
+  },
+  "homepage": "https://odingard.com/guardian"
+}

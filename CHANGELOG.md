@@ -1,5 +1,18 @@
 # Changelog
 
+## guardian-x402 0.1.0
+
+### Added: x402 payments
+
+- **`@odingard/guardian-x402` 0.1.0** (new): Guardian decides x402 payments made through the guarded official x402 clients, before the wallet signs. The guard builds the official x402 TypeScript clients (`@x402/*` 2.30.x): `guardedFetch` (`wrapFetchWithPayment`), `guardedAxios` (`wrapAxiosWithPayment`) and `guardedMcpClient` (`x402MCPClient`).
+  - Each payment is proposed as `tool.invoke` on `x402.pay` (or `x402.pay.above_cap`) with the exact terms: network, asset, amount in atomic units and as "0.01 USDC", `payTo`, `maxTimeoutSeconds`, EIP-712 domain, resource URL and the original request. ASK waits for a person inside the payment; ALLOW is redeemed with `execute` before anything is signed.
+  - A wrapped signer signs only EIP-3009 `TransferWithAuthorization` typed data that matches the approved terms field by field, once, within 30 s. It refuses other typed data and all transactions.
+  - Local `max`, `askAbove` and optional `payTo` allowlist per asset, in atomic units. Above `askAbove`, a repeat payment while an earlier authorization is still live, or an asset with no limit: a person must approve; a rule ALLOW is refused. Optional local budgets with a developer-supplied compare-and-set store.
+  - Supported: scheme `exact`, `eip3009`, `authorization` flow, USDC on Base Sepolia; x402 v1 and v2 over HTTP, v2 over MCP. Base mainnet is off by default and unproven. Everything else is refused. x402's own `spendControls` stay on.
+  - Built on `@odingard/guardian-sdk` ^0.4.1 (0.5.0 works too). While a person decides, a claim answered `RATE_LIMITED`, `DB_BUSY`, 429 or 5xx keeps the request held (nothing is signed) until it expires. An `execute` whose outcome is unknown (`outcomeUnknown`) refuses the payment and is recorded as "redeemed or unknown, not signed".
+  - Decision-gated, not enforced outside the agent's process. Not governed: signing with the key directly, clients the guard did not build, payload-returning hooks added later, `callToolWithPayment` with an outside payload. Console USD caps and budgets do not apply to x402.
+- `examples/x402/simulated-payments.mjs` (SIMULATED: stand-in Guardian, in-memory 402 server, throwaway test key, no network).
+
 ## sdk 0.5.0 / guardian-langchain 0.5.0 / guardian-vercel-ai 0.5.0 / guardian-openai-agents 0.3.0 / Python 0.3.0 (unreleased)
 
 ### Added: an opt-in file preview on approvals (`fileArgs` / `file_args` `preview: true`)
