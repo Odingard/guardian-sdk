@@ -1,5 +1,20 @@
 # Changelog
 
+## guardian-ap2 0.1.0
+
+### Added: AP2 (Agent Payments Protocol v0.2) mandates
+
+- **`@odingard/guardian-ap2` 0.1.0** (new; tested, not yet proven live): Guardian decides AP2 v0.2 closed Checkout and Payment Mandates before the agent key signs them, through the guard, with pinned merchant keys. Tested in USD.
+  - Human not present (`pay`): reads and verifies the open mandates (pinned Trusted Surface keys, exact `vct`, known constraints only, `cnf` = the agent key, not expired) and the merchant-signed `checkout_jwt` (pinned merchant keys). The closed pair is built from verified data: payee = the checkout merchant, amount = the checkout total, `transaction_id` = SHA-256 of `checkout_jwt`.
+  - Each pair is proposed as `tool.invoke` on `ap2.pay` (or `ap2.pay.above_cap`) with the full canonical terms and their JCS digest. ASK waits for a person; ALLOW is redeemed with `execute` before anything is signed. The guard builds each `kb+sd-jwt` hop itself and signs only bytes that decode to the approved hop, each hop once, within 30 s; each chain is presented once.
+  - A person must approve above `askAbove`, for a currency with no cap, and for the first payment under an open mandate not approved through `delegate()`; a rule ALLOW is refused there. Above `max`: refused locally. Open-mandate `exp` and checkout `expires_at` are checked again after the decision, before signing.
+  - Ledger per open mandate (developer-supplied compare-and-set store): single use, `agent_recurrence` frequency and `max_occurrences`, `budget` (only exact cents in an exponent-2 currency). A new pair is refused outright while an earlier pair from the same open mandate has no verified receipt (AP2 Autonomous mode). A pair is released only by a verified Error Payment Receipt, or a verified Error Checkout Receipt before the payment mandate was presented; receipt issuer keys are pinned per role (merchant, processor). A Success after a release counts and is flagged.
+  - Does not conform to the AP2 v0.2 requirement to present only the needed open-mandate disclosures: chains carry every disclosure the Trusted Surface issued.
+  - `delegate()` gates the request to the Trusted Surface for open mandates (`ap2.delegate`, `ap2.delegate.recurring`; always a person) and checks what the Trusted Surface returns. `payHumanPresent()` checks that what the user signed is what was approved. `recordReceipt()` verifies Checkout and Payment Receipts against pinned keys.
+  - Refused, not ignored: AP2 v0.1 shapes, other `vct` versions, unknown constraints and fields, float or out-of-range amounts, unknown currencies, delegation chains deeper than Trusted Surface to agent.
+  - Not the AP2 Trusted Surface and no substitute for it. Never holds or signs with a key. Decision-gated, not enforced outside the agent's process: signing with the agent key directly is not governed. Console USD caps and budgets do not apply to AP2.
+- `examples/ap2/simulated-payments.mjs` (SIMULATED: stand-in Guardian, Trusted Surface, merchant and processor, throwaway keys, no network).
+
 ## guardian-x402 0.1.0
 
 ### Added: x402 payments

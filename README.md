@@ -46,6 +46,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested, but not yet proven against a live Guardian and a live model                                               | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
 | [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. | [packages/x402](packages/x402)                   |
+| [`@odingard/guardian-ap2`](https://www.npmjs.com/package/@odingard/guardian-ap2)                     | Your agent pays over AP2 v0.2: Guardian decides closed Checkout and Payment Mandates before the agent key signs them (pinned merchant keys, USD). Not yet proven live | [packages/ap2](packages/ap2)                     |
 
 ## Works with
 
@@ -75,6 +76,7 @@ document, and how far each has been tested.
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
 | x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. |
+| AP2 mandates (TypeScript)                       | `@odingard/guardian-ap2`                               | Live proof pending (no public AP2 sandbox) |
 
 "Tested against Guardian" means the integration ran end to end against the
 real Guardian server code, with real approvals and receipts verified offline,
@@ -215,6 +217,7 @@ node agent-hooks.mjs dsh         # DeepSeek Harness hook via its Claude Code bri
 python hermes/hermes_hook_demo.py  # Hermes Agent's pre_tool_call hook: ALLOW / ASK / DENY (SIMULATED unless env set)
 (cd openclaw && npm install && npm run simulated)  # OpenClaw plugin in OpenClaw's real hook runtime (SIMULATED Guardian)
 node x402/simulated-payments.mjs  # x402 payments: ALLOW, ASK above a cap, DENY, before the wallet signs (SIMULATED Guardian, no network)
+node ap2/simulated-payments.mjs   # AP2 mandates: delegation, ALLOW, ASK above a cap, DENY, before the agent key signs (SIMULATED, no network)
 ```
 
 Recipes (LIVE, examples not yet tested): [ZeroClaw](examples/zeroclaw/README.md) ·
@@ -232,6 +235,7 @@ packages/openai-agents  @odingard/guardian-openai-agents  OpenAI Agents SDK adap
 packages/steel          @odingard/guardian-steel
 packages/openclaw       @odingard/guardian-openclaw       OpenClaw plugin
 packages/x402           @odingard/guardian-x402           x402 payment guard
+packages/ap2            @odingard/guardian-ap2            AP2 mandate guard
 packages/python         odingard-guardian (PyPI)          Python SDK
 examples/               runnable demos
 ```
