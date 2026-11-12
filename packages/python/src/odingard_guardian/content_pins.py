@@ -42,6 +42,13 @@ __all__ = [
     "CONTENT_PIN_UNSUPPORTED_PLATFORM",
     "ContentPinError",
     "PinnedFile",
+    "PREVIEW_MAX_BYTES",
+    "PREVIEW_MAX_LINES",
+    "PREVIEW_MAX_ROOTS",
+    "content_preview",
+    "is_under_preview_roots",
+    "normalize_file_arg_preview_roots",
+    "normalize_file_arg_previews",
     "pin_file",
     "verify_pin",
 ]
@@ -72,6 +79,12 @@ DEFAULT_MAX_PIN_BYTES = 25 * 1024 * 1024
 #: Default cap for all pinned files of one call (64 MiB).
 DEFAULT_MAX_PIN_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_NAME_LENGTH = 128
+#: A text preview holds at most this many lines.
+PREVIEW_MAX_LINES = 20
+#: A text preview holds at most this many UTF-8 bytes.
+PREVIEW_MAX_BYTES = 2048
+#: At most this many ``previewRoots`` per file argument.
+PREVIEW_MAX_ROOTS = 16
 _VALID_MODES = ("bytes", "copy", "recheck")
 _CHUNK = 1024 * 1024
 
@@ -107,6 +120,16 @@ class PinnedFile:
 # --- file-system seam (internal: tests only) ---------------------------------
 
 
+
+def resolve_path_of_open_file(fd: int, path: str) -> str:
+    """Resolve ``path`` again; return it only if it is the file open as ``fd``."""
+    target = os.path.realpath(path)
+    by_path = os.stat(target)
+    by_fd = os.fstat(fd)
+    if (by_path.st_dev, by_path.st_ino) != (by_fd.st_dev, by_fd.st_ino):
+        raise OSError("resolved path is not the file read")
+    return target
+
 class _Fs:
     """The calls a pin makes, so a test can replace them. Not public API."""
 
@@ -128,6 +151,23 @@ class _Fs:
 
     def close(self, fd: int) -> None:
         os.close(fd)
+
+    def resolved_path(self, fd: int, path: str) -> str:
+        """The resolved path of the open file (asked for only with ``previewRoots``).
+
+        On Linux, the kernel's own name for the descriptor that was read: the
+        file the bytes came from, whatever happened to the path since.
+        Elsewhere, the path resolved again, trusted only when it is the very
+        file that was read (same device and inode as the open descriptor), so
+        a link swapped after the read withholds the preview.
+        """
+        if sys.platform.startswith("linux"):
+            return os.readlink(f"/proc/self/fd/{fd}")
+        return resolve_path_of_open_file(fd, path)
+
+    def realpath(self, path: str) -> str:
+        """The resolved path of a ``previewRoots`` folder."""
+        return os.path.realpath(path)
 
 
 _real_fs = _Fs()
@@ -198,6 +238,7 @@ def _read_for_pin(
     max_bytes: int,
     budget: Optional[_Budget] = None,
     expected_size: Optional[int] = None,
+    resolved: Optional[List[Optional[str]]] = None,
 ) -> Tuple[bytes, int, str]:
     """Open (never following a final symlink, never blocking on a FIFO),
     require a regular file, read it whole while hashing, and require the size
@@ -272,6 +313,13 @@ def _read_for_pin(
             raise ContentPinError(CONTENT_PIN_UNREADABLE, "The pinned file could not be read") from None
         if second.st_size != first.st_size or second.st_mtime_ns != first.st_mtime_ns:
             raise ContentPinError(CONTENT_PIN_UNSTABLE, "The pinned file was modified while it was read")
+        if resolved is not None:
+            # Asked for only with previewRoots; unknown means "not in a folder".
+            resolver = getattr(fs, "resolved_path", None)
+            try:
+                resolved.append(resolver(fd, path) if resolver is not None else None)
+            except Exception:  # noqa: BLE001
+                resolved.append(None)
         return b"".join(parts), size, f"sha256:{hasher.hexdigest()}"
     except ContentPinError:
         raise
@@ -365,7 +413,177 @@ FileArgsSpec = Mapping[str, str]
 #: What a developer may write for one tool: the full form (a mode per
 #: argument), ``True`` in place of a mode, or a list of argument names. The
 #: short forms mean ``"bytes"``.
-FileArgsDeclaration = Union[Mapping[str, Union[str, bool]], Sequence[str]]
+FileArgsDeclaration = Union[Mapping[str, Union[str, bool, Mapping[str, Any]]], Sequence[str]]
+
+
+# --- preview (display data for the approver, opt-in per argument) -------------
+
+_TEXT_MEDIA_TYPES: Dict[str, str] = {
+    "txt": "text/plain",
+    "text": "text/plain",
+    "log": "text/plain",
+    "csv": "text/csv",
+    "tsv": "text/tab-separated-values",
+    "json": "application/json",
+    "jsonl": "application/jsonl",
+    "ndjson": "application/x-ndjson",
+    "md": "text/markdown",
+    "markdown": "text/markdown",
+    "yaml": "application/yaml",
+    "yml": "application/yaml",
+    "toml": "application/toml",
+    "ini": "text/plain",
+    "cfg": "text/plain",
+    "conf": "text/plain",
+    "env": "text/plain",
+    "xml": "application/xml",
+    "html": "text/html",
+    "htm": "text/html",
+    "css": "text/css",
+    "svg": "image/svg+xml",
+    "js": "text/javascript",
+    "mjs": "text/javascript",
+    "cjs": "text/javascript",
+    "jsx": "text/javascript",
+    "ts": "text/x-typescript",
+    "tsx": "text/x-typescript",
+    "py": "text/x-python",
+    "rb": "text/x-ruby",
+    "go": "text/x-go",
+    "rs": "text/x-rust",
+    "java": "text/x-java",
+    "kt": "text/x-kotlin",
+    "swift": "text/x-swift",
+    "c": "text/x-c",
+    "h": "text/x-c",
+    "cc": "text/x-c++",
+    "cpp": "text/x-c++",
+    "hpp": "text/x-c++",
+    "cs": "text/x-csharp",
+    "php": "text/x-php",
+    "sh": "text/x-shellscript",
+    "bash": "text/x-shellscript",
+    "zsh": "text/x-shellscript",
+    "sql": "application/sql",
+}
+
+_BINARY_MEDIA_TYPES: Dict[str, str] = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "bmp": "image/bmp",
+    "tif": "image/tiff",
+    "tiff": "image/tiff",
+    "ico": "image/vnd.microsoft.icon",
+    "heic": "image/heic",
+    "zip": "application/zip",
+    "gz": "application/gzip",
+    "tgz": "application/gzip",
+    "tar": "application/x-tar",
+    "bz2": "application/x-bzip2",
+    "xz": "application/x-xz",
+    "7z": "application/x-7z-compressed",
+    "rar": "application/vnd.rar",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "odt": "application/vnd.oasis.opendocument.text",
+    "ods": "application/vnd.oasis.opendocument.spreadsheet",
+    "odp": "application/vnd.oasis.opendocument.presentation",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
+    "wasm": "application/wasm",
+    "exe": "application/vnd.microsoft.portable-executable",
+    "bin": "application/octet-stream",
+}
+
+_OCTET_STREAM = "application/octet-stream"
+
+
+def _extension_of(name: str) -> str:
+    dot = name.rfind(".")
+    if dot <= 0 or dot == len(name) - 1:
+        return ""
+    return name[dot + 1 :].lower()
+
+
+def _preview_hidden(cp: int) -> bool:
+    """Characters a preview never shows as themselves (tab and newline are kept)."""
+    return (
+        (cp <= 0x1F and cp not in (0x09, 0x0A))
+        or 0x7F <= cp <= 0x9F
+        or cp in (0x061C, 0x180E, 0xFEFF)
+        or 0x200B <= cp <= 0x200F
+        or 0x2028 <= cp <= 0x202E
+        or 0x2060 <= cp <= 0x2069
+    )
+
+
+def _utf8_length(cp: int) -> int:
+    return 1 if cp < 0x80 else 2 if cp < 0x800 else 3 if cp < 0x10000 else 4
+
+
+def content_preview(name: str, data: bytes) -> Dict[str, Any]:
+    """The preview of a file's bytes, the same bytes that were hashed.
+
+    ``name`` is the file's display name, used only for its extension. A
+    text file (valid UTF-8, no NUL byte, not a known binary extension) gets
+    ``{"kind": "text", "mediaType", "size", "text", "truncated"}``: its first
+    20 lines, at most 2,048 UTF-8 bytes, cut on a character boundary, with
+    control characters other than tab and newline, bidi and zero-width
+    characters replaced by U+FFFD, CRLF read as LF and a leading byte-order
+    mark dropped. Anything else gets ``{"kind": "binary", "mediaType",
+    "size"}`` and no content. The TypeScript SDK computes the same preview.
+    """
+    size = len(data)
+    ext = _extension_of(name)
+    if ext in _BINARY_MEDIA_TYPES:
+        return {"kind": "binary", "mediaType": _BINARY_MEDIA_TYPES[ext], "size": size}
+    if b"\x00" in data:
+        return {"kind": "binary", "mediaType": _OCTET_STREAM, "size": size}
+    try:
+        decoded = bytes(data).decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return {"kind": "binary", "mediaType": _OCTET_STREAM, "size": size}
+    media_type = _TEXT_MEDIA_TYPES.get(ext, "text/plain")
+    if decoded.startswith("\ufeff"):
+        decoded = decoded[1:]
+    out: List[str] = []
+    used = 0
+    lines = 0
+    truncated = False
+    count = len(decoded)
+    for i, ch in enumerate(decoded):
+        # CRLF counts as one line end.
+        if ch == "\r" and i + 1 < count and decoded[i + 1] == "\n":
+            continue
+        shown = "\ufffd" if _preview_hidden(ord(ch)) else ch
+        length = _utf8_length(ord(shown))
+        if used + length > PREVIEW_MAX_BYTES:
+            truncated = True
+            break
+        out.append(shown)
+        used += length
+        if ch == "\n":
+            lines += 1
+            if lines == PREVIEW_MAX_LINES:
+                truncated = i + 1 < count
+                break
+    return {
+        "kind": "text",
+        "mediaType": media_type,
+        "size": size,
+        "text": "".join(out),
+        "truncated": truncated,
+    }
 
 
 #: The mode a declared file argument gets when no mode is named: ``"bytes"``,
@@ -378,7 +596,8 @@ def _invalid_declaration(tool_name: str, detail: str) -> ContentPinError:
     return ContentPinError(
         CONTENT_PIN_INVALID_ARGUMENT,
         f'file_args for "{tool_name}" {detail}. Name each file argument with "bytes" (the default, '
-        'also written as True or as a list of names), "copy" or "recheck".',
+        'also written as True or as a list of names), "copy" or "recheck", or with '
+        '{"mode": ..., "preview": True} for a preview.',
     )
 
 
@@ -389,12 +608,88 @@ def normalize_file_args_spec(
 
     The short forms mean ``"bytes"``: a list of names (``["attachment_path"]``)
     or ``True`` in place of a mode (``{"attachment_path": True}``). Explicit
-    modes are kept as written. Anything else is refused with
+    modes are kept as written; the object form
+    (``{"attachment_path": {"mode": "bytes", "preview": True}}``) gives its
+    mode, ``"bytes"`` when none is named. Anything else is refused with
     ``CONTENT_PIN_INVALID_ARGUMENT``. Returns ``None`` for no declaration.
+    A preview is not part of the full form: see
+    :func:`normalize_file_arg_previews`.
     """
+    parsed = _parse_declaration(tool_name, spec, allowed_modes)
+    return None if parsed is None else parsed[0]
+
+
+def normalize_file_arg_previews(tool_name: str, spec: Any) -> List[str]:
+    """The arguments declared with ``{"preview": True}`` (the object form only), sorted.
+
+    Raises like :func:`normalize_file_args_spec` for an invalid declaration.
+    """
+    parsed = _parse_declaration(tool_name, spec, _VALID_MODES)
+    return [] if parsed is None else parsed[1]
+
+
+def normalize_file_arg_preview_roots(tool_name: str, spec: Any) -> Dict[str, List[str]]:
+    """The ``previewRoots`` of one tool's declaration, per argument that names them.
+
+    Absolute, normalized and sorted. Raises like
+    :func:`normalize_file_args_spec` for an invalid declaration.
+    """
+    parsed = _parse_declaration(tool_name, spec, _VALID_MODES)
+    return {} if parsed is None else parsed[2]
+
+
+def _normalize_preview_root(root: Any) -> Optional[str]:
+    """One ``previewRoots`` entry in its normal form, or None when it is not valid.
+
+    Absolute, no ``.`` or ``..`` segment, no NUL, repeated slashes collapsed
+    and no trailing slash (except for ``/`` itself). The TypeScript SDK
+    applies the same rule.
+    """
+    if not isinstance(root, str) or not root.startswith("/"):
+        return None
+    if "\0" in root or len(root) > 4096:
+        return None
+    segments = [segment for segment in root.split("/") if segment != ""]
+    if any(segment in (".", "..") for segment in segments):
+        return None
+    return "/" + "/".join(segments)
+
+
+def _parse_preview_roots(tool_name: str, arg: str, roots: Any) -> List[str]:
+    if not isinstance(roots, (list, tuple)) or not 1 <= len(roots) <= PREVIEW_MAX_ROOTS:
+        raise ContentPinError(
+            CONTENT_PIN_INVALID_ARGUMENT,
+            f'file_args for "{tool_name}.{arg}" previewRoots must be a list of 1 to '
+            f"{PREVIEW_MAX_ROOTS} absolute folder paths",
+        )
+    out: Set[str] = set()
+    for root in roots:
+        normal = _normalize_preview_root(root)
+        if normal is None:
+            raise ContentPinError(
+                CONTENT_PIN_INVALID_ARGUMENT,
+                f'file_args for "{tool_name}.{arg}" previewRoots must hold absolute folder paths '
+                "(no . or .. segments)",
+            )
+        out.add(normal)
+    return sorted(out)
+
+
+def is_under_preview_roots(resolved_path: str, roots: Sequence[str]) -> bool:
+    """True when ``resolved_path`` is one of ``roots`` or inside one (whole path segments)."""
+    return any(
+        root == "/" or resolved_path == root or resolved_path.startswith(root + "/") for root in roots
+    )
+
+
+def _parse_declaration(
+    tool_name: str, spec: Any, allowed_modes: Tuple[str, ...]
+) -> Optional[Tuple[Dict[str, str], List[str], Dict[str, List[str]]]]:
     if spec is None:
         return None
     full: Dict[str, str] = {}
+    preview: List[str] = []
+    preview_roots: Dict[str, List[str]] = {}
     implicit: Set[str] = set()
     if isinstance(spec, (list, tuple)):
         for arg in spec:
@@ -413,11 +708,46 @@ def normalize_file_args_spec(
                 implicit.add(arg)
             elif isinstance(mode, str) and mode in _VALID_MODES:
                 full[arg] = mode
+            elif isinstance(mode, Mapping):
+                unknown = [key for key in mode if key not in ("mode", "preview", "previewRoots")]
+                if unknown:
+                    raise ContentPinError(
+                        CONTENT_PIN_INVALID_ARGUMENT,
+                        f'file_args for "{tool_name}.{arg}" has an unknown key "{unknown[0]}" '
+                        '(only "mode", "preview" and "previewRoots")',
+                    )
+                # A present "mode" must name a mode: None is refused, as
+                # TypeScript refuses null (leave the key out for "bytes").
+                named = mode["mode"] if "mode" in mode else None
+                if "mode" in mode and not (isinstance(named, str) and named in _VALID_MODES):
+                    raise ContentPinError(
+                        CONTENT_PIN_INVALID_ARGUMENT,
+                        f'file_args for "{tool_name}.{arg}" mode must be "bytes", "copy" or "recheck"',
+                    )
+                if "preview" in mode and not isinstance(mode["preview"], bool):
+                    raise ContentPinError(
+                        CONTENT_PIN_INVALID_ARGUMENT,
+                        f'file_args for "{tool_name}.{arg}" preview must be True or False',
+                    )
+                if "previewRoots" in mode:
+                    if mode.get("preview") is not True:
+                        raise ContentPinError(
+                            CONTENT_PIN_INVALID_ARGUMENT,
+                            f'file_args for "{tool_name}.{arg}" previewRoots needs preview: True',
+                        )
+                    preview_roots[arg] = _parse_preview_roots(tool_name, arg, mode["previewRoots"])
+                if named is None:
+                    full[arg] = DEFAULT_FILE_ARG_MODE
+                    implicit.add(arg)
+                else:
+                    full[arg] = named
+                if mode.get("preview") is True:
+                    preview.append(arg)
             else:
                 raise ContentPinError(
                     CONTENT_PIN_INVALID_ARGUMENT,
                     f'file_args for "{tool_name}.{arg}" must be "bytes", "copy" or "recheck" '
-                    '(or True, which means "bytes")',
+                    '(or True, which means "bytes", or {"mode": ..., "preview": True})',
                 )
     else:
         raise _invalid_declaration(tool_name, "must be a list of argument names or map argument names to modes")
@@ -434,7 +764,7 @@ def normalize_file_args_spec(
                 "its fn takes no arguments, so it cannot be handed the bytes or a copy. Use the @guard "
                 'decorator for "bytes" and "copy", or name "recheck" here.',
             )
-    return full
+    return full, sorted(preview), preview_roots
 
 
 def _check_arg_name(tool_name: str, arg: Any) -> None:
@@ -480,17 +810,38 @@ def utf16_length(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
 
+def _resolve_roots(roots: Sequence[str]) -> List[str]:
+    """The roots with their symbolic links resolved; a root that fails is dropped."""
+    fs = _active_fs
+    resolver = getattr(fs, "realpath", None)
+    out: List[str] = []
+    for root in roots:
+        if resolver is None:
+            continue
+        try:
+            out.append(resolver(root))
+        except Exception:  # noqa: BLE001 — a folder that cannot be resolved holds no previewed file
+            pass
+    return out
+
+
 def pin_arguments(
     spec: FileArgsSpec,
     args: Mapping[str, Any],
     *,
     max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES,
     max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES,
+    preview: Sequence[str] = (),
+    preview_roots: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> Dict[str, Any]:
     """Pin every declared, present file argument: read, hash and drop the bytes.
 
     Returns the proposed arguments with the pins added (sorted by arg, then
-    index), or a copy of the arguments when nothing declared is present.
+    index), or a copy of the arguments when nothing declared is present. An
+    argument in ``preview`` also gets a ``preview`` in its pin, computed
+    from the same bytes that were hashed; when it also has ``previewRoots``
+    (in ``preview_roots``), a file that is not in one of them (symbolic
+    links resolved) gets ``{"kind": "withheld", "size": ...}`` instead.
     """
     present = _declared_paths(spec, args)
     if sum(len(paths) for paths in present.values()) > MAX_CONTENT_PINS:
@@ -502,19 +853,29 @@ def pin_arguments(
         return dict(args)
     budget = _Budget(max_pin_total_bytes)
     pins: List[Dict[str, Any]] = []
+    roots_of = preview_roots or {}
     for arg, paths in present.items():
+        roots = roots_of.get(arg) if arg in preview else None
+        resolved_roots = _resolve_roots(roots) if roots is not None else []
         for index, path in enumerate(paths):
-            _, size, sha256 = _read_for_pin(path, max_pin_bytes, budget)
-            pins.append(
-                {
-                    "arg": arg,
-                    "index": index,
-                    "mode": spec[arg],
-                    "name": pin_display_name(path),
-                    "size": size,
-                    "sha256": sha256,
-                }
-            )
+            resolved: Optional[List[Optional[str]]] = [] if roots is not None else None
+            data, size, sha256 = _read_for_pin(path, max_pin_bytes, budget, resolved=resolved)
+            name = pin_display_name(path)
+            pin: Dict[str, Any] = {
+                "arg": arg,
+                "index": index,
+                "mode": spec[arg],
+                "name": name,
+                "size": size,
+                "sha256": sha256,
+            }
+            if arg in preview:
+                real = resolved[0] if resolved else None
+                if roots is None or (real is not None and is_under_preview_roots(real, resolved_roots)):
+                    pin["preview"] = content_preview(name, data)
+                else:
+                    pin["preview"] = {"kind": "withheld", "size": size}
+            pins.append(pin)
     proposed = {**dict(args), CONTENT_PIN_KEY: pins}
     try:
         measured = utf16_length(canonical_json(proposed))
@@ -522,7 +883,11 @@ def pin_arguments(
         raise ContentPinError(CONTENT_PIN_INVALID_ARGUMENT, "The arguments are not canonical JSON") from None
     if measured > TOOL_ARGUMENTS_MAX_BYTES:
         raise ContentPinError(
-            CONTENT_PIN_TOO_MANY, "The arguments with their content pins exceed the tool arguments limit"
+            CONTENT_PIN_TOO_MANY,
+            "The arguments with their content pins and previews exceed the tool arguments limit; "
+            "preview fewer files"
+            if any("preview" in pin for pin in pins)
+            else "The arguments with their content pins exceed the tool arguments limit",
         )
     return proposed
 

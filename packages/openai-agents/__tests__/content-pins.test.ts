@@ -242,4 +242,83 @@ describe("OpenAI Agents fileArgs", () => {
       }),
     ).toThrow(/fileArgs disagree/);
   });
+
+  it("a renamed tool: entries that differ only in the preview disagree; equal previews agree", async () => {
+    expect(() =>
+      sendReport("send-report", () => "x", {
+        client: stubClient({}),
+        connectionId: "con_1",
+        fileArgs: {
+          "send-report": { attachmentPath: { mode: "bytes", preview: true } },
+          send_report: { attachmentPath: "bytes" },
+        },
+      }),
+    ).toThrow(/fileArgs disagree/);
+    const request = vi.fn().mockResolvedValue(allow());
+    const t = sendReport("send-report", () => "sent", {
+      client: stubClient({ request }),
+      connectionId: "con_1",
+      fileArgs: {
+        "send-report": { attachmentPath: { preview: true } },
+        send_report: { attachmentPath: { mode: "bytes", preview: true } },
+      },
+    });
+    await invoke(t, { attachmentPath: file });
+    expect(proposedArgs(request)[CONTENT_PIN_KEY]).toEqual([
+      expect.objectContaining({
+        arg: "attachmentPath",
+        mode: "bytes",
+        preview: expect.objectContaining({ kind: "text" }),
+      }),
+    ]);
+  });
+  it("a renamed tool: entries that differ only in previewRoots disagree; the same folders agree", async () => {
+    expect(() =>
+      sendReport("send-report", () => "x", {
+        client: stubClient({}),
+        connectionId: "con_1",
+        fileArgs: {
+          "send-report": {
+            attachmentPath: { preview: true, previewRoots: ["/srv/reports"] },
+          },
+          send_report: { attachmentPath: { preview: true } },
+        },
+      }),
+    ).toThrow(/fileArgs disagree/);
+    expect(() =>
+      sendReport("send-report", () => "x", {
+        client: stubClient({}),
+        connectionId: "con_1",
+        fileArgs: {
+          "send-report": {
+            attachmentPath: { preview: true, previewRoots: ["/srv/reports"] },
+          },
+          send_report: {
+            attachmentPath: { preview: true, previewRoots: ["/srv/other"] },
+          },
+        },
+      }),
+    ).toThrow(/fileArgs disagree/);
+    const request = vi.fn().mockResolvedValue(allow());
+    const t = sendReport("send-report", () => "sent", {
+      client: stubClient({ request }),
+      connectionId: "con_1",
+      fileArgs: {
+        "send-report": {
+          attachmentPath: { preview: true, previewRoots: ["/nowhere/", "/nowhere"] },
+        },
+        send_report: {
+          attachmentPath: { mode: "bytes", preview: true, previewRoots: ["/nowhere"] },
+        },
+      },
+    });
+    await invoke(t, { attachmentPath: file });
+    // The file is not in /nowhere: its preview is withheld (size only).
+    expect(proposedArgs(request)[CONTENT_PIN_KEY]).toEqual([
+      expect.objectContaining({
+        arg: "attachmentPath",
+        preview: { kind: "withheld", size: expect.any(Number) },
+      }),
+    ]);
+  });
 });

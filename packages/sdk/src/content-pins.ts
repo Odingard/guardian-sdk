@@ -6,6 +6,9 @@ import {
   fstat as fsFstat,
   open as fsOpen,
   read as fsRead,
+  readlink as fsReadlink,
+  realpath as fsRealpath,
+  stat as fsStat,
   write as fsWrite,
 } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -84,17 +87,67 @@ export type FileArgsSpec = Readonly<Record<string, FileArgMode>>;
 export const DEFAULT_FILE_ARG_MODE = "bytes" satisfies FileArgMode;
 
 /**
+ * The object form of one file argument: a mode (default `bytes`) and,
+ * opt-in, a preview for the approver (`preview: true`). See
+ * `ContentPinPreview` for what a preview holds and sends.
+ */
+export type FileArgOptions = Readonly<{
+  mode?: FileArgMode;
+  preview?: boolean;
+  /**
+   * Only with `preview: true`: absolute folders a previewed file must be in
+   * (after symbolic links are resolved). A file outside every folder gets a
+   * `withheld` preview: no content, only its size. Without this, a preview
+   * is made for any file the agent names in that argument and the process
+   * can read.
+   */
+  previewRoots?: readonly string[];
+}>;
+
+/**
  * What a developer may write for one tool's file arguments:
  * - the full form, `{ attachmentPath: "copy" }` (a mode per argument);
  * - `true` in place of a mode, `{ attachmentPath: true }`, meaning `bytes`;
- * - a list of argument names, `["attachmentPath"]`, each meaning `bytes`.
+ * - a list of argument names, `["attachmentPath"]`, each meaning `bytes`;
+ * - the object form, `{ attachmentPath: { mode: "bytes", preview: true } }`,
+ *   the only form that turns on a preview (the others never do).
  * The forms are normalized to `FileArgsSpec` at wrap time; anything else
- * (an unknown mode, `false`, an empty or repeated name) is refused there.
+ * (an unknown mode, `false`, an empty or repeated name, a preview that is
+ * not a boolean, an unknown key) is refused there.
  */
 export type FileArgsDeclaration =
   | FileArgsSpec
   | readonly string[]
-  | Readonly<Record<string, FileArgMode | true>>;
+  | Readonly<Record<string, FileArgMode | true | FileArgOptions>>;
+
+/**
+ * A preview of a pinned file for the person who approves, computed on the
+ * agent's machine from the same bytes that are hashed. Display data only:
+ * nothing in Guardian's decision path reads it, and the re-check before
+ * the tool runs compares the hash, not the preview.
+ *
+ * - `text`: the file is valid UTF-8 with no NUL byte and its extension is
+ *   not a known binary type. `text` holds its first 20 lines, at most
+ *   2,048 UTF-8 bytes, cut on a character boundary; `truncated` says
+ *   whether anything was left out. Control characters other than tab and
+ *   newline, direction-changing (bidi) characters and zero-width
+ *   characters are replaced with U+FFFD; CRLF line ends become LF and a
+ *   leading byte-order mark is dropped.
+ * - `binary`: anything else (pdf, images, archives, office files, other
+ *   encodings). No content, only the media type and the size.
+ * - `withheld`: the argument names `previewRoots` and the file is not in
+ *   any of them. No content and no media type, only the size.
+ */
+export type ContentPinPreview =
+  | Readonly<{
+      kind: "text";
+      mediaType: string;
+      size: number;
+      text: string;
+      truncated: boolean;
+    }>
+  | Readonly<{ kind: "binary"; mediaType: string; size: number }>
+  | Readonly<{ kind: "withheld"; size: number }>;
 
 /** One pin, as it appears in the proposed arguments. */
 export type ContentPin = Readonly<{
@@ -104,6 +157,8 @@ export type ContentPin = Readonly<{
   name: string;
   size: number;
   sha256: string;
+  /** Only for an argument declared with `preview: true`. */
+  preview?: ContentPinPreview;
 }>;
 
 /** The digest of one file, or (only where asked for) a file that is absent. */
@@ -132,6 +187,12 @@ export const DEFAULT_MAX_PIN_BYTES = 25 * 1024 * 1024;
 /** Default cap for all pinned files of one call (64 MiB). */
 export const DEFAULT_MAX_PIN_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_NAME_LENGTH = 128;
+/** A text preview holds at most this many lines. */
+export const PREVIEW_MAX_LINES = 20;
+/** A text preview holds at most this many UTF-8 bytes. */
+export const PREVIEW_MAX_BYTES = 2048;
+/** At most this many `previewRoots` per file argument. */
+export const PREVIEW_MAX_ROOTS = 16;
 
 const VALID_MODES: ReadonlySet<string> = new Set(["bytes", "copy", "recheck"]);
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -170,7 +231,41 @@ export type ContentPinFs = Readonly<{
     position: number,
   ): Promise<number>;
   close(fd: number): Promise<void>;
+  /**
+   * The resolved path of the open file (only asked for when the argument
+   * names `previewRoots`). Missing or failing means "not known", and the
+   * preview is withheld.
+   */
+  resolvedPath?(fd: number, path: string): Promise<string>;
+  /** The resolved path of a `previewRoots` folder (same rule). */
+  realpath?(path: string): Promise<string>;
 }>;
+
+/**
+ * Resolve `path` again and return it only if it names the same file as the
+ * open descriptor `fd` (same device and inode). Used where the OS cannot
+ * name a descriptor directly. Exported for tests.
+ */
+export function resolvePathOfOpenFile(
+  fd: number,
+  path: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    fsRealpath.native(path, (err, target) => {
+      if (err) return reject(err);
+      fsStat(target, { bigint: true }, (statErr, byPath) => {
+        if (statErr) return reject(statErr);
+        fsFstat(fd, { bigint: true }, (fstatErr, byFd) => {
+          if (fstatErr) return reject(fstatErr);
+          if (byPath.dev !== byFd.dev || byPath.ino !== byFd.ino) {
+            return reject(new Error("resolved path is not the file read"));
+          }
+          resolve(target);
+        });
+      });
+    });
+  });
+}
 
 const nodeFs: ContentPinFs = {
   constants: fsConstants as unknown as Record<string, number | undefined>,
@@ -191,6 +286,28 @@ const nodeFs: ContentPinFs = {
   close: (fd) =>
     new Promise((resolve, reject) =>
       fsClose(fd, (err) => (err ? reject(err) : resolve())),
+    ),
+  // On Linux, the kernel's own name for the descriptor that was read: the
+  // file the bytes came from, whatever happened to the path since.
+  // Elsewhere there is no such name, so the path is resolved again and the
+  // result is only trusted when it is the very file that was read (same
+  // device and inode as the open descriptor). A link swapped between the
+  // read and the check therefore fails, and the preview is withheld.
+  resolvedPath: (fd, path) =>
+    new Promise((resolve, reject) => {
+      if (process.platform === "linux") {
+        fsReadlink(`/proc/self/fd/${fd}`, (err, target) =>
+          err ? reject(err) : resolve(target),
+        );
+        return;
+      }
+      resolvePathOfOpenFile(fd, path).then(resolve, reject);
+    }),
+  realpath: (path) =>
+    new Promise((resolve, reject) =>
+      fsRealpath.native(path, (err, target) =>
+        err ? reject(err) : resolve(target),
+      ),
     ),
 };
 
@@ -272,12 +389,16 @@ type ReadLimits = Readonly<{
   budget?: { remaining: number };
   /** At a re-check: a size that differs is a changed file, read nothing. */
   expectedSize?: number;
+  /** Also return the resolved path of the file that was read. */
+  resolve?: boolean;
 }>;
 
 type ReadResult = Readonly<{
   bytes: Uint8Array;
   size: number;
   sha256: string;
+  /** Only when asked for (`resolve`) and known. */
+  resolvedPath?: string;
 }>;
 
 function errorCode(err: unknown): string | undefined {
@@ -404,7 +525,20 @@ async function readForPin(
         "The pinned file was modified while it was read",
       );
     }
-    return { bytes, size, sha256: `sha256:${hash.digest("hex")}` };
+    let resolvedPath: string | undefined;
+    if (limits.resolve === true && fs.resolvedPath !== undefined) {
+      try {
+        resolvedPath = await fs.resolvedPath(fd, path);
+      } catch {
+        resolvedPath = undefined;
+      }
+    }
+    return {
+      bytes,
+      size,
+      sha256: `sha256:${hash.digest("hex")}`,
+      ...(resolvedPath === undefined ? {} : { resolvedPath }),
+    };
   } catch (err) {
     if (err instanceof ContentPinError) throw err;
     throw new ContentPinError(
@@ -536,6 +670,201 @@ async function verifyAgainst(
 }
 
 // ---------------------------------------------------------------------------
+// Preview (display data for the approver, opt-in per argument)
+// ---------------------------------------------------------------------------
+
+/** Extensions whose files are previewed as text when their bytes allow. */
+const TEXT_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  txt: "text/plain",
+  text: "text/plain",
+  log: "text/plain",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  json: "application/json",
+  jsonl: "application/jsonl",
+  ndjson: "application/x-ndjson",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  toml: "application/toml",
+  ini: "text/plain",
+  cfg: "text/plain",
+  conf: "text/plain",
+  env: "text/plain",
+  xml: "application/xml",
+  html: "text/html",
+  htm: "text/html",
+  css: "text/css",
+  svg: "image/svg+xml",
+  js: "text/javascript",
+  mjs: "text/javascript",
+  cjs: "text/javascript",
+  jsx: "text/javascript",
+  ts: "text/x-typescript",
+  tsx: "text/x-typescript",
+  py: "text/x-python",
+  rb: "text/x-ruby",
+  go: "text/x-go",
+  rs: "text/x-rust",
+  java: "text/x-java",
+  kt: "text/x-kotlin",
+  swift: "text/x-swift",
+  c: "text/x-c",
+  h: "text/x-c",
+  cc: "text/x-c++",
+  cpp: "text/x-c++",
+  hpp: "text/x-c++",
+  cs: "text/x-csharp",
+  php: "text/x-php",
+  sh: "text/x-shellscript",
+  bash: "text/x-shellscript",
+  zsh: "text/x-shellscript",
+  sql: "application/sql",
+};
+
+/** Extensions that are never previewed as text, whatever their bytes. */
+const BINARY_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  ico: "image/vnd.microsoft.icon",
+  heic: "image/heic",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tgz: "application/gzip",
+  tar: "application/x-tar",
+  bz2: "application/x-bzip2",
+  xz: "application/x-xz",
+  "7z": "application/x-7z-compressed",
+  rar: "application/vnd.rar",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  wasm: "application/wasm",
+  exe: "application/vnd.microsoft.portable-executable",
+  bin: "application/octet-stream",
+};
+
+const OCTET_STREAM = "application/octet-stream";
+
+/** The lower-case extension of a file name ("" when it has none). */
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return "";
+  return name.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * Characters a preview never shows as themselves: C0 controls other than
+ * tab and newline, DEL, C1, the bidi marks, embeddings, overrides and
+ * isolates, zero-width and invisible format characters, the line and
+ * paragraph separators and the byte-order mark.
+ */
+function isPreviewHidden(cp: number): boolean {
+  return (
+    (cp <= 0x1f && cp !== 0x09 && cp !== 0x0a) ||
+    (cp >= 0x7f && cp <= 0x9f) ||
+    cp === 0x061c ||
+    cp === 0x180e ||
+    (cp >= 0x200b && cp <= 0x200f) ||
+    (cp >= 0x2028 && cp <= 0x202e) ||
+    (cp >= 0x2060 && cp <= 0x2069) ||
+    cp === 0xfeff
+  );
+}
+
+function utf8Length(cp: number): number {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * The preview of a file's bytes (the same bytes that were hashed; nothing
+ * is read again). `name` is the file's display name, used only for its
+ * extension. Deterministic: the Python SDK computes the same preview.
+ */
+export function contentPreview(
+  name: string,
+  bytes: Uint8Array,
+): ContentPinPreview {
+  const size = bytes.length;
+  const ext = extensionOf(name);
+  const binary = (mediaType: string): ContentPinPreview =>
+    Object.freeze({ kind: "binary", mediaType, size });
+  if (Object.hasOwn(BINARY_MEDIA_TYPES, ext)) {
+    return binary(BINARY_MEDIA_TYPES[ext]!);
+  }
+  if (bytes.includes(0)) return binary(OCTET_STREAM);
+  let decoded: string;
+  try {
+    decoded = STRICT_UTF8.decode(bytes);
+  } catch {
+    return binary(OCTET_STREAM);
+  }
+  const mediaType = Object.hasOwn(TEXT_MEDIA_TYPES, ext)
+    ? TEXT_MEDIA_TYPES[ext]!
+    : "text/plain";
+  // Walk the decoded string by code point and stop at the caps, so a large
+  // file never costs more than the preview it produces.
+  const str = decoded.startsWith("\uFEFF") ? decoded.slice(1) : decoded;
+  let text = "";
+  let used = 0;
+  let lines = 0;
+  let truncated = false;
+  let idx = 0;
+  while (idx < str.length) {
+    const cp = str.codePointAt(idx)!;
+    const width = cp > 0xffff ? 2 : 1;
+    // CRLF counts as one line end.
+    if (cp === 0x0d && str.charCodeAt(idx + 1) === 0x0a) {
+      idx += 1;
+      continue;
+    }
+    const shown = isPreviewHidden(cp) ? 0xfffd : cp;
+    const length = utf8Length(shown);
+    if (used + length > PREVIEW_MAX_BYTES) {
+      truncated = true;
+      break;
+    }
+    text += String.fromCodePoint(shown);
+    used += length;
+    idx += width;
+    if (cp === 0x0a) {
+      lines += 1;
+      if (lines === PREVIEW_MAX_LINES) {
+        truncated = idx < str.length;
+        break;
+      }
+    }
+  }
+  return Object.freeze({
+    kind: "text",
+    mediaType,
+    size,
+    text,
+    truncated,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Declarations, proposal and re-check (used by guard.ts)
 // ---------------------------------------------------------------------------
 
@@ -549,7 +878,7 @@ function invalidDeclaration(toolName: string, detail: string): never {
     CONTENT_PIN_INVALID_ARGUMENT,
     `fileArgs for "${toolName}" ${detail}. Name each file argument with ` +
       `"bytes" (the default, also written as true or as a list of names), ` +
-      `"copy" or "recheck".`,
+      `"copy" or "recheck", or with { mode, preview: true } for a preview.`,
   );
 }
 
@@ -573,16 +902,71 @@ function assertArgName(toolName: string, arg: unknown): string {
   return arg;
 }
 
+type ParsedDeclaration = Readonly<{
+  spec: FileArgsSpec;
+  /** The arguments declared with `preview: true`, sorted. */
+  preview: readonly string[];
+  /** The `previewRoots` of the arguments that name them (normalized). */
+  previewRoots: Readonly<Record<string, readonly string[]>>;
+}>;
+
 /**
- * One tool's declaration in the full form (wrap time). The short forms
- * (`true` for a mode, or a list of names) mean `bytes`; explicit modes are
- * kept as written. Throws CONTENT_PIN_INVALID_ARGUMENT for anything else.
- * Returns `undefined` for an absent declaration.
+ * One `previewRoots` entry in its normal form: absolute, no `.` or `..`
+ * segment, no NUL, repeated slashes collapsed and no trailing slash (except
+ * for `/` itself). Returns undefined for anything else.
  */
-export function normalizeFileArgsSpec(
+function normalizePreviewRoot(root: unknown): string | undefined {
+  if (typeof root !== "string" || !root.startsWith("/")) return undefined;
+  if (root.includes("\0") || root.length > 4096) return undefined;
+  const segments = root.split("/").filter((segment) => segment !== "");
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    return undefined;
+  }
+  return `/${segments.join("/")}`;
+}
+
+function parsePreviewRoots(
+  toolName: string,
+  arg: string,
+  roots: unknown,
+): readonly string[] {
+  if (
+    !Array.isArray(roots) ||
+    roots.length === 0 ||
+    roots.length > PREVIEW_MAX_ROOTS
+  ) {
+    invalidEntry(
+      toolName,
+      arg,
+      `previewRoots must be a list of 1 to ${PREVIEW_MAX_ROOTS} absolute folder paths`,
+    );
+  }
+  const out = new Set<string>();
+  for (const root of roots as unknown[]) {
+    const normal = normalizePreviewRoot(root);
+    if (normal === undefined) {
+      invalidEntry(
+        toolName,
+        arg,
+        "previewRoots must hold absolute folder paths (no . or .. segments)",
+      );
+    }
+    out.add(normal);
+  }
+  return Object.freeze([...out].sort());
+}
+
+function invalidEntry(toolName: string, arg: string, detail: string): never {
+  throw new ContentPinError(
+    CONTENT_PIN_INVALID_ARGUMENT,
+    `fileArgs for "${toolName}.${arg}" ${detail}`,
+  );
+}
+
+function parseDeclaration(
   toolName: string,
   declaration: unknown,
-): FileArgsSpec | undefined {
+): ParsedDeclaration | undefined {
   if (declaration === undefined) return undefined;
   if (declaration === null || typeof declaration !== "object") {
     invalidDeclaration(
@@ -591,6 +975,8 @@ export function normalizeFileArgsSpec(
     );
   }
   const spec: Record<string, FileArgMode> = {};
+  const preview: string[] = [];
+  const previewRoots: Record<string, readonly string[]> = {};
   if (Array.isArray(declaration)) {
     for (const item of declaration as unknown[]) {
       const arg = assertArgName(toolName, item);
@@ -599,7 +985,11 @@ export function normalizeFileArgsSpec(
       }
       spec[arg] = DEFAULT_FILE_ARG_MODE;
     }
-    return Object.freeze(spec);
+    return {
+      spec: Object.freeze(spec),
+      preview: Object.freeze(preview),
+      previewRoots: Object.freeze(previewRoots),
+    };
   }
   for (const [rawArg, mode] of Object.entries(declaration)) {
     const arg = assertArgName(toolName, rawArg);
@@ -607,15 +997,119 @@ export function normalizeFileArgsSpec(
       spec[arg] = DEFAULT_FILE_ARG_MODE;
     } else if (typeof mode === "string" && VALID_MODES.has(mode)) {
       spec[arg] = mode as FileArgMode;
+    } else if (isPlainRecord(mode)) {
+      const unknownKey = Object.keys(mode).find(
+        (key) => key !== "mode" && key !== "preview" && key !== "previewRoots",
+      );
+      if (unknownKey !== undefined) {
+        invalidEntry(
+          toolName,
+          arg,
+          `has an unknown key "${unknownKey}" (only "mode", "preview" and "previewRoots")`,
+        );
+      }
+      const named = mode.mode;
+      if (
+        named !== undefined &&
+        !(typeof named === "string" && VALID_MODES.has(named))
+      ) {
+        invalidEntry(
+          toolName,
+          arg,
+          `mode must be "bytes", "copy" or "recheck"`,
+        );
+      }
+      if (mode.preview !== undefined && typeof mode.preview !== "boolean") {
+        invalidEntry(toolName, arg, "preview must be true or false");
+      }
+      if (mode.previewRoots !== undefined) {
+        if (mode.preview !== true) {
+          invalidEntry(toolName, arg, "previewRoots needs preview: true");
+        }
+        previewRoots[arg] = parsePreviewRoots(toolName, arg, mode.previewRoots);
+      }
+      spec[arg] = (named as FileArgMode | undefined) ?? DEFAULT_FILE_ARG_MODE;
+      if (mode.preview === true) preview.push(arg);
     } else {
-      throw new ContentPinError(
-        CONTENT_PIN_INVALID_ARGUMENT,
-        `fileArgs for "${toolName}.${arg}" must be "bytes", "copy" or "recheck" ` +
-          `(or true, which means "bytes")`,
+      invalidEntry(
+        toolName,
+        arg,
+        `must be "bytes", "copy" or "recheck" (or true, which means ` +
+          `"bytes", or { mode, preview })`,
       );
     }
   }
-  return Object.freeze(spec);
+  return {
+    spec: Object.freeze(spec),
+    preview: Object.freeze(preview.sort()),
+    previewRoots: Object.freeze(previewRoots),
+  };
+}
+
+/**
+ * One tool's declaration in the full form (wrap time). The short forms
+ * (`true` for a mode, or a list of names) mean `bytes`; explicit modes are
+ * kept as written; the object form gives its mode (default `bytes`).
+ * Throws CONTENT_PIN_INVALID_ARGUMENT for anything else. Returns
+ * `undefined` for an absent declaration. A preview is not part of the
+ * full form: see `normalizeFileArgPreviews`.
+ */
+export function normalizeFileArgsSpec(
+  toolName: string,
+  declaration: unknown,
+): FileArgsSpec | undefined {
+  return parseDeclaration(toolName, declaration)?.spec;
+}
+
+/**
+ * The arguments of one tool's declaration that ask for a preview (only
+ * the object form with `preview: true`), sorted. Throws like
+ * `normalizeFileArgsSpec` for an invalid declaration.
+ */
+export function normalizeFileArgPreviews(
+  toolName: string,
+  declaration: unknown,
+): readonly string[] {
+  return parseDeclaration(toolName, declaration)?.preview ?? [];
+}
+
+/**
+ * The `previewRoots` of one tool's declaration, per argument (absolute,
+ * normalized, sorted; only arguments that name them). Throws like
+ * `normalizeFileArgsSpec` for an invalid declaration.
+ */
+export function normalizeFileArgPreviewRoots(
+  toolName: string,
+  declaration: unknown,
+): Readonly<Record<string, readonly string[]>> {
+  return parseDeclaration(toolName, declaration)?.previewRoots ?? {};
+}
+
+/**
+ * One tool's declaration in a canonical form that keeps the preview: the
+ * full form, with `{ mode, preview: true }` (and its `previewRoots`, if
+ * any) for an argument that asks for a preview. `normalizeFileArgsSpec`
+ * reads it back unchanged.
+ */
+export function canonicalFileArgsDeclaration(
+  toolName: string,
+  declaration: unknown,
+): FileArgsDeclaration | undefined {
+  const parsed = parseDeclaration(toolName, declaration);
+  if (parsed === undefined) return undefined;
+  if (parsed.preview.length === 0) return parsed.spec;
+  const out: Record<string, FileArgMode | FileArgOptions> = {};
+  for (const [arg, mode] of Object.entries(parsed.spec)) {
+    const roots = parsed.previewRoots[arg];
+    out[arg] = parsed.preview.includes(arg)
+      ? Object.freeze(
+          roots === undefined
+            ? { mode, preview: true }
+            : { mode, preview: true, previewRoots: roots },
+        )
+      : mode;
+  }
+  return Object.freeze(out);
 }
 
 /** Configuration check for one tool's declaration (wrap time). */
@@ -666,14 +1160,53 @@ function declaredPaths(
 }
 
 /**
+ * True when `resolvedPath` is one of `roots` or inside one of them (both
+ * already resolved; plain string comparison on whole path segments).
+ */
+export function isUnderPreviewRoots(
+  resolvedPath: string,
+  roots: readonly string[],
+): boolean {
+  return roots.some(
+    (root) =>
+      root === "/" ||
+      resolvedPath === root ||
+      resolvedPath.startsWith(`${root}/`),
+  );
+}
+
+/** The roots with their symbolic links resolved; a root that fails is dropped. */
+async function resolveRoots(
+  roots: readonly string[],
+): Promise<readonly string[]> {
+  const fs = activeFs;
+  const out: string[] = [];
+  for (const root of roots) {
+    if (fs.realpath === undefined) continue;
+    try {
+      out.push(await fs.realpath(root));
+    } catch {
+      // A folder that cannot be resolved holds no previewed file.
+    }
+  }
+  return out;
+}
+
+/**
  * Pin every declared, present file argument of a call: read, hash and drop
  * the bytes. Returns the proposed arguments with the pins added (sorted by
- * arg, then index), or the input itself when nothing is declared.
+ * arg, then index), or the input itself when nothing is declared. An
+ * argument in `preview` also gets a `preview` in its pin, computed from
+ * the same bytes that were hashed; when it also has `previewRoots`, a file
+ * that is not in one of them (symbolic links resolved) gets a `withheld`
+ * preview with its size only.
  */
 export async function pinArguments(
   spec: FileArgsSpec,
   input: unknown,
   limits: PinLimits = {},
+  preview: readonly string[] = [],
+  previewRoots: Readonly<Record<string, readonly string[]>> = {},
 ): Promise<unknown> {
   const present = declaredPaths(spec, input);
   let count = 0;
@@ -697,17 +1230,47 @@ export async function pinArguments(
   };
   const maxBytes = limits.maxPinBytes ?? DEFAULT_MAX_PIN_BYTES;
   const pins: ContentPin[] = [];
+  const resolvedRoots = new Map<string, readonly string[]>();
   for (const [arg, paths] of present) {
+    const roots = preview.includes(arg)
+      ? Object.hasOwn(previewRoots, arg)
+        ? previewRoots[arg]
+        : undefined
+      : undefined;
+    if (roots !== undefined && !resolvedRoots.has(arg)) {
+      resolvedRoots.set(arg, await resolveRoots(roots));
+    }
     for (const [index, path] of paths.entries()) {
-      const read = await readForPin(path, { maxBytes, budget });
+      const read = await readForPin(path, {
+        maxBytes,
+        budget,
+        resolve: roots !== undefined,
+      });
+      const name = pinDisplayName(path);
       pins.push(
         Object.freeze({
           arg,
           index,
           mode: spec[arg] as FileArgMode,
-          name: pinDisplayName(path),
+          name,
           size: read.size,
           sha256: read.sha256,
+          ...(preview.includes(arg)
+            ? {
+                preview:
+                  roots === undefined ||
+                  (read.resolvedPath !== undefined &&
+                    isUnderPreviewRoots(
+                      read.resolvedPath,
+                      resolvedRoots.get(arg) ?? [],
+                    ))
+                    ? contentPreview(name, read.bytes)
+                    : Object.freeze({
+                        kind: "withheld" as const,
+                        size: read.size,
+                      }),
+              }
+            : {}),
         }),
       );
     }
@@ -728,7 +1291,9 @@ export async function pinArguments(
   if (measured > TOOL_ARGUMENTS_MAX_BYTES) {
     throw new ContentPinError(
       CONTENT_PIN_TOO_MANY,
-      "The arguments with their content pins exceed the tool arguments limit",
+      pins.some((pin) => pin.preview !== undefined)
+        ? "The arguments with their content pins and previews exceed the tool arguments limit; preview fewer files"
+        : "The arguments with their content pins exceed the tool arguments limit",
     );
   }
   return Object.freeze(proposed);

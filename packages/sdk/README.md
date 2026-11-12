@@ -179,7 +179,7 @@ await sendReport({
 });
 ```
 
-A declared argument is a top-level argument holding one absolute path or an array of them. The pins go into the proposed arguments under the reserved key `guardianContentPins` (`CONTENT_PIN_KEY`), one record per file: `{ arg, index, mode, name, size, sha256 }`, where `name` is the basename with control and bidi characters removed. A call that supplies `guardianContentPins` itself is refused (`CONTENT_PIN_KEY_RESERVED`) for every tool. Each file is capped at 25 MiB (`maxPinBytes`) and each call at 64 MiB (`maxPinTotalBytes`) and 16 files; a symlink as the last path component, a directory, FIFO, device, an unreadable file or a file that changes while it is read is refused before anything is proposed, with no request sent. `GuardianApprovalPending.input` is your input without pins; `proposedInput` is what was proposed.
+A declared argument is a top-level argument holding one absolute path or an array of them. The pins go into the proposed arguments under the reserved key `guardianContentPins` (`CONTENT_PIN_KEY`), one record per file: `{ arg, index, mode, name, size, sha256 }` (plus `preview` when you ask for one, below), where `name` is the basename with control and bidi characters removed. A call that supplies `guardianContentPins` itself is refused (`CONTENT_PIN_KEY_RESERVED`) for every tool. Each file is capped at 25 MiB (`maxPinBytes`) and each call at 64 MiB (`maxPinTotalBytes`) and 16 files; a symlink as the last path component, a directory, FIFO, device, an unreadable file or a file that changes while it is read is refused before anything is proposed, with no request sent. `GuardianApprovalPending.input` is your input without pins; `proposedInput` is what was proposed.
 
 - **`bytes` is the default when you don't name a mode.** `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `bytes`: your tool receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a tool needs a path; explicit modes work as before.
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
@@ -189,6 +189,33 @@ A declared argument is a top-level argument holding one absolute path or an arra
 - **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
+
+### Show the approver the first lines of the file — `preview` (0.5, opt-in)
+
+A digest tells the approver the bytes cannot change after approval, not what they are. For a file argument you choose, the SDK can also put a short preview in the pin, so the approval shows it next to the file name:
+
+```ts
+fileArgs: {
+  send_report: {
+    attachmentPath: {
+      mode: "bytes", // the default
+      preview: true,
+      previewRoots: ["/srv/reports"], // preview only files in these folders
+    },
+  },
+},
+```
+
+- **Opt-in, per argument.** Only the object form with `preview: true` sends a preview. The short forms (`["attachmentPath"]`, `{ attachmentPath: true }`, `{ attachmentPath: "bytes" }`) never do. A `preview` that is not `true` or `false`, a `mode` that is not a mode (`null` included; leave it out for `"bytes"`), any key other than `mode`, `preview` and `previewRoots`, or bad `previewRoots` (below) is refused when the tool is wrapped (`CONTENT_PIN_INVALID_ARGUMENT`).
+- **What is sent.** The pin gets `preview`, computed from the same bytes that are hashed (the file is read once):
+  - a text file (valid UTF-8, no NUL byte, not a known binary type such as pdf, images, archives or office files): `{ kind: "text", mediaType, size, text, truncated }`, where `text` is the **first 20 lines, at most 2,048 bytes**, cut on a character boundary. Control characters other than tab and newline, direction-changing (bidi) characters and zero-width characters are replaced with U+FFFD; CRLF becomes LF.
+  - any other file: `{ kind: "binary", mediaType, size }`, no content.
+  - a file outside the `previewRoots` folders: `{ kind: "withheld", size }`, no content and no type.
+- **The agent picks the file, not you.** `preview: true` is set per argument, but the path in that argument comes from the agent. Without `previewRoots`, **any file the agent process can read may be previewed** if the agent names it there, for example `~/.aws/credentials` or a `.env` file after a prompt injection: a file that is valid UTF-8 and has no known binary extension is sent as text. Set `previewRoots` to the folders your tool is meant to send from (1 to 16 absolute paths; symbolic links are resolved for the folders and the file, and on Linux the file's path is taken from the descriptor that was read). Any other file still gets its pin (name, size, digest) and the call goes ahead for the approver to decide, but its preview is `withheld`.
+- **Privacy: the preview text leaves your machine.** It travels to Guardian inside the proposed arguments, is shown to the approver, and is stored with the approval and in receipts like any other argument, **also when the approver denies the call**. Without `preview: true` only the name, size and digest leave your machine. Use `previewRoots` so that only files from folders you chose can be previewed.
+- **Display only.** The approval binds the preview because it is part of the arguments, but nothing decides on it: the check just before the tool runs compares the size and SHA-256, as before. The console shows the text as plain text, never as HTML or Markdown.
+- Previews count toward the 16 KB tool-arguments limit; a call whose previews push it over is refused (`CONTENT_PIN_TOO_MANY`, "preview fewer files"), never cut silently.
+- `contentPreview(name, bytes)` returns the preview for bytes you hold; `normalizeFileArgPreviews(toolName, declaration)` lists the arguments that ask for one and `normalizeFileArgPreviewRoots(toolName, declaration)` their folders. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
 
 `normalizeFileArgs(fileArgs)` / `normalizeFileArgsSpec(toolName, declaration)` return a declaration in the full form (a mode per argument; `DEFAULT_FILE_ARG_MODE` is `"bytes"`) and throw `CONTENT_PIN_INVALID_ARGUMENT` for an invalid one: a mode other than `"bytes"`, `"copy"`, `"recheck"` or `true` (so `false` is refused), or a name that is empty, dotted, reserved, not a string or listed twice. `createGuardianContext` stores the full form.
 

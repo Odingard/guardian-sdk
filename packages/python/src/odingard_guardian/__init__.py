@@ -41,8 +41,14 @@ from .content_pins import (
     CONTENT_PIN_UNSTABLE,
     CONTENT_PIN_UNSUPPORTED_PLATFORM,
     DEFAULT_FILE_ARG_MODE,
+    PREVIEW_MAX_BYTES,
+    PREVIEW_MAX_LINES,
+    PREVIEW_MAX_ROOTS,
     ContentPinError,
     PinnedFile,
+    content_preview,
+    normalize_file_arg_preview_roots,
+    normalize_file_arg_previews,
     pin_file,
     verify_pin,
 )
@@ -60,7 +66,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = [
     "CONTENT_CHANGED_SINCE_APPROVAL",
@@ -77,8 +83,14 @@ __all__ = [
     "CONTENT_PIN_UNSTABLE",
     "CONTENT_PIN_UNSUPPORTED_PLATFORM",
     "DEFAULT_FILE_ARG_MODE",
+    "PREVIEW_MAX_BYTES",
+    "PREVIEW_MAX_LINES",
+    "PREVIEW_MAX_ROOTS",
     "ContentPinError",
     "PinnedFile",
+    "content_preview",
+    "normalize_file_arg_preview_roots",
+    "normalize_file_arg_previews",
     "pin_file",
     "verify_pin",
     "DEFAULT_RECEIPT_MAX_AGE_MS",
