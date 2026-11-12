@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-openclaw
 
 Guardian for [OpenClaw](https://openclaw.ai) agents. A native OpenClaw plugin

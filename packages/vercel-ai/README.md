@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-vercel-ai
 
 Vercel AI SDK adapter for Guardian — route every tool `execute` through a
@@ -128,12 +130,13 @@ const tools = withGuardian(
     client,
     connectionId: "pcn_…",
     mode: "inProcess", // required: the default "remote" cannot read your files
-    fileArgs: { send_report: { attachmentPath: "bytes" } },
+    fileArgs: { send_report: ["attachmentPath"] }, // no mode named: bytes
   },
 );
 // execute(input, options) receives input.attachmentPath as a PinnedFile
 ```
 
+- **`bytes` is the default when you don't name a mode.** `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `bytes`: your tool receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a tool needs a path; explicit modes work as before.
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.

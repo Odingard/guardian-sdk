@@ -167,7 +167,7 @@ const guard = createGuard({
   client,
   connectionId: "pcn_…",
   mode: "inProcess",
-  fileArgs: { send_report: { attachmentPath: "bytes" } },
+  fileArgs: { send_report: ["attachmentPath"] }, // no mode named: bytes
 });
 const sendReport = guard("send_report", async ({ to, attachmentPath }) => {
   // attachmentPath is a PinnedFile: { path, name, bytes, size, sha256 }
@@ -181,6 +181,7 @@ await sendReport({
 
 A declared argument is a top-level argument holding one absolute path or an array of them. The pins go into the proposed arguments under the reserved key `guardianContentPins` (`CONTENT_PIN_KEY`), one record per file: `{ arg, index, mode, name, size, sha256 }`, where `name` is the basename with control and bidi characters removed. A call that supplies `guardianContentPins` itself is refused (`CONTENT_PIN_KEY_RESERVED`) for every tool. Each file is capped at 25 MiB (`maxPinBytes`) and each call at 64 MiB (`maxPinTotalBytes`) and 16 files; a symlink as the last path component, a directory, FIFO, device, an unreadable file or a file that changes while it is read is refused before anything is proposed, with no request sent. `GuardianApprovalPending.input` is your input without pins; `proposedInput` is what was proposed.
 
+- **`bytes` is the default when you don't name a mode.** `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `bytes`: your tool receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a tool needs a path; explicit modes work as before.
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
@@ -188,6 +189,8 @@ A declared argument is a top-level argument holding one absolute path or an arra
 - **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
+
+`normalizeFileArgs(fileArgs)` / `normalizeFileArgsSpec(toolName, declaration)` return a declaration in the full form (a mode per argument; `DEFAULT_FILE_ARG_MODE` is `"bytes"`) and throw `CONTENT_PIN_INVALID_ARGUMENT` for an invalid one: a mode other than `"bytes"`, `"copy"`, `"recheck"` or `true` (so `false` is refused), or a name that is empty, dotted, reserved, not a string or listed twice. `createGuardianContext` stores the full form.
 
 `pinFile(path, { allowAbsent })` and `verifyPin(path, pin)` are the same checks for code that pins a file itself (the coding-agent hook uses them).
 

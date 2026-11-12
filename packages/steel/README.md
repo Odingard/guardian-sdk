@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-steel
 
 Guardian for [Steel](https://steel.dev) browser agents. The agent can only

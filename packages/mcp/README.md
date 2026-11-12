@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-mcp
 
 [![Guardian MCP server](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
@@ -130,7 +132,7 @@ guardian-mcp proxy --pin-file upload_file:path --pin-file send_email:attachment 
 
 For each declared `<tool>:<argument>` the proxy (the SDK on your machine) reads the file the path names, puts its SHA-256 in the approved arguments, and checks it again just before the call is forwarded. Guardian's servers never see the file. If the file changed, nothing is forwarded, the capability is not redeemed, and the result says `CONTENT_CHANGED_SINCE_APPROVAL`; propose the call again for a new approval. A call held for approval keeps the arguments that were proposed, pins included, and `guardian_claim` checks the file against them. After a proxy restart a claim finds nothing; call the tool again, which pins the file again. The upstream server receives the approved arguments without the reserved key `guardianContentPins`. In code: `createGovernedProxy({ ..., pinFiles: { upload_file: ["path"] } })`.
 
-- The mode is always `recheck`: the upstream server opens the path itself, so a short window remains between the check and its open.
+- The mode is always `recheck`: the upstream server opens the path itself, so a short window remains between the check and its open. Elsewhere in the SDK `bytes` is the default when no mode is named; the proxy cannot hand an upstream server bytes, so `--pin-file` and `pinFiles` take no mode and always mean `recheck`.
 - Stdio upstreams only. With `--url` (HTTP or SSE) the path names a file on another machine, so `--pin-file` is refused at start (`CONTENT_PIN_REMOTE_UPSTREAM`). Paths on a remote MCP server are not pinned.
 - File paths must be absolute. The proxy does not resolve relative paths or `~`.
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).

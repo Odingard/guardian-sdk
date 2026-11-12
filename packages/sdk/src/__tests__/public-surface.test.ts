@@ -17,12 +17,15 @@ import {
   CONTENT_PIN_UNREADABLE,
   CONTENT_PIN_UNSTABLE,
   CONTENT_PIN_UNSUPPORTED_PLATFORM,
+  DEFAULT_FILE_ARG_MODE,
   classifyRequestResult,
   createEmbeddedApprovalClient,
   createGuardianClient,
   fetchReceiptVerificationKeys,
   guardianCatalog,
   isHumanSessionToken,
+  normalizeFileArgs,
+  normalizeFileArgsSpec,
   pinFile,
   verifyPin,
   verifyReceiptOffline,
@@ -34,6 +37,7 @@ import type {
   ContentPin,
   ContentPinReasonCode,
   FileArgMode,
+  FileArgsDeclaration,
   FileArgsSpec,
   FileDigest,
   PinFileOptions,
@@ -302,6 +306,40 @@ describe("content pins (public surface)", () => {
     const options: PinFileOptions = { allowAbsent: true };
     const file: Pick<PinnedFile, "name" | "size"> = { name: "x", size: 0 };
     expect([spec, pin, absent, options, file]).toHaveLength(5);
+  });
+
+  it("bytes is the default when no mode is named (a list of names, or true)", () => {
+    expect(DEFAULT_FILE_ARG_MODE).toBe("bytes");
+    const short: FileArgsDeclaration = ["attachmentPath"];
+    const flag: FileArgsDeclaration = { attachmentPath: true };
+    const full: FileArgsDeclaration = { attachmentPath: "recheck" };
+    expect(normalizeFileArgsSpec("send_report", short)).toEqual({
+      attachmentPath: "bytes",
+    });
+    expect(normalizeFileArgsSpec("send_report", flag)).toEqual({
+      attachmentPath: "bytes",
+    });
+    expect(normalizeFileArgs({ send_report: full })).toEqual({
+      send_report: { attachmentPath: "recheck" },
+    });
+    expect(() =>
+      normalizeFileArgsSpec("send_report", { attachmentPath: false }),
+    ).toThrow(
+      expect.objectContaining({ reasonCode: CONTENT_PIN_INVALID_ARGUMENT }),
+    );
+  });
+
+  it("refuses __proto__ as a file argument name instead of dropping it", () => {
+    for (const declared of [
+      ["__proto__"],
+      ["__proto__", "__proto__"],
+      JSON.parse('{"__proto__":"bytes"}'),
+      JSON.parse('{"__proto__":true}'),
+    ]) {
+      expect(() => normalizeFileArgsSpec("send_report", declared)).toThrow(
+        expect.objectContaining({ reasonCode: CONTENT_PIN_INVALID_ARGUMENT }),
+      );
+    }
   });
 
   it("refuses a relative path before reading anything", async () => {

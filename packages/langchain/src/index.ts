@@ -5,6 +5,7 @@ import {
 
 import {
   CONTENT_PIN_INVALID_ARGUMENT,
+  normalizeFileArgsSpec,
   type GuardianClient,
 } from "@odingard/guardian-sdk";
 import {
@@ -54,10 +55,11 @@ export type GuardianLangChainOptions = GuardianAdapterOptions;
  * declared in `fileArgs`. The SDK reads each declared file, puts its
  * SHA-256 in the approved arguments, and checks it again just before the
  * tool runs; a changed file is refused with `CONTENT_CHANGED_SINCE_APPROVAL`
- * and nothing runs. `"bytes"` mode needs a tool the wrapper can call
- * directly (`func` or `_call`); a tool reachable only through `invoke`
- * re-parses its input against its schema, so wrapping it with `"bytes"`
- * throws and `"copy"` is the option.
+ * and nothing runs. `"bytes"` is the default when you don't name a mode
+ * (`fileArgs: { send_report: ["attachmentPath"] }`). `"bytes"` mode needs a
+ * tool the wrapper can call directly (`func` or `_call`); a tool reachable
+ * only through `invoke` re-parses its input against its schema, so wrapping
+ * it with `"bytes"` (named or by default) throws and `"copy"` is the option.
  */
 export function guardianTool(
   inner: StructuredToolInterface,
@@ -224,7 +226,13 @@ function assertBytesModeReachable(
   inner: StructuredToolInterface,
   options: GuardianLangChainOptions,
 ): void {
-  const spec = options.fileArgs?.[inner.name];
+  if (!Object.prototype.hasOwnProperty.call(options.fileArgs ?? {}, inner.name)) {
+    return;
+  }
+  // The short forms (a list of names, or true for a mode) mean "bytes", so
+  // they are checked here like an explicit "bytes": refused, never silently
+  // switched to a weaker mode the developer did not choose.
+  const spec = normalizeFileArgsSpec(inner.name, options.fileArgs?.[inner.name]);
   if (spec === undefined) return;
   const direct = inner as unknown as DirectTool;
   if (typeof direct._call === "function" || typeof direct.func === "function") {
@@ -238,10 +246,11 @@ function assertBytesModeReachable(
     new TypeError(
       `fileArgs for "${inner.name}" uses "bytes" for ${bytesArgs
         .map((arg) => `"${arg}"`)
-        .join(", ")}, but this tool can only be called through invoke(), ` +
-        `which re-validates its input against the schema, so it cannot ` +
-        `receive a PinnedFile. Use "copy" (a private copy of the verified ` +
-        `bytes) instead.`,
+        .join(", ")} ("bytes" is the default when no mode is named), but ` +
+        `this tool can only be called through invoke(), which re-validates ` +
+        `its input against the schema, so it cannot receive a PinnedFile. ` +
+        `Name "copy" (a private copy of the verified bytes) for this tool ` +
+        `instead.`,
     ),
     { reasonCode: CONTENT_PIN_INVALID_ARGUMENT },
   );

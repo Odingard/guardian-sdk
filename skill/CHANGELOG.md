@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.1
+
+- Date: 2026-11-12
+- SHA-256: `3bc4388ae798ef3c4987e678edcc27990cc82e01f740d85bbb986de47e7945b7`
+- Pins: `@odingard/guardian-hook` and `@odingard/guardian-mcp` 0.4.0; `@odingard/guardian-sdk`, `@odingard/guardian-langchain` and `@odingard/guardian-vercel-ai` 0.4.1; `@odingard/guardian-openai-agents` 0.2.1; `@odingard/guardian-openclaw` 0.1.0; `odingard-guardian` 0.2.1.
+- Pins the sdk 0.4.1 release (`bytes` is the default content-pin mode) and says which SDK range the wrappers take. No other change.
+
 ## 1.0.0
 
 - Date: 2026-11-11

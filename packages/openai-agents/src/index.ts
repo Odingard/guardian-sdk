@@ -18,6 +18,8 @@ import {
   type GuardianAdapterOptions,
   type GuardianContext,
 } from "./core.js";
+import { normalizeFileArgsSpec } from "@odingard/guardian-sdk";
+
 import { CallGate, GuardianUnavailable } from "./gate.js";
 
 export {
@@ -201,17 +203,16 @@ function remapFileArgs(
   }
   const written = fileArgs[writtenName]!;
   if (Object.prototype.hasOwnProperty.call(fileArgs, builtName)) {
-    const built = fileArgs[builtName]!;
+    // Compared in the full form, so a short form (a list of names, or true
+    // for a mode, both meaning "bytes") agrees with the same explicit modes.
+    const writtenSpec = normalizeFileArgsSpec(writtenName, written) ?? {};
+    const builtSpec = normalizeFileArgsSpec(builtName, fileArgs[builtName]) ?? {};
     const same =
-      written !== null &&
-      built !== null &&
-      typeof written === "object" &&
-      typeof built === "object" &&
-      Object.keys(written).length === Object.keys(built).length &&
-      Object.entries(written).every(
+      Object.keys(writtenSpec).length === Object.keys(builtSpec).length &&
+      Object.entries(writtenSpec).every(
         ([arg, mode]) =>
-          Object.prototype.hasOwnProperty.call(built, arg) &&
-          built[arg] === mode,
+          Object.prototype.hasOwnProperty.call(builtSpec, arg) &&
+          builtSpec[arg] === mode,
       );
     if (!same) {
       throw new Error(

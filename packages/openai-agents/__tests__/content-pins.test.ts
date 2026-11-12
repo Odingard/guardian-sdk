@@ -192,4 +192,54 @@ describe("OpenAI Agents fileArgs", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(claim).toHaveBeenCalledTimes(1);
   });
+
+  it("the short form (no mode named) means bytes", async () => {
+    for (const fileArgs of [
+      { send_report: ["attachmentPath"] },
+      { send_report: { attachmentPath: true as const } },
+    ]) {
+      let seen: unknown;
+      const request = vi.fn().mockResolvedValue(allow());
+      const t = sendReport(
+        "send_report",
+        (input) => {
+          seen = input;
+          return "sent";
+        },
+        { client: stubClient({ request }), connectionId: "con_1", fileArgs },
+      );
+      await expect(invoke(t, { attachmentPath: file })).resolves.toBe("sent");
+      const pinned = (seen as { attachmentPath: PinnedFile }).attachmentPath;
+      expect(new TextDecoder().decode(pinned.bytes)).toBe("approved bytes");
+      expect(proposedArgs(request)[CONTENT_PIN_KEY]).toEqual([
+        expect.objectContaining({ arg: "attachmentPath", mode: "bytes" }),
+      ]);
+    }
+  });
+
+  it("a renamed tool: the short form and explicit bytes agree; the short form and recheck disagree", async () => {
+    const request = vi.fn().mockResolvedValue(allow());
+    const t = sendReport("send-report", () => "sent", {
+      client: stubClient({ request }),
+      connectionId: "con_1",
+      fileArgs: {
+        "send-report": ["attachmentPath"],
+        send_report: { attachmentPath: "bytes" },
+      },
+    });
+    await invoke(t, { attachmentPath: file });
+    expect(proposedArgs(request)[CONTENT_PIN_KEY]).toEqual([
+      expect.objectContaining({ arg: "attachmentPath", mode: "bytes" }),
+    ]);
+    expect(() =>
+      sendReport("send-report", () => "x", {
+        client: stubClient({}),
+        connectionId: "con_1",
+        fileArgs: {
+          "send-report": { attachmentPath: true },
+          send_report: { attachmentPath: "recheck" },
+        },
+      }),
+    ).toThrow(/fileArgs disagree/);
+  });
 });

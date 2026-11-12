@@ -186,4 +186,58 @@ describe("LangChain fileArgs (inProcess)", () => {
     ).toThrow(expect.objectContaining({ reasonCode: CONTENT_PIN_REMOTE_MODE }));
     expect(c.request).not.toHaveBeenCalled();
   });
+
+  it("the short form (no mode named) means bytes: func receives the verified bytes", async () => {
+    for (const fileArgs of [
+      { send_report: ["attachmentPath"] },
+      { send_report: { attachmentPath: true as const } },
+    ]) {
+      let seen: unknown;
+      const c = client();
+      const wrapped = guardianTool(
+        sendReport((input) => {
+          seen = input;
+          return "sent";
+        }),
+        { client: c.client, connectionId: "con_1", mode: "inProcess", fileArgs },
+      );
+      await expect(wrapped.invoke({ attachmentPath: file })).resolves.toBe(
+        "sent",
+      );
+      const pinned = (seen as { attachmentPath: PinnedFile }).attachmentPath;
+      expect(new TextDecoder().decode(pinned.bytes)).toBe("approved bytes");
+      const proposed = (
+        c.request.mock.calls[0] as unknown as [
+          { arguments: Record<string, unknown> },
+        ]
+      )[0].arguments;
+      expect(proposed[CONTENT_PIN_KEY]).toEqual([
+        expect.objectContaining({ arg: "attachmentPath", mode: "bytes" }),
+      ]);
+    }
+  });
+
+  it("the short form for a tool reachable only through invoke() is refused, never downgraded", () => {
+    const invokeOnly = {
+      name: "send_report",
+      description: "Send a report",
+      schema: z.object({ attachmentPath: z.string() }),
+      invoke: vi.fn(),
+    } as unknown as StructuredToolInterface;
+    const c = client();
+    for (const fileArgs of [
+      { send_report: ["attachmentPath"] },
+      { send_report: { attachmentPath: true as const } },
+    ]) {
+      expect(() =>
+        guardianTool(invokeOnly, {
+          client: c.client,
+          connectionId: "con_1",
+          mode: "inProcess",
+          fileArgs,
+        }),
+      ).toThrow(/default when no mode is named.*"copy"/);
+    }
+    expect(c.request).not.toHaveBeenCalled();
+  });
 });

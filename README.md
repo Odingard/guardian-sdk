@@ -148,20 +148,21 @@ const guard = createGuard({
   client: guardian,
   connectionId: "pcn_…",
   mode: "inProcess",
-  fileArgs: { send_report: { attachmentPath: "bytes" } },
+  fileArgs: { send_report: ["attachmentPath"] }, // bytes: no mode named
 });
 ```
 
 With `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in the approved arguments, and checks it again just before the tool runs. Guardian's servers never see the file. A changed file is refused with `CONTENT_CHANGED_SINCE_APPROVAL` and nothing runs.
 
+- **`bytes` is the default when you don't name a mode.** `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `bytes`: your tool receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a tool needs a path; explicit modes work as before.
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
 - **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
-- Python: `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`. The OpenAI Agents helper works with `@guard(file_args=...)` tools unchanged.
-- The MCP proxy pins declared arguments of a stdio upstream (`--pin-file <tool>:<arg>`, `recheck` only), and the coding-agent hook pins the target of Edit-type tools (not Write, not shell commands); in both a short window remains because the tool opens the file itself.
+- Python: the same short form, `@guard("send_report", file_args=["attachment_path"])` (or `{"attachment_path": True}`), means `bytes`. `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`. A file argument declared on `Guard.run` without a mode means `bytes`, so it is refused there rather than checked in a weaker mode; name `"recheck"`. The OpenAI Agents helper works with `@guard(file_args=...)` tools unchanged.
+- The MCP proxy pins declared arguments of a stdio upstream (`--pin-file <tool>:<arg>`, `recheck` only), and the coding-agent hook pins the target of Edit-type tools (not Write, not shell commands); in both a short window remains because the tool opens the file itself. Neither can hand a tool bytes, so neither takes the `bytes` default: you name no mode there, and the mode is always `recheck`. A LangChain tool reachable only through `invoke()` cannot take bytes either, so declaring a file argument without a mode on it is refused when the tool is wrapped (name `"copy"`).
 - Not pinned: URLs, provider file ids, paths on a remote MCP server, files named inside shell commands, and files a tool opens without naming them. The Steel integration, the OpenClaw plugin and the Hermes adapter do not pin the contents of files their tools read. The path is bound; the file's bytes are not.
 
 ### Govern an MCP server you already use

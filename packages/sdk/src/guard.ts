@@ -2,7 +2,7 @@
 import { canonicalJson, sha256Text } from "./contracts/index.js";
 
 import {
-  assertFileArgsSpec,
+  normalizeFileArgsSpec,
   carriesReservedKey,
   ContentPinError,
   CONTENT_PIN_KEY_RESERVED,
@@ -11,6 +11,7 @@ import {
   pinArguments,
   verifyArguments,
   withoutPins,
+  type FileArgsDeclaration,
   type FileArgsSpec,
   type VerifiedArguments,
 } from "./content-pins.js";
@@ -386,7 +387,12 @@ export type GuardianAdapterOptions = Readonly<{
   ) => void;
   /**
    * Per tool: which top-level arguments are local file paths whose bytes
-   * are pinned, e.g. `{ send_report: { attachmentPath: "bytes" } }`.
+   * are pinned, e.g. `{ send_report: ["attachmentPath"] }`. `bytes` is the
+   * default when you don't name a mode: a list of names, or `true` in place
+   * of a mode (`{ attachmentPath: true }`), means `bytes`, so the tool
+   * receives the verified bytes and there is no gap between the check and
+   * the read. Name `"copy"` or `"recheck"` to choose a weaker mode
+   * (`{ attachmentPath: "copy" }`).
    * Approval binds the exact arguments. A file path is an argument; the
    * file's contents are not, unless the argument is declared here. With
    * `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in
@@ -397,7 +403,7 @@ export type GuardianAdapterOptions = Readonly<{
    * `inProcess` mode; Linux and macOS only (on Windows a declared file
    * argument is refused with `CONTENT_PIN_UNSUPPORTED_PLATFORM`).
    */
-  fileArgs?: Readonly<Record<string, FileArgsSpec>>;
+  fileArgs?: Readonly<Record<string, FileArgsDeclaration>>;
   /** Per pinned file cap in bytes (default 25 MiB). */
   maxPinBytes?: number;
   /** Cap for all pinned files of one call in bytes (default 64 MiB). */
@@ -450,11 +456,13 @@ export function createGuardianContext(
   options: GuardianAdapterOptions,
 ): GuardianContext {
   assertFileArgsConfig(options);
+  const fileArgs = normalizeFileArgs(options.fileArgs);
   return {
     // Auto-install is opt-in: it only works for an entry that does not exist
     // yet, because `installed` does not survive a restart.
     options: {
       ...options,
+      ...(fileArgs === undefined ? {} : { fileArgs }),
       installRecordTransport: options.installRecordTransport ?? false,
     },
     ensured: new Set(),
@@ -471,12 +479,41 @@ export function toolModeFor(
   return options.modes?.[toolName] ?? options.mode ?? "remote";
 }
 
-/** The tool's file-argument declaration, if it declares any argument. */
+/**
+ * Every tool's file-argument declaration in the full form (each argument
+ * with its mode). The short forms mean `bytes`: a list of names
+ * (`["attachmentPath"]`) or `true` in place of a mode. Explicit modes are
+ * kept. Throws a configuration error for an invalid declaration.
+ */
+export function normalizeFileArgs(
+  fileArgs: GuardianAdapterOptions["fileArgs"],
+): Readonly<Record<string, FileArgsSpec>> | undefined {
+  if (fileArgs === undefined) return undefined;
+  if (
+    fileArgs === null ||
+    typeof fileArgs !== "object" ||
+    Array.isArray(fileArgs)
+  ) {
+    throw new TypeError("fileArgs must map tool names to declarations");
+  }
+  const out: Record<string, FileArgsSpec> = {};
+  for (const [toolName, declaration] of Object.entries(fileArgs)) {
+    const spec = normalizeFileArgsSpec(toolName, declaration);
+    if (spec !== undefined) out[toolName] = spec;
+  }
+  return Object.freeze(out);
+}
+
+/**
+ * The tool's file-argument declaration in the full form, if it declares
+ * any argument. The short forms mean `bytes`.
+ */
 function fileArgsFor(
   options: GuardianAdapterOptions,
   toolName: string,
 ): FileArgsSpec | undefined {
-  const spec = options.fileArgs?.[toolName];
+  if (!Object.hasOwn(options.fileArgs ?? {}, toolName)) return undefined;
+  const spec = normalizeFileArgsSpec(toolName, options.fileArgs?.[toolName]);
   return spec !== undefined && Object.keys(spec).length > 0 ? spec : undefined;
 }
 
@@ -495,9 +532,9 @@ function assertFileArgsConfig(
   if (all === null || typeof all !== "object" || Array.isArray(all)) {
     throw new TypeError("fileArgs must map tool names to declarations");
   }
-  for (const [toolName, spec] of Object.entries(all)) {
+  for (const [toolName, declaration] of Object.entries(all)) {
     if (only !== undefined && toolName !== only) continue;
-    assertFileArgsSpec(toolName, spec);
+    const spec = normalizeFileArgsSpec(toolName, declaration) ?? {};
     if (
       Object.keys(spec).length > 0 &&
       toolModeFor(options, toolName) === "remote"
