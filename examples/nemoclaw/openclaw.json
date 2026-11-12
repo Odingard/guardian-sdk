@@ -1,0 +1,16 @@
+{
+  "plugins": {
+    "entries": {
+      "guardian": {
+        "enabled": true,
+        "hooks": { "timeouts": { "before_tool_call": 330000 } },
+        "config": {
+          "connectionId": "pcn_REPLACE_everyday",
+          "askConnectionId": "pcn_REPLACE_needs_approval",
+          "baseUrl": "https://guardian-api.odingard.com",
+          "agentName": "my-nemoclaw-agent"
+        }
+      }
+    }
+  }
+}

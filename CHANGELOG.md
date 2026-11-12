@@ -10,6 +10,16 @@
   - Every process the Gateway starts, `exec` commands included, now inherits the placeholder. OpenShell resolves it only on the provider profile's endpoints, and the network policy's binary allowlist decides which programs can reach them; the README's new "NVIDIA NemoClaw (OpenShell)" section says what that allows, and that NemoClaw needs the opt-out mode, which is not tamper-proof.
 - **skill.md 1.0.3** pins `@odingard/guardian-openclaw` 0.1.1 (hash in `skill/CHANGELOG.md`).
 
+### Docs: Guardian with NVIDIA NemoClaw (guide)
+
+- **`examples/nemoclaw/`** (new): how to add `@odingard/guardian-openclaw` to an OpenClaw agent running in an NVIDIA NemoClaw sandbox, verified end to end on Guardian staging with NemoClaw `v0.0.143`, OpenShell `0.0.116`, OpenClaw `2026.10.5` and plugin 0.1.0: an allowed `shell` call ran, a destructive one waited for a person and ran once after approval, and one on a connection set to Off was refused with no prompt. Each left a receipt that verifies. The guide's files name the production host, which was not part of that run.
+  - The Guardian agent credential is registered with `nemoclaw credentials add` and stays outside the sandbox; the Gateway sees only OpenShell's placeholder.
+  - One egress rule (`guardian-api.yaml`, a NemoClaw custom policy preset): the Guardian API host on 443, the four agent API paths, binary `/usr/local/bin/node` (what OpenShell sees the Gateway as). The guide says what that allows: any Node.js process in the sandbox can reach those paths and propose actions as the agent, but cannot approve them.
+  - The plugin runs in its opt-out mode (`GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`), because NemoClaw keeps the OpenClaw config writable by the Gateway's user. In this mode the agent can switch Guardian off; the guide says plainly that this setup is not tamper-proof and that a protected install is not possible in NemoClaw today.
+  - Covers the plugin install inside `nemoclaw <sandbox> connect` (no `--force`), the device scope approval by request id, restarts (0.1.0: stop then start), what a user sees for each outcome, the messages that can be ignored, and what is not governed.
+- `packages/openclaw/README.md`, "NVIDIA NemoClaw (OpenShell)": updated with what the verified setup showed (the Gateway calls Guardian as `/usr/local/bin/node`; the state directory's `.env` route, the stop/start route on 0.1.0 and the `nemoclaw credentials add` route are confirmed; paths under `/sandbox` go to Ask).
+- Root README: "NVIDIA NemoClaw (guide)" row.
+
 ## guardian-ap2 0.1.0
 
 ### Added: AP2 (Agent Payments Protocol v0.2) mandates
