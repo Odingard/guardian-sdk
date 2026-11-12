@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-hook
 
 **Guardian for coding agents.** A [Claude Code](https://code.claude.com/docs/en/hooks) `PreToolUse` hook that sends every consequential tool call (shell commands, file writes, web fetches, MCP tools) to Guardian before it runs. The same hook runs under [OpenAI Codex CLI](#openai-codex-cli) (`guardian-hook codex`) and [DeepSeek Harness](#deepseek-harness-dsh) (`guardian-hook dsh`).
@@ -259,6 +261,7 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - What this checks is that the file matched when the approved call was released. The agent's own Edit tool then reads the file again after the hook returns, so a short window remains.
 - The target path must be absolute; the hook does not resolve it against the working directory. An Edit-type call with a relative path is denied (`CONTENT_PIN_INVALID_ARGUMENT`). Claude Code always sends absolute paths.
 - Write and DeepSeek `write` are not pinned: they replace the whole file, so its current contents do not change what runs. Their arguments and tiers are unchanged.
+- The mode is always `recheck`, and there is nothing to declare. Elsewhere in the SDK `bytes` is the default when no mode is named; the hook cannot hand the agent's own Edit tool bytes, so it does not use that default.
 - Shell commands are not pinned. The command text is bound; files it names (`bash deploy.sh`, `curl -F file=@x`, globs, `$VAR`) are not.
 - Pinning is supported on Linux and macOS. On Windows an Edit-type call is denied (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
 - **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.

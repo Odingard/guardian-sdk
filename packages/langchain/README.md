@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-langchain
 
 LangChain.js adapter for Guardian — route a tool's `func` through a
@@ -113,7 +115,7 @@ const tools = guardianTools([sendReport], {
 });
 ```
 
-`"bytes"` hands the tool a `PinnedFile` in place of the path. The wrapper calls a `tool()` / `DynamicStructuredTool` directly (`func`), so `"bytes"` works there; a tool it can only reach through `invoke()` re-validates its input against its schema, so wrapping it with `"bytes"` throws and names `"copy"` as the option. `"copy"` and `"recheck"` work for every tool.
+`"bytes"` hands the tool a `PinnedFile` in place of the path. It is the default when you don't name a mode: `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `"bytes"`, because then there is no gap between the check and the read. The wrapper calls a `tool()` / `DynamicStructuredTool` directly (`func`), so `"bytes"` works there; a tool it can only reach through `invoke()` re-validates its input against its schema, so wrapping it with `"bytes"`, named or by default, throws and names `"copy"` as the option. It is refused rather than quietly switched to a weaker mode you did not choose. `"copy"` and `"recheck"` work for every tool, as before.
 
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.

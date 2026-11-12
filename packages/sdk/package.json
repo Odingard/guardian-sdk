@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Guardian agent SDK — Human Authority Infrastructure for Autonomous AI. Request governed capabilities and execute consequential actions under human authority.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",

@@ -22,7 +22,7 @@ import stat as _stat
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from ._canonical import CanonicalJsonError, canonical_json
 
@@ -362,35 +362,92 @@ def verify_pin(
 # --- declarations, proposal and re-check (used by guard.py) ----------------------
 
 FileArgsSpec = Mapping[str, str]
+#: What a developer may write for one tool: the full form (a mode per
+#: argument), ``True`` in place of a mode, or a list of argument names. The
+#: short forms mean ``"bytes"``.
+FileArgsDeclaration = Union[Mapping[str, Union[str, bool]], Sequence[str]]
+
+
+#: The mode a declared file argument gets when no mode is named: ``"bytes"``,
+#: because the function then receives the verified bytes themselves and there
+#: is no gap between the check and the read.
+DEFAULT_FILE_ARG_MODE = "bytes"
+
+
+def _invalid_declaration(tool_name: str, detail: str) -> ContentPinError:
+    return ContentPinError(
+        CONTENT_PIN_INVALID_ARGUMENT,
+        f'file_args for "{tool_name}" {detail}. Name each file argument with "bytes" (the default, '
+        'also written as True or as a list of names), "copy" or "recheck".',
+    )
+
+
+def normalize_file_args_spec(
+    tool_name: str, spec: Any, *, allowed_modes: Tuple[str, ...] = _VALID_MODES
+) -> Optional[Dict[str, str]]:
+    """One tool's declaration in the full form (decoration time).
+
+    The short forms mean ``"bytes"``: a list of names (``["attachment_path"]``)
+    or ``True`` in place of a mode (``{"attachment_path": True}``). Explicit
+    modes are kept as written. Anything else is refused with
+    ``CONTENT_PIN_INVALID_ARGUMENT``. Returns ``None`` for no declaration.
+    """
+    if spec is None:
+        return None
+    full: Dict[str, str] = {}
+    implicit: Set[str] = set()
+    if isinstance(spec, (list, tuple)):
+        for arg in spec:
+            if not isinstance(arg, str):
+                raise _invalid_declaration(tool_name, "lists a name that is not a string")
+            _check_arg_name(tool_name, arg)
+            if arg in full:
+                raise _invalid_declaration(tool_name, f'lists "{arg}" twice')
+            full[arg] = DEFAULT_FILE_ARG_MODE
+            implicit.add(arg)
+    elif isinstance(spec, Mapping):
+        for arg, mode in spec.items():
+            _check_arg_name(tool_name, arg)
+            if mode is True:
+                full[arg] = DEFAULT_FILE_ARG_MODE
+                implicit.add(arg)
+            elif isinstance(mode, str) and mode in _VALID_MODES:
+                full[arg] = mode
+            else:
+                raise ContentPinError(
+                    CONTENT_PIN_INVALID_ARGUMENT,
+                    f'file_args for "{tool_name}.{arg}" must be "bytes", "copy" or "recheck" '
+                    '(or True, which means "bytes")',
+                )
+    else:
+        raise _invalid_declaration(tool_name, "must be a list of argument names or map argument names to modes")
+    for arg, mode in full.items():
+        if mode not in allowed_modes:
+            how = (
+                'is declared without a mode, which means "bytes"'
+                if arg in implicit
+                else f'is "{mode}"'
+            )
+            raise ContentPinError(
+                CONTENT_PIN_INVALID_ARGUMENT,
+                f'file_args for "{tool_name}.{arg}" {how}, but Guard.run supports "recheck" only: '
+                "its fn takes no arguments, so it cannot be handed the bytes or a copy. Use the @guard "
+                'decorator for "bytes" and "copy", or name "recheck" here.',
+            )
+    return full
+
+
+def _check_arg_name(tool_name: str, arg: Any) -> None:
+    if not isinstance(arg, str) or not arg or "." in arg or arg == CONTENT_PIN_KEY:
+        raise ContentPinError(
+            CONTENT_PIN_INVALID_ARGUMENT,
+            f'file_args for "{tool_name}" names "{arg}": only top-level argument names are supported',
+        )
 
 
 def assert_file_args_spec(tool_name: str, spec: Any, *, allowed_modes: Tuple[str, ...] = _VALID_MODES) -> None:
     """Configuration check for one tool's declaration (decoration time)."""
-    if spec is None:
-        return
-    if not isinstance(spec, Mapping):
-        raise ContentPinError(
-            CONTENT_PIN_INVALID_ARGUMENT,
-            f'file_args for "{tool_name}" must map argument names to "bytes", "copy" or "recheck"',
-        )
-    for arg, mode in spec.items():
-        if not isinstance(arg, str) or not arg or "." in arg or arg == CONTENT_PIN_KEY:
-            raise ContentPinError(
-                CONTENT_PIN_INVALID_ARGUMENT,
-                f'file_args for "{tool_name}" names "{arg}": only top-level argument names are supported',
-            )
-        if mode not in _VALID_MODES:
-            raise ContentPinError(
-                CONTENT_PIN_INVALID_ARGUMENT,
-                f'file_args for "{tool_name}.{arg}" must be "bytes", "copy" or "recheck"',
-            )
-        if mode not in allowed_modes:
-            raise ContentPinError(
-                CONTENT_PIN_INVALID_ARGUMENT,
-                f'file_args for "{tool_name}.{arg}" is "{mode}", but Guard.run supports "recheck" only: '
-                'its fn takes no arguments, so it cannot be handed the bytes or a copy. Use the @guard '
-                "decorator for \"bytes\" and \"copy\".",
-            )
+    normalize_file_args_spec(tool_name, spec, allowed_modes=allowed_modes)
 
 
 def carries_reserved_key(args: Any) -> bool:

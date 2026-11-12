@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # @odingard/guardian-openai-agents
 
 OpenAI Agents SDK adapter for Guardian — every tool call goes through a
@@ -175,13 +177,14 @@ const sendReport = guardianTool(
   {
     client,
     connectionId: "pcn_…",
-    fileArgs: { send_report: { attachmentPath: "bytes" } },
+    fileArgs: { send_report: ["attachmentPath"] }, // no mode named: bytes
   },
 );
 ```
 
-The Agents SDK renames tools whose names contain characters other than letters and digits (`send-report` becomes `send_report`). A `fileArgs` entry under the name you wrote is moved to the new name, as `modes` is; two entries that disagree are refused when the tool is built. A content-pin refusal is reported to the model as "did not run". Retrying the same held call claims the held request; a changed file is proposed again and needs a new approval.
+The Agents SDK renames tools whose names contain characters other than letters and digits (`send-report` becomes `send_report`). A `fileArgs` entry under the name you wrote is moved to the new name, as `modes` is; two entries that disagree are refused when the tool is built (they are compared with the default applied, so `["attachmentPath"]` and `{ attachmentPath: "bytes" }` agree). A content-pin refusal is reported to the model as "did not run". Retrying the same held call claims the held request; a changed file is proposed again and needs a new approval.
 
+- **`bytes` is the default when you don't name a mode.** `fileArgs: { send_report: ["attachmentPath"] }` (or `{ attachmentPath: true }`) means `bytes`: your tool receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a tool needs a path; explicit modes work as before.
 - `bytes` passes your tool the verified bytes. `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your tool returns, so a tool that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your tool open it, so a short window remains.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `fileArgs` needs `inProcess` mode (this wrapper's default). In `remote` mode Guardian runs the tool and cannot read your files, so `fileArgs` there is refused when the tool is built.

@@ -56,6 +56,7 @@ from typing import (
 from ._canonical import CanonicalJsonError, canonical_json
 from .client import AsyncGuardianClient, GuardianClient, RequestResult
 from .content_pins import (
+    FileArgsDeclaration,
     CONTENT_CHANGED_SINCE_APPROVAL,
     CONTENT_PIN_INVALID_ARGUMENT,
     CONTENT_PIN_KEY_RESERVED,
@@ -65,7 +66,7 @@ from .content_pins import (
     DEFAULT_MAX_PIN_TOTAL_BYTES,
     ContentPinError,
     VerifiedArguments,
-    assert_file_args_spec,
+    normalize_file_args_spec,
     carries_reserved_key,
     deep_copy_arguments,
     pin_arguments,
@@ -916,15 +917,15 @@ class Guard:
         self._on_execution_error = on_execution_error
 
     def _check_file_args(
-        self, tool_name: str, file_args: Optional[Mapping[str, str]], allowed: Any = ("bytes", "copy", "recheck")
+        self, tool_name: str, file_args: Optional[FileArgsDeclaration], allowed: Any = ("bytes", "copy", "recheck")
     ) -> Optional[Dict[str, str]]:
         """Configuration check (decoration time / Guard.run): a known mode per
         top-level argument, and in-process only. In remote mode Guardian
-        performs the call and cannot read the agent's files."""
-        if file_args is None:
-            return None
-        assert_file_args_spec(tool_name, file_args, allowed_modes=tuple(allowed))
-        if not file_args:
+        performs the call and cannot read the agent's files. Returns the
+        full form: a list of names, or ``True`` in place of a mode, means
+        ``"bytes"``."""
+        spec = normalize_file_args_spec(tool_name, file_args, allowed_modes=tuple(allowed))
+        if not spec:
             return None
         if self._opts.mode_for(tool_name) == "remote":
             raise ContentPinError(
@@ -932,7 +933,7 @@ class Guard:
                 f'"{tool_name}" declares file_args but runs in remote mode, where Guardian '
                 'performs the call and cannot read your files. Use mode="in_process".',
             )
-        return dict(file_args)
+        return spec
 
     def _refuse_before_proposal(self, tool_name: str, reason_code: str, detail: str) -> Any:
         """A local refusal before anything is proposed: no request is sent."""
@@ -1021,7 +1022,7 @@ class Guard:
         arguments: Any,
         fn: Callable[[], Any],
         *,
-        file_args: Optional[Mapping[str, str]] = None,
+        file_args: Optional[FileArgsDeclaration] = None,
     ) -> Any:
         """Govern one call of ``fn`` (no arguments) proposed as ``tool_name(arguments)``.
 
@@ -1029,21 +1030,26 @@ class Guard:
 
         ``file_args`` supports ``"recheck"`` only: ``fn`` takes no arguments,
         so the SDK cannot hand it the verified bytes or a private copy. Use
-        the ``@guard`` decorator for ``"bytes"`` and ``"copy"``.
+        the ``@guard`` decorator for ``"bytes"`` and ``"copy"``. A file
+        argument declared without a mode means ``"bytes"``, so here it is
+        refused (never silently checked in a weaker mode): name ``"recheck"``.
         """
         spec = self._check_file_args(tool_name, file_args, allowed=("recheck",))
         args = to_arguments_record(arguments)
         return self._governed(tool_name, args, lambda _prepared: fn(), spec)
 
     def __call__(
-        self, tool_name: Optional[str] = None, *, file_args: Optional[Mapping[str, str]] = None
+        self, tool_name: Optional[str] = None, *, file_args: Optional[FileArgsDeclaration] = None
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Decorator: ``@guard("pay_invoice")``. The call's bound arguments become the proposal.
 
-        ``file_args={"attachment_path": "bytes"}`` pins the file each named
-        parameter points at (``"bytes"``: the function receives a
-        :class:`PinnedFile`; ``"copy"``: the path of a private copy;
-        ``"recheck"``: the original path, checked again just before the run).
+        ``file_args=["attachment_path"]`` pins the file each named parameter
+        points at. ``"bytes"`` is the default when you don't name a mode (a
+        list of names, or ``{"attachment_path": True}``): the function
+        receives a :class:`PinnedFile`, so there is no gap between the check
+        and the read. Name a mode to choose another: ``"copy"`` (the path of
+        a private copy) or ``"recheck"`` (the original path, checked again
+        just before the run).
         """
 
         def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:

@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg" alt="Guardian" width="48" height="48" />
+
 # odingard-guardian: Guardian SDK for Python
 
 **Human Authority Infrastructure for Autonomous AI.** The agent proposes and the
@@ -73,7 +75,7 @@ With `file_args`, the SDK on your machine reads the file, puts its SHA-256 in th
 ```python
 from odingard_guardian import PinnedFile
 
-@guard("send_report", file_args={"attachment_path": "bytes"})
+@guard("send_report", file_args=["attachment_path"])  # no mode named: bytes
 def send_report(to: str, attachment_path: PinnedFile):
     return mailer.send(to=to, attachment=attachment_path.data)
 
@@ -83,8 +85,9 @@ send_report("ops@example.com", "/srv/reports/q3.pdf")
 guard.run("send_report", {"attachment_path": p}, lambda: send(p), file_args={"attachment_path": "recheck"})
 ```
 
+- **`bytes` is the default when you don't name a mode.** `file_args=["attachment_path"]` (or `{"attachment_path": True}`) means `bytes`: your function receives the verified bytes themselves, so there is no gap between the check and the read. Name `"copy"` or `"recheck"` only when a function needs a path; explicit modes work as before. Any other value (`False`, an unknown mode, a name listed twice) is refused when the function is decorated (`CONTENT_PIN_INVALID_ARGUMENT`).
 - `bytes` passes your function the verified bytes (a frozen `PinnedFile` with `path`, `name`, `data`, `size`, `sha256`; `data` is not in its `repr`, and it has no `__fspath__`, so it cannot be reopened by accident). `copy` passes a private copy; another process running as the same user could still change it, and the copy is deleted when your function returns, so a function that keeps using the path afterwards (for example a background upload) must use `bytes`. `recheck` checks the file and then lets your function open it, so a short window remains.
-- `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`.
+- `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`. A file argument declared on `Guard.run` without a mode means `bytes`, so it is refused there (`CONTENT_PIN_INVALID_ARGUMENT`) rather than checked in a weaker mode; name `"recheck"`.
 - A `file_args` key must name a parameter of the function (not one that comes from `*args` or `**kwargs`). For such a tool the bound arguments are deep-copied when the call is proposed, and the function is called on that copy, so a mutable argument changed while the call waits does not reach it. `Guard.run` with `file_args` deep-copies the `arguments` you pass in the same way (your zero-argument `fn` is not affected). An argument `copy.deepcopy` cannot copy is refused before proposal (`CONTENT_PIN_INVALID_ARGUMENT`). Tools without `file_args` are not copied.
 - A declared argument passed as `None` is refused before proposal (`CONTENT_PIN_INVALID_ARGUMENT`), as `null` is in TypeScript. A declared argument left out (a key missing from `Guard.run` arguments, or a decorated parameter the caller does not pass whose default is `None`) is not pinned and is left out of the proposal, and the function gets its default. A declared parameter with any other default is pinned like a passed value.
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.

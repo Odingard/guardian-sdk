@@ -998,3 +998,130 @@ def test_a_tool_without_file_args_proposes_unchanged_arguments(attachment):
         "attachment_path": attachment,
         "meta": {"b": [1, 2], "a": "é"},
     }
+
+
+# --- "bytes" is the default when no mode is named ----------------------
+
+from odingard_guardian import DEFAULT_FILE_ARG_MODE  # noqa: E402
+from odingard_guardian.content_pins import normalize_file_args_spec  # noqa: E402
+
+SHORT_FORMS = (["attachment_path"], ("attachment_path",), {"attachment_path": True})
+
+
+def test_default_file_arg_mode_is_bytes():
+    assert DEFAULT_FILE_ARG_MODE == "bytes"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("file_args", SHORT_FORMS)
+def test_short_form_pins_in_bytes_mode(attachment, is_async, file_args):
+    client = FakeClient(ALLOW_PIN)
+    guard = make_guard(client, is_async)
+    seen = []
+    send = guard("send_report", file_args=file_args)(
+        _maybe_async(lambda to, attachment_path: seen.append(attachment_path), is_async)
+    )
+    call_sync_or_async(is_async, send, "ops@example.test", attachment)
+    pins = client.last_invocation["arguments"][CONTENT_PIN_KEY]
+    assert [(p["arg"], p["mode"]) for p in pins] == [("attachment_path", "bytes")]
+    assert len(seen) == 1
+    assert isinstance(seen[0], PinnedFile)
+    assert seen[0].data == b"approved bytes"
+    assert "execute:req_pin" in client.calls
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("file_args", SHORT_FORMS)
+def test_short_form_refuses_a_changed_file(attachment, is_async, file_args):
+    client = RewritingClient(ALLOW_PIN, before_answer=rewrite(attachment))
+    guard = make_guard(client, is_async)
+    ran = []
+    send = guard("send_report", file_args=file_args)(
+        _maybe_async(lambda attachment_path: ran.append(1), is_async)
+    )
+    with pytest.raises(GuardianExecutionFailed) as info:
+        call_sync_or_async(is_async, send, attachment)
+    assert info.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
+    assert info.value.local_effect_ran is False
+    assert ran == []
+    assert client.calls == ["request:tool.invoke"]
+
+
+def test_short_form_and_explicit_bytes_propose_identical_arguments(attachment):
+    proposals = []
+    for file_args in (*SHORT_FORMS, {"attachment_path": "bytes"}):
+        client = FakeClient(ALLOW_PIN)
+        guard = Guard(client, connection_id=CONNECTION)
+        guard("send_report", file_args=file_args)(lambda attachment_path: None)(attachment)
+        proposals.append(client.last_invocation["arguments"])
+    assert all(p == proposals[0] for p in proposals)
+
+
+def test_explicit_modes_unchanged_and_mixed_with_short_form(tmp_path):
+    paths = {}
+    for name in ("first", "second", "third"):
+        p = tmp_path / f"{name}.txt"
+        p.write_bytes(name.encode())
+        paths[name] = str(p)
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    seen = {}
+
+    @guard("combine", file_args={"first": True, "second": "recheck", "third": "copy"})
+    def combine(first, second, third):
+        seen.update(first=first, second=second, third=third)
+
+    combine(paths["first"], paths["second"], paths["third"])
+    pins = client.last_invocation["arguments"][CONTENT_PIN_KEY]
+    assert [(p["arg"], p["mode"]) for p in pins] == [("first", "bytes"), ("second", "recheck"), ("third", "copy")]
+    assert isinstance(seen["first"], PinnedFile)
+    assert seen["second"] == paths["second"]
+    assert isinstance(seen["third"], str) and seen["third"] != paths["third"]
+    for mode in ("bytes", "copy", "recheck"):
+        assert normalize_file_args_spec("t", {"p": mode}) == {"p": mode}
+
+
+@pytest.mark.parametrize(
+    "file_args, message",
+    [
+        (["attachment_path", "attachment_path"], "twice"),
+        ([""], "top-level"),
+        (["report.path"], "top-level"),
+        ([CONTENT_PIN_KEY], "top-level"),
+        ([1], "not a string"),
+        ([None], "not a string"),
+        ({"attachment_path": False}, 'or True, which means "bytes"'),
+        ({"attachment_path": 1}, 'or True, which means "bytes"'),
+        ({"attachment_path": "stream"}, 'or True, which means "bytes"'),
+        ({"attachment_path": None}, 'or True, which means "bytes"'),
+        ("attachment_path", "list of argument names"),
+        (True, "list of argument names"),
+        ({"attachment_path"}, "list of argument names"),
+    ],
+)
+def test_invalid_short_forms_are_refused_at_decoration_time(file_args, message):
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    with pytest.raises(ContentPinError, match=message) as info:
+        guard("send_report", file_args=file_args)(lambda attachment_path: None)
+    assert info.value.reason_code == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("file_args", SHORT_FORMS)
+def test_guard_run_refuses_the_short_form_instead_of_downgrading(attachment, file_args):
+    client = FakeClient(ALLOW_PIN)
+    guard = Guard(client, connection_id=CONNECTION)
+    run_args = {"attachment_path": attachment}
+    with pytest.raises(ContentPinError, match='without a mode, which means "bytes".*recheck') as info:
+        guard.run("send_report", run_args, lambda: None, file_args=file_args)
+    assert info.value.reason_code == "CONTENT_PIN_INVALID_ARGUMENT"
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("file_args", SHORT_FORMS)
+def test_short_form_in_remote_mode_is_refused(file_args):
+    guard = Guard(FakeClient(ALLOW_PIN), connection_id=CONNECTION, mode="remote")
+    with pytest.raises(ContentPinError) as info:
+        guard("send_report", file_args=file_args)(lambda attachment_path: None)
+    assert info.value.reason_code == "CONTENT_PIN_REMOTE_MODE"

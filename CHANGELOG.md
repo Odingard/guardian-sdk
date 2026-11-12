@@ -1,5 +1,24 @@
 # Changelog
 
+## sdk 0.4.1 / guardian-langchain 0.4.1 / guardian-vercel-ai 0.4.1 / guardian-openai-agents 0.2.1 / Python 0.2.1
+
+### Changed: `bytes` is the default when you don't name a mode (`fileArgs`, Python `file_args`)
+
+A file argument can now be declared without a mode, and that means `bytes`: `fileArgs: { send_report: ["attachmentPath"] }` or `fileArgs: { send_report: { attachmentPath: true } }` (Python: `file_args=["attachment_path"]` or `{"attachment_path": True}`). The reason: in `bytes` mode the tool receives the verified bytes themselves, not the path, so there is no gap between the check and the read. `copy` and `recheck` are still there when you name them.
+
+- **No breaking change.** Explicit modes work exactly as before. The pin record (`guardianContentPins`), its fields and every reason code are unchanged, and the short form proposes the same arguments as `{ attachmentPath: "bytes" }`.
+- **Refused when the tool is wrapped** (`CONTENT_PIN_INVALID_ARGUMENT`): `false` or any value other than `"bytes"`, `"copy"`, `"recheck"` or `true`; a name that is empty, dotted, the reserved key, not a string or listed twice; a declaration that is neither a list of names nor a map.
+- **Where a surface cannot hand a tool bytes, the short form is never quietly downgraded:**
+  - **guardian-langchain:** a tool reachable only through `invoke()` re-validates its input against its schema, so it cannot receive a `PinnedFile`. Declaring a file argument on it without a mode means `bytes` and is refused when the tool is wrapped, as an explicit `"bytes"` already was; the error names `"copy"`. Refusing is safer than switching to a weaker mode you did not choose. Tools the wrapper calls directly (`tool()`, `DynamicStructuredTool`) take the short form.
+  - **Python:** `Guard.run` stays `recheck` only (its `fn` takes no arguments, so it cannot be handed bytes). A file argument declared there without a mode is refused with a message naming the `@guard` decorator and `"recheck"`, for the same reason.
+  - **guardian-mcp (proxy):** unchanged. `--pin-file` / `pinFiles` take no mode and always mean `recheck`, because the upstream server opens the path itself. README only; no new release.
+  - **guardian-hook:** unchanged. It pins Edit-type targets in `recheck` with nothing to declare. README only; no new release.
+- **guardian-openai-agents:** when a renamed tool has entries under both names, they are compared with the default applied, so `["attachmentPath"]` and `{ attachmentPath: "bytes" }` agree; `["attachmentPath"]` and `{ attachmentPath: "recheck" }` are refused as disagreeing.
+- **guardian-vercel-ai:** takes the short form (needs sdk 0.4.1).
+- **sdk:** new exports `DEFAULT_FILE_ARG_MODE` (`"bytes"`), `normalizeFileArgs`, `normalizeFileArgsSpec` and the type `FileArgsDeclaration` (what `fileArgs` accepts per tool). `createGuardianContext` stores the declarations in the full form, a mode per argument. **Python:** new export `DEFAULT_FILE_ARG_MODE`.
+- langchain, vercel-ai and openai-agents now need `@odingard/guardian-sdk` `^0.4.1`.
+- **skill.md 1.0.1** pins these versions (hash in `skill/CHANGELOG.md`).
+
 ## Docs: setup file for coding agents (skill 1.0.0)
 
 No package versions change.

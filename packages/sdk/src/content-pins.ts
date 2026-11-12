@@ -73,8 +73,28 @@ export type ContentPinReasonCode =
  */
 export type FileArgMode = "bytes" | "copy" | "recheck";
 
-/** Per tool: top-level argument name → mode. */
+/** Per tool: top-level argument name → mode (the full form). */
 export type FileArgsSpec = Readonly<Record<string, FileArgMode>>;
+
+/**
+ * The mode a declared file argument gets when no mode is named: `bytes`,
+ * because the tool then receives the verified bytes themselves and there
+ * is no gap between the check and the read.
+ */
+export const DEFAULT_FILE_ARG_MODE = "bytes" satisfies FileArgMode;
+
+/**
+ * What a developer may write for one tool's file arguments:
+ * - the full form, `{ attachmentPath: "copy" }` (a mode per argument);
+ * - `true` in place of a mode, `{ attachmentPath: true }`, meaning `bytes`;
+ * - a list of argument names, `["attachmentPath"]`, each meaning `bytes`.
+ * The forms are normalized to `FileArgsSpec` at wrap time; anything else
+ * (an unknown mode, `false`, an empty or repeated name) is refused there.
+ */
+export type FileArgsDeclaration =
+  | FileArgsSpec
+  | readonly string[]
+  | Readonly<Record<string, FileArgMode | true>>;
 
 /** One pin, as it appears in the proposed arguments. */
 export type ContentPin = Readonly<{
@@ -524,29 +544,83 @@ export type PinLimits = Readonly<{
   maxPinTotalBytes?: number;
 }>;
 
-/** Configuration check for one tool's declaration (wrap time). */
-export function assertFileArgsSpec(toolName: string, spec: unknown): void {
-  if (spec === undefined) return;
-  if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+function invalidDeclaration(toolName: string, detail: string): never {
+  throw new ContentPinError(
+    CONTENT_PIN_INVALID_ARGUMENT,
+    `fileArgs for "${toolName}" ${detail}. Name each file argument with ` +
+      `"bytes" (the default, also written as true or as a list of names), ` +
+      `"copy" or "recheck".`,
+  );
+}
+
+function assertArgName(toolName: string, arg: unknown): string {
+  if (typeof arg !== "string") {
+    invalidDeclaration(toolName, "lists a name that is not a string");
+  }
+  // "__proto__" cannot be stored as a plain own key: it would be dropped
+  // and the argument would run unpinned, so it is refused like any bad name.
+  if (
+    arg.length === 0 ||
+    arg.includes(".") ||
+    arg === CONTENT_PIN_KEY ||
+    arg === "__proto__"
+  ) {
     throw new ContentPinError(
       CONTENT_PIN_INVALID_ARGUMENT,
-      `fileArgs for "${toolName}" must map argument names to "bytes", "copy" or "recheck"`,
+      `fileArgs for "${toolName}" names "${arg}": only top-level argument names are supported`,
     );
   }
-  for (const [arg, mode] of Object.entries(spec)) {
-    if (arg.length === 0 || arg.includes(".") || arg === CONTENT_PIN_KEY) {
-      throw new ContentPinError(
-        CONTENT_PIN_INVALID_ARGUMENT,
-        `fileArgs for "${toolName}" names "${arg}": only top-level argument names are supported`,
-      );
+  return arg;
+}
+
+/**
+ * One tool's declaration in the full form (wrap time). The short forms
+ * (`true` for a mode, or a list of names) mean `bytes`; explicit modes are
+ * kept as written. Throws CONTENT_PIN_INVALID_ARGUMENT for anything else.
+ * Returns `undefined` for an absent declaration.
+ */
+export function normalizeFileArgsSpec(
+  toolName: string,
+  declaration: unknown,
+): FileArgsSpec | undefined {
+  if (declaration === undefined) return undefined;
+  if (declaration === null || typeof declaration !== "object") {
+    invalidDeclaration(
+      toolName,
+      "must be a list of argument names or map argument names to modes",
+    );
+  }
+  const spec: Record<string, FileArgMode> = {};
+  if (Array.isArray(declaration)) {
+    for (const item of declaration as unknown[]) {
+      const arg = assertArgName(toolName, item);
+      if (Object.hasOwn(spec, arg)) {
+        invalidDeclaration(toolName, `lists "${arg}" twice`);
+      }
+      spec[arg] = DEFAULT_FILE_ARG_MODE;
     }
-    if (typeof mode !== "string" || !VALID_MODES.has(mode)) {
+    return Object.freeze(spec);
+  }
+  for (const [rawArg, mode] of Object.entries(declaration)) {
+    const arg = assertArgName(toolName, rawArg);
+    if (mode === true) {
+      spec[arg] = DEFAULT_FILE_ARG_MODE;
+    } else if (typeof mode === "string" && VALID_MODES.has(mode)) {
+      spec[arg] = mode as FileArgMode;
+    } else {
       throw new ContentPinError(
         CONTENT_PIN_INVALID_ARGUMENT,
-        `fileArgs for "${toolName}.${arg}" must be "bytes", "copy" or "recheck"`,
+        `fileArgs for "${toolName}.${arg}" must be "bytes", "copy" or "recheck" ` +
+          `(or true, which means "bytes")`,
       );
     }
   }
+  return Object.freeze(spec);
+}
+
+/** Configuration check for one tool's declaration (wrap time). */
+export function assertFileArgsSpec(toolName: string, spec: unknown): void {
+  normalizeFileArgsSpec(toolName, spec);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

@@ -161,4 +161,34 @@ describe("Vercel AI fileArgs (inProcess)", () => {
       ),
     ).toThrow(expect.objectContaining({ reasonCode: CONTENT_PIN_REMOTE_MODE }));
   });
+
+  it("the short form (no mode named) means bytes", async () => {
+    for (const fileArgs of [
+      { send_report: ["attachmentPath"] },
+      { send_report: { attachmentPath: true as const } },
+    ]) {
+      let seen: unknown;
+      const c = client();
+      const wrapped = withGuardian(
+        tools((input) => {
+          seen = input;
+          return "sent";
+        }),
+        { client: c.client, connectionId: "con_1", mode: "inProcess", fileArgs },
+      );
+      await expect(call(wrapped, { attachmentPath: file })).resolves.toBe(
+        "sent",
+      );
+      const pinned = (seen as { attachmentPath: PinnedFile }).attachmentPath;
+      expect(new TextDecoder().decode(pinned.bytes)).toBe("approved bytes");
+      const proposed = (
+        c.request.mock.calls[0] as unknown as [
+          { arguments: Record<string, unknown> },
+        ]
+      )[0].arguments;
+      expect(proposed[CONTENT_PIN_KEY]).toEqual([
+        expect.objectContaining({ arg: "attachmentPath", mode: "bytes" }),
+      ]);
+    }
+  });
 });

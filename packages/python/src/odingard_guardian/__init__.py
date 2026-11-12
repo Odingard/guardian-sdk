@@ -40,6 +40,7 @@ from .content_pins import (
     CONTENT_PIN_UNREADABLE,
     CONTENT_PIN_UNSTABLE,
     CONTENT_PIN_UNSUPPORTED_PLATFORM,
+    DEFAULT_FILE_ARG_MODE,
     ContentPinError,
     PinnedFile,
     pin_file,
@@ -59,7 +60,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "CONTENT_CHANGED_SINCE_APPROVAL",
@@ -75,6 +76,7 @@ __all__ = [
     "CONTENT_PIN_UNREADABLE",
     "CONTENT_PIN_UNSTABLE",
     "CONTENT_PIN_UNSUPPORTED_PLATFORM",
+    "DEFAULT_FILE_ARG_MODE",
     "ContentPinError",
     "PinnedFile",
     "pin_file",
