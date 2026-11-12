@@ -2,6 +2,9 @@
 import { canonicalJson, sha256Text } from "./contracts/index.js";
 
 import {
+  canonicalFileArgsDeclaration,
+  normalizeFileArgPreviewRoots,
+  normalizeFileArgPreviews,
   normalizeFileArgsSpec,
   carriesReservedKey,
   ContentPinError,
@@ -393,6 +396,16 @@ export type GuardianAdapterOptions = Readonly<{
    * receives the verified bytes and there is no gap between the check and
    * the read. Name `"copy"` or `"recheck"` to choose a weaker mode
    * (`{ attachmentPath: "copy" }`).
+   * Opt-in preview: `{ attachmentPath: { mode: "bytes", preview: true } }`
+   * also puts a preview of the file in its pin, for the person who
+   * approves: for a text file its first 20 lines (at most 2,048 bytes), for
+   * any other file only its type and size. The preview text leaves your
+   * machine and is stored with the approval like any other argument, also
+   * when the call is denied; the short forms never send one. The agent
+   * picks the path, so without `previewRoots` any file the process can
+   * read may be previewed: add `previewRoots: ["/srv/reports"]` to preview
+   * only files in those folders (others get a `withheld` preview, size
+   * only).
    * Approval binds the exact arguments. A file path is an argument; the
    * file's contents are not, unless the argument is declared here. With
    * `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in
@@ -456,7 +469,7 @@ export function createGuardianContext(
   options: GuardianAdapterOptions,
 ): GuardianContext {
   assertFileArgsConfig(options);
-  const fileArgs = normalizeFileArgs(options.fileArgs);
+  const fileArgs = canonicalFileArgs(options.fileArgs);
   return {
     // Auto-install is opt-in: it only works for an entry that does not exist
     // yet, because `installed` does not survive a restart.
@@ -502,6 +515,49 @@ export function normalizeFileArgs(
     if (spec !== undefined) out[toolName] = spec;
   }
   return Object.freeze(out);
+}
+
+/**
+ * Every tool's declaration in a canonical form that keeps the opt-in
+ * preview (`{ mode, preview: true }`); the full form otherwise. What
+ * `createGuardianContext` stores, so wrappers still read a mode per
+ * argument through `normalizeFileArgsSpec`.
+ */
+function canonicalFileArgs(
+  fileArgs: GuardianAdapterOptions["fileArgs"],
+): Readonly<Record<string, FileArgsDeclaration>> | undefined {
+  if (fileArgs === undefined) return undefined;
+  if (
+    fileArgs === null ||
+    typeof fileArgs !== "object" ||
+    Array.isArray(fileArgs)
+  ) {
+    throw new TypeError("fileArgs must map tool names to declarations");
+  }
+  const out: Record<string, FileArgsDeclaration> = {};
+  for (const [toolName, declaration] of Object.entries(fileArgs)) {
+    const canonical = canonicalFileArgsDeclaration(toolName, declaration);
+    if (canonical !== undefined) out[toolName] = canonical;
+  }
+  return Object.freeze(out);
+}
+
+/** The tool's arguments declared with `preview: true` (sorted). */
+function fileArgPreviewsFor(
+  options: GuardianAdapterOptions,
+  toolName: string,
+): readonly string[] {
+  if (!Object.hasOwn(options.fileArgs ?? {}, toolName)) return [];
+  return normalizeFileArgPreviews(toolName, options.fileArgs?.[toolName]);
+}
+
+/** The tool's `previewRoots`, per argument that names them. */
+function fileArgPreviewRootsFor(
+  options: GuardianAdapterOptions,
+  toolName: string,
+): Readonly<Record<string, readonly string[]>> {
+  if (!Object.hasOwn(options.fileArgs ?? {}, toolName)) return {};
+  return normalizeFileArgPreviewRoots(toolName, options.fileArgs?.[toolName]);
 }
 
 /**
@@ -1567,7 +1623,15 @@ export async function runThroughGuardian<Output>(
   const spec = fileArgsFor(options, toolName);
   if (spec !== undefined) {
     try {
-      proposed = deepFreeze(await pinArguments(spec, snapshot, options));
+      proposed = deepFreeze(
+        await pinArguments(
+          spec,
+          snapshot,
+          options,
+          fileArgPreviewsFor(options, toolName),
+          fileArgPreviewRootsFor(options, toolName),
+        ),
+      );
     } catch (err) {
       return deny(
         options,

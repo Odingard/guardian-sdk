@@ -18,12 +18,18 @@ import {
   CONTENT_PIN_UNSTABLE,
   CONTENT_PIN_UNSUPPORTED_PLATFORM,
   DEFAULT_FILE_ARG_MODE,
+  PREVIEW_MAX_BYTES,
+  PREVIEW_MAX_LINES,
+  PREVIEW_MAX_ROOTS,
   classifyRequestResult,
+  contentPreview,
   createEmbeddedApprovalClient,
   createGuardianClient,
   fetchReceiptVerificationKeys,
   guardianCatalog,
   isHumanSessionToken,
+  normalizeFileArgPreviewRoots,
+  normalizeFileArgPreviews,
   normalizeFileArgs,
   normalizeFileArgsSpec,
   pinFile,
@@ -35,8 +41,10 @@ import {
 import * as sdk from "../index.js";
 import type {
   ContentPin,
+  ContentPinPreview,
   ContentPinReasonCode,
   FileArgMode,
+  FileArgOptions,
   FileArgsDeclaration,
   FileArgsSpec,
   FileDigest,
@@ -326,6 +334,54 @@ describe("content pins (public surface)", () => {
       normalizeFileArgsSpec("send_report", { attachmentPath: false }),
     ).toThrow(
       expect.objectContaining({ reasonCode: CONTENT_PIN_INVALID_ARGUMENT }),
+    );
+  });
+
+  it("a file argument can opt in to a preview; the short forms never do", () => {
+    const withPreview: FileArgsDeclaration = {
+      attachmentPath: { mode: "bytes", preview: true },
+    };
+    const options: FileArgOptions = { preview: true };
+    expect(normalizeFileArgsSpec("send_report", withPreview)).toEqual({
+      attachmentPath: "bytes",
+    });
+    expect(normalizeFileArgPreviews("send_report", withPreview)).toEqual([
+      "attachmentPath",
+    ]);
+    expect(normalizeFileArgPreviews("send_report", { a: options })).toEqual([
+      "a",
+    ]);
+    for (const short of [["a"], { a: true }, { a: "bytes" }]) {
+      expect(normalizeFileArgPreviews("send_report", short)).toEqual([]);
+    }
+    expect(() =>
+      normalizeFileArgPreviews("send_report", { a: { preview: "yes" } }),
+    ).toThrow(
+      expect.objectContaining({ reasonCode: CONTENT_PIN_INVALID_ARGUMENT }),
+    );
+    expect(PREVIEW_MAX_LINES).toBe(20);
+    expect(PREVIEW_MAX_BYTES).toBe(2048);
+    expect(PREVIEW_MAX_ROOTS).toBe(16);
+    const withRoots: FileArgOptions = {
+      preview: true,
+      previewRoots: ["/srv/reports/"],
+    };
+    expect(
+      normalizeFileArgPreviewRoots("send_report", { a: withRoots }),
+    ).toEqual({ a: ["/srv/reports"] });
+    const preview: ContentPinPreview = contentPreview(
+      "q3.csv",
+      new TextEncoder().encode("a,b\r\n1,2\r\n"),
+    );
+    expect(preview).toEqual({
+      kind: "text",
+      mediaType: "text/csv",
+      size: 10,
+      text: "a,b\n1,2\n",
+      truncated: false,
+    });
+    expect(contentPreview("q3.pdf", new Uint8Array([37, 80, 68, 70]))).toEqual(
+      { kind: "binary", mediaType: "application/pdf", size: 4 },
     );
   });
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## sdk 0.5.0 / guardian-langchain 0.5.0 / guardian-vercel-ai 0.5.0 / guardian-openai-agents 0.3.0 / Python 0.3.0 (unreleased)
+
+### Added: an opt-in file preview on approvals (`fileArgs` / `file_args` `preview: true`)
+
+A content pin tells the approver the bytes cannot change after approval, not what they are. A file argument can now ask for a preview that the approval shows next to the file name: `fileArgs: { send_report: { attachmentPath: { mode: "bytes", preview: true } } }` (Python: `file_args={"attachment_path": {"mode": "bytes", "preview": True}}`). `mode` is optional in this object form and defaults to `bytes`.
+
+- **What is sent.** The pin under `guardianContentPins` gets a `preview`, computed on your machine from the same bytes that are hashed (the file is read once). For a text file (valid UTF-8, no NUL byte, not a known binary type): `{ kind: "text", mediaType, size, text, truncated }` with the first 20 lines, at most 2,048 bytes, cut on a character boundary. Control characters other than tab and newline, direction-changing (bidi) characters and zero-width characters are replaced with U+FFFD, CRLF becomes LF and a leading byte-order mark is dropped. For pdf, images, archives, office files and anything else: `{ kind: "binary", mediaType, size }`, no content. For a file outside the argument's `previewRoots`: `{ kind: "withheld", size }`.
+- **Opt-in, and privacy.** Only the object form with `preview: true` sends a preview; every existing form (a list of names, `true`, a mode string) is unchanged and sends none. With a preview, the first lines of the file leave your machine, are shown to the approver and are stored with the approval and in receipts like any other argument, also when the call is denied.
+- **Preview folders (`previewRoots`).** The agent picks the path, so without a limit any file the agent process can read may be previewed if the agent names it in that argument. `previewRoots: ["/srv/reports"]` (only with `preview: true`; 1 to 16 absolute folders) previews only files whose resolved path is in one of them; any other file keeps its pin and gets `{ kind: "withheld", size }`.
+- **Display only.** The preview is part of the approved arguments, so the approval and the receipt bind it, but nothing decides on it: the check just before the tool runs still compares size and SHA-256.
+- **Refused when the tool is wrapped** (`CONTENT_PIN_INVALID_ARGUMENT`): a `preview` that is not a boolean, a `mode` other than `"bytes"`, `"copy"` or `"recheck"`, a `mode` of `null`, any key other than `mode`, `preview` and `previewRoots`, and `previewRoots` that are not 1 to 16 absolute folder paths without `.` or `..` segments. Previews that push a call over the 16 KB tool-arguments limit are refused (`CONTENT_PIN_TOO_MANY`), never cut silently.
+- **sdk:** new exports `contentPreview`, `normalizeFileArgPreviews`, `normalizeFileArgPreviewRoots`, `PREVIEW_MAX_LINES` (20), `PREVIEW_MAX_BYTES` (2,048), `PREVIEW_MAX_ROOTS` (16) and the types `ContentPinPreview` and `FileArgOptions`; `ContentPin` has an optional `preview`. `normalizeFileArgs` / `normalizeFileArgsSpec` still return a mode per argument; `createGuardianContext` keeps `{ mode, preview: true }` (with its `previewRoots`) for an argument that asks for a preview.
+- **Python:** the same option on `@guard(file_args=...)`, and on `Guard.run` with `"mode": "recheck"` (the only mode `Guard.run` takes). New exports `content_preview`, `normalize_file_arg_previews`, `normalize_file_arg_preview_roots`, `PREVIEW_MAX_LINES`, `PREVIEW_MAX_BYTES`, `PREVIEW_MAX_ROOTS`. Golden files generated from the TypeScript SDK (`npm run fixtures:python`) are checked by both test suites, so the two SDKs send the same preview for the same bytes and accept and refuse the same declarations (a `"mode": None` is refused, as TypeScript refuses `null`).
+- **guardian-openai-agents:** when a renamed tool has entries under both names, entries that differ only in `preview` or `previewRoots` disagree and are refused when the tool is built.
+- **guardian-langchain, guardian-vercel-ai:** pass the option through unchanged.
+- langchain, vercel-ai and openai-agents now need `@odingard/guardian-sdk` `^0.5.0`. In this repository the hook and MCP packages also accept `^0.5.0` and Steel's peer range accepts it, so the workspace installs; their published versions are unchanged and not released here (their own declarations take no preview).
+- **skill.md 1.0.2** pins these versions (hash in `skill/CHANGELOG.md`).
+
 ## sdk 0.4.1 / guardian-langchain 0.4.1 / guardian-vercel-ai 0.4.1 / guardian-openai-agents 0.2.1 / Python 0.2.1
 
 ### Changed: `bytes` is the default when you don't name a mode (`fileArgs`, Python `file_args`)

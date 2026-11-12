@@ -1,0 +1,564 @@
+{
+ "declarations": [
+  {
+   "case": "list of names",
+   "declaration": [
+    "attachmentPath",
+    "cover"
+   ],
+   "spec": {
+    "attachmentPath": "bytes",
+    "cover": "bytes"
+   },
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "true for a mode",
+   "declaration": {
+    "attachmentPath": true
+   },
+   "spec": {
+    "attachmentPath": "bytes"
+   },
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "explicit modes",
+   "declaration": {
+    "a": "bytes",
+    "b": "copy",
+    "c": "recheck"
+   },
+   "spec": {
+    "a": "bytes",
+    "b": "copy",
+    "c": "recheck"
+   },
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "object form, no mode",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true
+    }
+   },
+   "spec": {
+    "attachmentPath": "bytes"
+   },
+   "preview": [
+    "attachmentPath"
+   ],
+   "previewRoots": {}
+  },
+  {
+   "case": "object form, mode only",
+   "declaration": {
+    "attachmentPath": {
+     "mode": "copy"
+    }
+   },
+   "spec": {
+    "attachmentPath": "copy"
+   },
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "object form, preview false",
+   "declaration": {
+    "attachmentPath": {
+     "mode": "bytes",
+     "preview": false
+    }
+   },
+   "spec": {
+    "attachmentPath": "bytes"
+   },
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "object form with a preview",
+   "declaration": {
+    "attachmentPath": {
+     "mode": "recheck",
+     "preview": true
+    }
+   },
+   "spec": {
+    "attachmentPath": "recheck"
+   },
+   "preview": [
+    "attachmentPath"
+   ],
+   "previewRoots": {}
+  },
+  {
+   "case": "previewRoots normalized and sorted",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/srv//reports/",
+      "/data",
+      "/data/",
+      "/"
+     ]
+    }
+   },
+   "spec": {
+    "attachmentPath": "bytes"
+   },
+   "preview": [
+    "attachmentPath"
+   ],
+   "previewRoots": {
+    "attachmentPath": [
+     "/",
+     "/data",
+     "/srv/reports"
+    ]
+   }
+  },
+  {
+   "case": "two arguments, one with folders",
+   "declaration": {
+    "a": {
+     "preview": true
+    },
+    "b": {
+     "preview": true,
+     "previewRoots": [
+      "/x"
+     ]
+    }
+   },
+   "spec": {
+    "a": "bytes",
+    "b": "bytes"
+   },
+   "preview": [
+    "a",
+    "b"
+   ],
+   "previewRoots": {
+    "b": [
+     "/x"
+    ]
+   }
+  },
+  {
+   "case": "empty object",
+   "declaration": {},
+   "spec": {},
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "empty list",
+   "declaration": [],
+   "spec": {},
+   "preview": [],
+   "previewRoots": {}
+  },
+  {
+   "case": "mode null",
+   "declaration": {
+    "attachmentPath": {
+     "mode": null,
+     "preview": true
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "mode null alone",
+   "declaration": {
+    "attachmentPath": {
+     "mode": null
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "preview null",
+   "declaration": {
+    "attachmentPath": {
+     "preview": null
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "preview a string",
+   "declaration": {
+    "attachmentPath": {
+     "preview": "yes"
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "preview a number",
+   "declaration": {
+    "attachmentPath": {
+     "preview": 1
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "unknown mode",
+   "declaration": {
+    "attachmentPath": {
+     "mode": "stream",
+     "preview": true
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "mode true",
+   "declaration": {
+    "attachmentPath": {
+     "mode": true
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "unknown key",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "lines": 40
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "false for a mode",
+   "declaration": {
+    "attachmentPath": false
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "null for a mode",
+   "declaration": {
+    "attachmentPath": null
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "a list for a mode",
+   "declaration": {
+    "attachmentPath": [
+     true
+    ]
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots without preview",
+   "declaration": {
+    "attachmentPath": {
+     "previewRoots": [
+      "/srv"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots with preview false",
+   "declaration": {
+    "attachmentPath": {
+     "preview": false,
+     "previewRoots": [
+      "/srv"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots null",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": null
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots empty",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": []
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots a string",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": "/srv"
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots relative",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "srv"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots with ..",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/srv/../etc"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots with .",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/srv/./a"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots a number",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      7
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "previewRoots with NUL",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/a\u0000b"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "17 previewRoots",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/r0",
+      "/r1",
+      "/r2",
+      "/r3",
+      "/r4",
+      "/r5",
+      "/r6",
+      "/r7",
+      "/r8",
+      "/r9",
+      "/r10",
+      "/r11",
+      "/r12",
+      "/r13",
+      "/r14",
+      "/r15",
+      "/r16"
+     ]
+    }
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "16 previewRoots",
+   "declaration": {
+    "attachmentPath": {
+     "preview": true,
+     "previewRoots": [
+      "/r0",
+      "/r1",
+      "/r2",
+      "/r3",
+      "/r4",
+      "/r5",
+      "/r6",
+      "/r7",
+      "/r8",
+      "/r9",
+      "/r10",
+      "/r11",
+      "/r12",
+      "/r13",
+      "/r14",
+      "/r15"
+     ]
+    }
+   },
+   "spec": {
+    "attachmentPath": "bytes"
+   },
+   "preview": [
+    "attachmentPath"
+   ],
+   "previewRoots": {
+    "attachmentPath": [
+     "/r0",
+     "/r1",
+     "/r10",
+     "/r11",
+     "/r12",
+     "/r13",
+     "/r14",
+     "/r15",
+     "/r2",
+     "/r3",
+     "/r4",
+     "/r5",
+     "/r6",
+     "/r7",
+     "/r8",
+     "/r9"
+    ]
+   }
+  },
+  {
+   "case": "dotted name",
+   "declaration": {
+    "a.b": true
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "reserved name",
+   "declaration": {
+    "guardianContentPins": true
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "empty name",
+   "declaration": {
+    "": true
+   },
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "repeated name in a list",
+   "declaration": [
+    "a",
+    "a"
+   ],
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "not a string in a list",
+   "declaration": [
+    "a",
+    1
+   ],
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "a string",
+   "declaration": "attachmentPath",
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  },
+  {
+   "case": "a number",
+   "declaration": 3,
+   "error": "CONTENT_PIN_INVALID_ARGUMENT"
+  }
+ ],
+ "under": [
+  {
+   "path": "/srv/reports/q3.csv",
+   "roots": [
+    "/srv/reports"
+   ],
+   "under": true
+  },
+  {
+   "path": "/srv/reports",
+   "roots": [
+    "/srv/reports"
+   ],
+   "under": true
+  },
+  {
+   "path": "/srv/reports-old/q3.csv",
+   "roots": [
+    "/srv/reports"
+   ],
+   "under": false
+  },
+  {
+   "path": "/srv/report",
+   "roots": [
+    "/srv/reports"
+   ],
+   "under": false
+  },
+  {
+   "path": "/home/dev/.aws/credentials",
+   "roots": [
+    "/srv/reports"
+   ],
+   "under": false
+  },
+  {
+   "path": "/home/dev/.aws/credentials",
+   "roots": [
+    "/"
+   ],
+   "under": true
+  },
+  {
+   "path": "/a/b/c",
+   "roots": [
+    "/x",
+    "/a/b"
+   ],
+   "under": true
+  },
+  {
+   "path": "/a/b/c",
+   "roots": [],
+   "under": false
+  }
+ ]
+}

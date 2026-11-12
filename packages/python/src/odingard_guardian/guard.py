@@ -49,6 +49,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Set,
     Union,
 )
@@ -66,6 +67,8 @@ from .content_pins import (
     DEFAULT_MAX_PIN_TOTAL_BYTES,
     ContentPinError,
     VerifiedArguments,
+    normalize_file_arg_preview_roots,
+    normalize_file_arg_previews,
     normalize_file_args_spec,
     carries_reserved_key,
     deep_copy_arguments,
@@ -870,6 +873,15 @@ class Guard:
     ``CONTENT_CHANGED_SINCE_APPROVAL`` and nothing runs. Guardian's servers
     never see the file. Paths must be absolute (the SDK does not resolve
     relative paths or ``~``). In-process mode only; Linux and macOS only.
+    Opt-in preview: ``file_args={"attachment_path": {"mode": "bytes",
+    "preview": True}}`` also puts a preview in the pin for the person who
+    approves (for a text file its first 20 lines, at most 2,048 bytes; for
+    any other file its type and size only). The preview text leaves your
+    machine and is stored with the approval like any other argument, also
+    when the call is denied. The agent picks the path, so without
+    ``"previewRoots"`` any file the process can read may be previewed: add
+    ``"previewRoots": ["/srv/reports"]`` to preview only files in those
+    folders (others get a ``withheld`` preview, size only).
     """
 
     def __init__(
@@ -962,6 +974,8 @@ class Guard:
         args: Dict[str, Any],
         body: Callable[[Optional[VerifiedArguments]], Any],
         file_args: Optional[Dict[str, str]],
+        previews: Sequence[str] = (),
+        preview_roots: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Any:
         # The reserved key is refused for every tool, so an agent cannot
         # supply a pin of its own.
@@ -988,7 +1002,12 @@ class Guard:
 
         def pin() -> Dict[str, Any]:
             return pin_arguments(
-                file_args, args, max_pin_bytes=opts.max_pin_bytes, max_pin_total_bytes=opts.max_pin_total_bytes
+                file_args,
+                args,
+                max_pin_bytes=opts.max_pin_bytes,
+                max_pin_total_bytes=opts.max_pin_total_bytes,
+                preview=previews,
+                preview_roots=preview_roots,
             )
 
         def refusal(err: Exception) -> Any:
@@ -1035,8 +1054,10 @@ class Guard:
         refused (never silently checked in a weaker mode): name ``"recheck"``.
         """
         spec = self._check_file_args(tool_name, file_args, allowed=("recheck",))
+        previews = normalize_file_arg_previews(tool_name, file_args) if spec else []
+        roots = normalize_file_arg_preview_roots(tool_name, file_args) if spec else {}
         args = to_arguments_record(arguments)
-        return self._governed(tool_name, args, lambda _prepared: fn(), spec)
+        return self._governed(tool_name, args, lambda _prepared: fn(), spec, previews, roots)
 
     def __call__(
         self, tool_name: Optional[str] = None, *, file_args: Optional[FileArgsDeclaration] = None
@@ -1056,6 +1077,8 @@ class Guard:
             name = tool_name or fn.__name__
             signature = inspect.signature(fn)
             spec = self._check_file_args(name, file_args)
+            previews = normalize_file_arg_previews(name, file_args) if spec else []
+            roots = normalize_file_arg_preview_roots(name, file_args) if spec else {}
             if spec:
                 named = (
                     inspect.Parameter.POSITIONAL_ONLY,
@@ -1120,7 +1143,7 @@ class Guard:
                 # ``snapshot`` stays private to ``body``: _governed deep-copies
                 # this record again, so what is proposed, checked and exposed
                 # shares no object with what the body is rebuilt from.
-                return self._governed(name, record_of(snapshot), body, spec)
+                return self._governed(name, record_of(snapshot), body, spec, previews, roots)
 
             if self._async:
 

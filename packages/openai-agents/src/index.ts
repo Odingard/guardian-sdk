@@ -18,7 +18,11 @@ import {
   type GuardianAdapterOptions,
   type GuardianContext,
 } from "./core.js";
-import { normalizeFileArgsSpec } from "@odingard/guardian-sdk";
+import {
+  normalizeFileArgPreviewRoots,
+  normalizeFileArgPreviews,
+  normalizeFileArgsSpec,
+} from "@odingard/guardian-sdk";
 
 import { CallGate, GuardianUnavailable } from "./gate.js";
 
@@ -207,13 +211,32 @@ function remapFileArgs(
     // for a mode, both meaning "bytes") agrees with the same explicit modes.
     const writtenSpec = normalizeFileArgsSpec(writtenName, written) ?? {};
     const builtSpec = normalizeFileArgsSpec(builtName, fileArgs[builtName]) ?? {};
+    // The opt-in preview and its folders are compared too: two entries that
+    // differ only in whether the approver sees a preview, or from which
+    // folders, still disagree.
+    const writtenPreview = normalizeFileArgPreviews(writtenName, written);
+    const builtPreview = normalizeFileArgPreviews(builtName, fileArgs[builtName]);
+    const rootsKey = (roots: Readonly<Record<string, readonly string[]>>) =>
+      JSON.stringify(
+        Object.keys(roots)
+          .sort()
+          .map((arg) => [arg, roots[arg]]),
+      );
+    const writtenRoots = rootsKey(
+      normalizeFileArgPreviewRoots(writtenName, written),
+    );
+    const builtRoots = rootsKey(
+      normalizeFileArgPreviewRoots(builtName, fileArgs[builtName]),
+    );
     const same =
       Object.keys(writtenSpec).length === Object.keys(builtSpec).length &&
       Object.entries(writtenSpec).every(
         ([arg, mode]) =>
           Object.prototype.hasOwnProperty.call(builtSpec, arg) &&
           builtSpec[arg] === mode,
-      );
+      ) &&
+      writtenPreview.join("\u0000") === builtPreview.join("\u0000") &&
+      writtenRoots === builtRoots;
     if (!same) {
       throw new Error(
         `Guardian fileArgs disagree for tool "${writtenName}" (the Agents ` +
