@@ -17,6 +17,21 @@ tamper-evident receipt you can verify without an account. The receipt format is 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
 tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Business via sales.
 
+## Set up with your coding agent
+
+Open Claude Code, Codex or another coding agent in your project folder and paste:
+
+```text
+Set up Guardian using https://odingard.com/guardian/skill.md
+```
+
+The agent reads [`skill.md`](skill.md): it checks your project read-only, shows
+you its plan and waits for a yes, sends you to the console to create the agent
+and its credential (you keep the credential out of the chat), installs pinned
+package versions, and runs one test that waits for your approval. It cannot
+create the account, the agent or the credential for you. Versions are listed in
+[`skill/CHANGELOG.md`](skill/CHANGELOG.md) with the SHA-256 of each file.
+
 ## Packages
 
 | Package                                                                                              | Use it when                                                                                                                                                                                                                       | Docs                                             |
@@ -28,7 +43,7 @@ tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Fre
 | [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai)         | You build with the Vercel AI SDK                                                                                                                                                                                                  | [packages/vercel-ai](packages/vercel-ai)         |
 | [`@odingard/guardian-steel`](https://www.npmjs.com/package/@odingard/guardian-steel)                 | Your browser agent checks out on Steel. Not yet available on hosted Guardian                                                                                                                                                      | [packages/steel](packages/steel)                 |
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
-| [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested against Guardian; production proof pending                                               | [packages/openai-agents](packages/openai-agents) |
+| [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested, but not yet proven against a live Guardian and a live model                                               | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
 
 ## Works with
@@ -47,7 +62,7 @@ document, and how far each has been tested.
 | Any MCP server, remote (`--url`)                | `@odingard/guardian-mcp`                               | Tested against Guardian; production proof pending |
 | LangChain.js / LangGraph                        | `@odingard/guardian-langchain`                         | Tested against Guardian; production proof pending |
 | Vercel AI SDK                                   | `@odingard/guardian-vercel-ai`                         | Tested against Guardian; production proof pending |
-| OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                     | Tested against Guardian; production proof pending |
+| OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                     | Tested, but not yet proven against a live Guardian and a live model |
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian`                                    | Tested against Guardian; production proof pending |
 | Python with CrewAI                              | `odingard-guardian`                                    | Example, not yet tested                           |
 | Claude Agent SDK (Python)                       | `odingard-guardian`                                    | Example, not yet tested                           |
@@ -83,7 +98,7 @@ const guardian = createGuardianClient({
 const d = classifyRequestResult(
   await guardian.request({
     action: "tool.invoke",
-    connectionId: "con_…",
+    connectionId: "pcn_…",
     toolName: "refund_order",
     arguments: { orderId: "ord_123" },
   }),
@@ -103,7 +118,7 @@ if (d.decision === "ALLOW") {
 ```ts
 import { createGuard } from "@odingard/guardian-sdk";
 
-const guard = createGuard({ client: guardian, connectionId: "con_…" });
+const guard = createGuard({ client: guardian, connectionId: "pcn_…" });
 const payInvoice = guard("pay_invoice", async (inv) =>
   myPaymentProvider.pay(inv),
 ); // your code
@@ -118,7 +133,7 @@ await payInvoice({
 ```python
 from odingard_guardian import Guard, GuardianClient
 
-guard = Guard(GuardianClient(credential=...), connection_id="con_…")
+guard = Guard(GuardianClient(credential=...), connection_id="pcn_…")
 
 @guard("pay_invoice")
 def pay_invoice(invoice_id: str, amount_cents: int, payee_id: str): ...  # your code
@@ -131,7 +146,7 @@ Approval binds the exact arguments. A file path is an argument; the file's conte
 ```ts
 const guard = createGuard({
   client: guardian,
-  connectionId: "con_…",
+  connectionId: "pcn_…",
   mode: "inProcess",
   fileArgs: { send_report: { attachmentPath: "bytes" } },
 });

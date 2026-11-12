@@ -59,7 +59,7 @@ container that holds the keys.
 
 ```text
 GUARDIAN_BASE_URL=https://guardian-api.odingard.com
-GUARDIAN_AGENT_CREDENTIAL=gac1.…      # from the Guardian console, per agent
+GUARDIAN_AGENT_CREDENTIAL=gak_…      # from the Guardian console, per agent
 GUARDIAN_CONNECTION_ID=pcn_…
 ```
 

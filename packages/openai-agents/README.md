@@ -38,7 +38,7 @@ const guardian = createGuardianClient({
 
 const governed = createGuardianTool({
   client: guardian,
-  connectionId: "con_…",
+  connectionId: "pcn_…",
   agentName: "billing-agent",
 });
 

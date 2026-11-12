@@ -21,6 +21,10 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Setup file (skill.md) matches the packages
+        run: |
+          node scripts/check-skill.mjs
+          node --test scripts/check-skill.test.mjs
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |

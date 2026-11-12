@@ -28,7 +28,7 @@ from odingard_guardian import (
     Guard, GuardianClient, GuardianApprovalPending, GuardianDenied,
 )
 
-client = GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"])  # gac1.… per agent
+client = GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"])  # gak_… per agent
 guard = Guard(client, connection_id=os.environ["GUARDIAN_CONNECTION_ID"])
 
 @guard("pay_invoice")
@@ -250,7 +250,7 @@ from odingard_guardian import GuardianClient, classify_request_result
 client = GuardianClient(credential=..., base_url="https://guardian-api.odingard.com")
 result = client.request({
     "action": "tool.invoke",
-    "connection_id": "con_…",
+    "connection_id": "pcn_…",
     "tool_name": "refund_order",
     "arguments": {"orderId": "ord_123"},
 })

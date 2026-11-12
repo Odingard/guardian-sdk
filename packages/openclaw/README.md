@@ -434,12 +434,16 @@ ignored (see above).
 
 ## Install
 
-1. **Guardian console.** Agents → Set up for Claude Code creates the agent and
-   its two connections ("Coding agent — everyday", "Coding agent — needs
-   approval"). On each connection card, use "Allow a tool by name" for every
-   tool name the agent will use: the table above, plus `openclaw.<tool>` and
-   `mcp.<server>.<tool>` names. Without that, calls are denied as
-   `INVALID_REQUEST`.
+1. **Guardian console.** Create the agent first (Agents → New agent → Create
+   agent) and copy its credential; it is shown once. Then, on the agent's page,
+   "Set up for Claude Code" creates (or reuses) its two connections ("Coding
+   agent — everyday", "Coding agent — needs approval") and allows the shell,
+   file and fetch tools; it does not create the agent or the credential. A tool
+   must be on a connection before it can be allowed: add the `openclaw.<tool>`,
+   `openclaw.process_input` and `mcp.<server>.<tool>` names the agent will use
+   to "Coding agent — needs approval" with "Add tools" on its card under
+   Connections, then on the agent's page use "Allow a tool by name" for each.
+   Until both are done, those calls are denied as `INVALID_REQUEST`.
 
 2. **Gateway environment.** Set `GUARDIAN_AGENT_CREDENTIAL` as a secret
    environment variable of the process that runs the OpenClaw Gateway. Never

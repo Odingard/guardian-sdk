@@ -24,7 +24,7 @@ Set `mode` for every tool or `modes` per tool name:
 ```ts
 withGuardian(tools, {
   client,
-  connectionId: "con_…",
+  connectionId: "pcn_…",
   modes: { refund_order: "inProcess" }, // everything else remote
 });
 ```
@@ -81,7 +81,7 @@ const tools = withGuardian(
   },
   {
     client: guardian,
-    connectionId: "con_…",
+    connectionId: "pcn_…",
     agentName: "billing-agent",
     mode: "inProcess",
     // refund_order is registered in the Guardian console (record-only);
