@@ -45,6 +45,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested, but not yet proven against a live Guardian and a live model                                               | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
+| [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. | [packages/x402](packages/x402)                   |
 
 ## Works with
 
@@ -73,6 +74,7 @@ document, and how far each has been tested.
 | Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
+| x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. |
 
 "Tested against Guardian" means the integration ran end to end against the
 real Guardian server code, with real approvals and receipts verified offline,
@@ -212,6 +214,7 @@ node agent-hooks.mjs codex       # Codex CLI hook: shell, apply_patch, MCP → A
 node agent-hooks.mjs dsh         # DeepSeek Harness hook via its Claude Code bridge (guardian-hook dsh)
 python hermes/hermes_hook_demo.py  # Hermes Agent's pre_tool_call hook: ALLOW / ASK / DENY (SIMULATED unless env set)
 (cd openclaw && npm install && npm run simulated)  # OpenClaw plugin in OpenClaw's real hook runtime (SIMULATED Guardian)
+node x402/simulated-payments.mjs  # x402 payments: ALLOW, ASK above a cap, DENY, before the wallet signs (SIMULATED Guardian, no network)
 ```
 
 Recipes (LIVE, examples not yet tested): [ZeroClaw](examples/zeroclaw/README.md) ·
@@ -228,6 +231,7 @@ packages/vercel-ai      @odingard/guardian-vercel-ai
 packages/openai-agents  @odingard/guardian-openai-agents  OpenAI Agents SDK adapter
 packages/steel          @odingard/guardian-steel
 packages/openclaw       @odingard/guardian-openclaw       OpenClaw plugin
+packages/x402           @odingard/guardian-x402           x402 payment guard
 packages/python         odingard-guardian (PyPI)          Python SDK
 examples/               runnable demos
 ```

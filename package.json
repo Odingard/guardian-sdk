@@ -12,6 +12,7 @@
     "packages/vercel-ai",
     "packages/openai-agents",
     "packages/steel",
+    "packages/x402",
     "examples"
   ],
   "scripts": {
