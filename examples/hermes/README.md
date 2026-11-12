@@ -50,7 +50,7 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
    `~/.hermes/.env`):
 
    ```bash
-   GUARDIAN_AGENT_CREDENTIAL=gac1.…
+   GUARDIAN_AGENT_CREDENTIAL=gak_…
    GUARDIAN_CONNECTION_ID=pcn_…            # "Hermes — everyday"
    GUARDIAN_HOOK_ASK_CONNECTION_ID=pcn_…   # "Hermes — needs approval"
    ```

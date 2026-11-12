@@ -1,5 +1,16 @@
 # Changelog
 
+## Docs: setup file for coding agents (skill 1.0.0)
+
+No package versions change.
+
+- **New `skill.md`** at the repository root: the file a coding agent reads when the person pastes "Set up Guardian using https://odingard.com/guardian/skill.md". It detects the stack read-only, shows a plan and asks before each install, `npx` run and file write, sends the person to the console to create the agent and its credential, never handles the credential, installs pinned versions only, and runs one test that waits for an approval. Versions and SHA-256 hashes are in `skill/CHANGELOG.md`.
+- **New `scripts/check-skill.mjs`**, run in CI: fails if a pinned version, environment variable, hook subcommand, hook tool name, hook matcher or status word in `skill.md` stops matching the packages and READMEs, if it names an unpinned package or a forbidden install pattern, or if a code block does not parse or type-check. `scripts/check-skill.test.mjs` feeds it mutated copies.
+- Hosted agent credentials start with `gak_` and connection ids with `pcn_`; the READMEs, the MCP proxy's `--help` text and the examples now say so.
+- "Set up for Claude Code" in the console creates the two coding-agent connections and allows their tools; the agent and its credential come first, from Agents → New agent. The hosted Claude Code and OpenClaw READMEs now say so, and say that a tool must be on a connection before it can be allowed, added when the connection is registered or later with "Add tools".
+- The hook README's Claude Code example pins the hook version.
+- The root README's OpenAI Agents SDK status now matches its package README: "Tested, but not yet proven against a live Guardian and a live model".
+
 ## sdk 0.4.0 / guardian-langchain 0.4.0 / guardian-vercel-ai 0.4.0 / guardian-openai-agents 0.2.0 / guardian-mcp 0.4.0 / guardian-hook 0.4.0 / Python 0.2.0
 
 ### Added: pin file contents in approvals (`fileArgs`, Python `file_args`)

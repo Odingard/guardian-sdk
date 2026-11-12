@@ -12,3 +12,6 @@ __pycache__/
 .pytest_cache/
 packages/python/dist/
 packages/python/scripts/.gen-fixtures.mjs
+
+# scratch folder of scripts/check-skill.mjs
+.skill-check/

@@ -42,13 +42,16 @@ This recipe is for an agent on the official image
 `/data/.openclaw/openclaw.json`. Run the `openclaw` commands in a shell in
 the container with `HOME=/data`, or they write config the Gateway never reads.
 
-1. **Guardian console.** Agents → Set up for Claude Code. It creates the agent
-   and two connections, "Coding agent — everyday" (Allow) and "Coding agent —
-   needs approval" (Ask). Copy the agent credential and both `pcn_…` ids. On
-   the cards, "Allow a tool by name" for: `shell`, `file_write`, `web_fetch`
-   (everyday) and `shell_deploy`, `shell_destructive`, `git_push`,
-   `openclaw.message`, `openclaw.browser`, plus `mcp.composio.<tool>` for each
-   Composio tool you expose (needs approval).
+1. **Guardian console.** Agents → New agent → Create agent, and copy the agent
+   credential (shown once). Then on the agent's page, Set up for Claude Code.
+   It creates (or reuses) two connections, "Coding agent — everyday" (Allow)
+   and "Coding agent — needs approval" (Ask), and allows `shell`, `file_write`,
+   `web_fetch`, `shell_deploy`, `shell_destructive`, `git_push` and
+   `shell_session`; it does not create the agent. Copy both `pcn_…` ids. A tool
+   must be on a connection before it can be allowed: on "Coding agent — needs
+   approval", use "Add tools" (under Connections) for `openclaw.message`,
+   `openclaw.browser` and `mcp.composio.<tool>` for each Composio tool you
+   expose, then "Allow a tool by name" for each on the agent's page.
 
 2. **Agent environment.** Add `GUARDIAN_AGENT_CREDENTIAL` to the agent as a
    **secret** environment variable, the same way you pass its model API key.

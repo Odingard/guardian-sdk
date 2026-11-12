@@ -54,7 +54,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
 
 1. In the Guardian console, go to **Connections → Register a tool server → record-only** and create two:
    - **"Coding agent — everyday"** with `shell`, `file_write` and `web_fetch`.
-   - **"Coding agent — needs approval"** with `shell_deploy`, `shell_destructive`, `git_push`, `shell_session`, and any MCP tools you use. Until `shell_session` is allowed by name on that connection, starting an interactive session is denied (`INVALID_REQUEST`), which fails closed. `npx @odingard/guardian-mcp tools -- <server>` lists them.
+   - **"Coding agent — needs approval"** with `shell_deploy`, `shell_destructive`, `git_push`, `shell_session`, and any MCP tools you use. List `shell_session` and each MCP tool (`mcp.<server>.<tool>`) on this connection, when you register it or later with **Add tools** on its card. A name that is not on the connection, or not allowed by name, is refused (`INVALID_REQUEST`), which fails closed. `npx @odingard/guardian-mcp tools -- <server>` lists them.
 2. Under **Agents**, open your coding agent:
    - set **Allow** on the first connection and **Ask me first** on the second;
    - on each connection's card, type every tool name into **"Allow a tool by name"** and press **Allow tool**, once per tool.
@@ -80,7 +80,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @odingard/guardian-hook",
+            "command": "npx -y @odingard/guardian-hook@0.4.0",
             "timeout": 600
           }
         ]

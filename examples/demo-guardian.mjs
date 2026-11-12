@@ -6,8 +6,8 @@
  *
  * To run the SAME code against real hosted Guardian instead, set:
  *   GUARDIAN_BASE_URL=https://guardian-api.odingard.com
- *   GUARDIAN_AGENT_CREDENTIAL=gac1.…   (issued per agent in the console)
- *   GUARDIAN_CONNECTION_ID=con_…
+ *   GUARDIAN_AGENT_CREDENTIAL=gak_…   (issued per agent in the console)
+ *   GUARDIAN_CONNECTION_ID=pcn_…
  * and the examples use @odingard/guardian-sdk's real client unchanged.
  */
 import { createGuardianClient } from "@odingard/guardian-sdk";
@@ -139,7 +139,7 @@ export function guardian() {
         baseUrl: GUARDIAN_BASE_URL,
         credential: GUARDIAN_AGENT_CREDENTIAL,
       }),
-      connectionId: GUARDIAN_CONNECTION_ID ?? "con_demo",
+      connectionId: GUARDIAN_CONNECTION_ID ?? "pcn_demo",
       demo: false,
     };
   }
@@ -148,5 +148,5 @@ export function guardian() {
       "          Set GUARDIAN_BASE_URL / GUARDIAN_AGENT_CREDENTIAL /\n" +
       "          GUARDIAN_CONNECTION_ID to run against real hosted Guardian.\n",
   );
-  return { client: createDemoGuardian(), connectionId: "con_demo", demo: true };
+  return { client: createDemoGuardian(), connectionId: "pcn_demo", demo: true };
 }

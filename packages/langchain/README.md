@@ -22,7 +22,7 @@ npm install @odingard/guardian-langchain @odingard/guardian-sdk @langchain/core
 Set `mode` for every tool or `modes` per tool name:
 
 ```ts
-guardianTool(t, { client, connectionId: "con_…", mode: "inProcess" });
+guardianTool(t, { client, connectionId: "pcn_…", mode: "inProcess" });
 guardianTools(tools, { client, connectionId, modes: { send_wire: "remote" } });
 ```
 
@@ -76,7 +76,7 @@ const refundOrder = guardianTool(
   }),
   {
     client: guardian,
-    connectionId: "con_…",
+    connectionId: "pcn_…",
     mode: "inProcess",
     // refund_order is registered in the Guardian console (record-only);
     // installRecordTransport is off by default, so nothing is auto-registered.

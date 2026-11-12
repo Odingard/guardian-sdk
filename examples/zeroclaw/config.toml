@@ -28,7 +28,7 @@ args = [
   "--url", "<COMPOSIO_MCP_URL>",
   "--header", "x-api-key: ${COMPOSIO_API_KEY}",
 ]
-env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gac1.…", GUARDIAN_CONNECTION_ID = "pcn_…", COMPOSIO_API_KEY = "…" }
+env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gak_…", GUARDIAN_CONNECTION_ID = "pcn_…", COMPOSIO_API_KEY = "…" }
 
 # A local stdio server: put guardian-mcp in front of the original command.
 [[mcp.servers]]
@@ -40,7 +40,7 @@ args = [
   "proxy", "--",
   "/usr/local/bin/node", "/opt/servers/filesystem/dist/index.js", "/zeroclaw-data/workspace",
 ]
-env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gac1.…", GUARDIAN_CONNECTION_ID = "pcn_…" }
+env = { GUARDIAN_BASE_URL = "https://guardian-api.odingard.com", GUARDIAN_AGENT_CREDENTIAL = "gak_…", GUARDIAN_CONNECTION_ID = "pcn_…" }
 
 # Grant ONLY the wrapped servers to the agent. A server left out of every
 # bundle is never connected (ZeroClaw: "omission is not a grant").

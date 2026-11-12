@@ -28,10 +28,21 @@ const options = {
 
 ## Set up Guardian
 
-In the Guardian console, open **Agents → Set up for Claude Code**. It creates
-the agent and its two connections: "Coding agent — everyday" (Allow) and
-"Coding agent — needs approval" (Ask). Copy the agent credential and both
-connection ids.
+In the Guardian console, first create the agent: **Agents → New agent**, then
+**Create agent**. Copy its agent credential (`gak_…`); it is shown once.
+
+Then, on the agent's page, open **Govern Claude Code with this agent** and press
+**Set up for Claude Code**. It creates (or reuses) the two connections,
+"Coding agent — everyday" (Allow: `shell`, `file_write`, `web_fetch`) and
+"Coding agent — needs approval" (Ask: `shell_deploy`, `shell_destructive`,
+`git_push`, `shell_session`), and allows those tools for the agent. It does not
+create the agent or its credential. Copy both connection ids (`pcn_…`).
+
+A tool must be on a connection before it can be allowed. MCP tool calls
+(`mcp.<server>.<tool>`) are not added by the setup, so they are refused
+(`INVALID_REQUEST`) until you add each one to "Coding agent — needs approval"
+with **Add tools** on its card under **Connections**, then allow it by name on
+the agent's page.
 
 ## Deploy
 

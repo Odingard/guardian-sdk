@@ -42,7 +42,7 @@ const guardian = createGuardianClient({
 // 1. The agent asks for a capability — it never holds real credentials.
 const result = await guardian.request({
   action: "tool.invoke",
-  connectionId: "con_…",
+  connectionId: "pcn_…",
   toolName: "refund_order",
   arguments: { orderId: "ord_123" },
 });

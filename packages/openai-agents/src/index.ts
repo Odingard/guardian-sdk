@@ -445,7 +445,7 @@ export function guardianTool<
  * factory share the record-transport cache.
  *
  * ```ts
- * const governed = createGuardianTool({ client, connectionId: "con_…" });
+ * const governed = createGuardianTool({ client, connectionId: "pcn_…" });
  * const refund = governed({ name: "refund_order", description, parameters, execute });
  * ```
  */
