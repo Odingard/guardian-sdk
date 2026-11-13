@@ -522,8 +522,9 @@ person and ran once after approval, and one on a connection set to Off was
 refused with no prompt. Guardian production was not part of that run. The
 step-by-step guide is
 [examples/nemoclaw](../../examples/nemoclaw). The rest of this README
-describes OpenClaw 2026.7.1; this section notes where NemoClaw differs. The
-0.1.1 in-place restart behaviour below has not been verified on NemoClaw.
+describes OpenClaw 2026.7.1; this section notes where NemoClaw differs. Plugin
+0.1.1, including an in-place Gateway restart, was then verified on the same
+setup.
 
 In a NemoClaw sandbox the Gateway never sees the raw credential. OpenShell
 gives it a placeholder, `openshell:resolve:env:v<N>_GUARDIAN_AGENT_CREDENTIAL`,
@@ -610,7 +611,7 @@ Guardian and every governed call is blocked.
   Use `nemoclaw <sandbox> stop` then `nemoclaw <sandbox> start`: the
   container start gives the Gateway a fresh environment from OpenShell, with
   the placeholder. Make no OpenClaw change after the last start.
-- **0.1.1 and later (not yet verified on NemoClaw):** when
+- **0.1.1 and later (verified on NemoClaw v0.0.143):** when
   `GUARDIAN_AGENT_CREDENTIAL` is exactly an OpenShell placeholder (`v<N>_`
   revision or `s<64 hex>_` digest form, for this variable only), the plugin
   leaves it in the Gateway's environment and logs that it kept an OpenShell
@@ -619,8 +620,8 @@ Guardian and every governed call is blocked.
   Gateway finds the placeholder again and stays configured. A raw credential
   is still removed from the environment, as before. A hand-written
   `openshell:resolve:env:GUARDIAN_AGENT_CREDENTIAL` (no revision) is treated
-  as raw, and OpenShell would not resolve it anyway. Until this is
-  verified, use stop then start with 0.1.1 too.
+  as raw, and OpenShell would not resolve it anyway. Stop then start also
+  works.
 
 **Opt-out mode is required, and it is not tamper-proof.** NemoClaw runs the
 Gateway as the `sandbox` user and keeps `/sandbox/.openclaw` (the OpenClaw

@@ -1,10 +1,10 @@
 # Changelog
 
-## guardian-openclaw 0.1.1 (unreleased)
+## guardian-openclaw 0.1.1, released 2026-11-12
 
 ### Changed: an OpenShell credential placeholder stays in the Gateway environment
 
-- **`@odingard/guardian-openclaw` 0.1.1** (not yet published): keep an OpenShell credential placeholder in the Gateway environment so NVIDIA NemoClaw in-place Gateway restarts keep Guardian configured. Raw credentials are still removed.
+- **`@odingard/guardian-openclaw` 0.1.1**: keep an OpenShell credential placeholder in the Gateway environment so NVIDIA NemoClaw in-place Gateway restarts keep Guardian configured. Raw credentials are still removed.
   - Kept only when `GUARDIAN_AGENT_CREDENTIAL` is exactly the placeholder OpenShell issues for that variable (`OPENSHELL_PLACEHOLDER_RE`: `openshell:resolve:env:` then `v<N>_` or `s<64 hex>_`, then `GUARDIAN_AGENT_CREDENTIAL`). The canonical form with no revision, another key's placeholder and anything with extra text are treated as raw and removed. A key named in `<cwd>/.env` is still ignored and removed, whatever its value.
   - The plugin logs once at registration that it kept an OpenShell placeholder; it never logs the value.
   - Every process the Gateway starts, `exec` commands included, now inherits the placeholder. OpenShell resolves it only on the provider profile's endpoints, and the network policy's binary allowlist decides which programs can reach them; the README's new "NVIDIA NemoClaw (OpenShell)" section says what that allows, and that NemoClaw needs the opt-out mode, which is not tamper-proof.
@@ -19,6 +19,7 @@
   - Covers the plugin install inside `nemoclaw <sandbox> connect` (no `--force`), the device scope approval by request id, restarts (0.1.0: stop then start), what a user sees for each outcome, the messages that can be ignored, and what is not governed.
 - `packages/openclaw/README.md`, "NVIDIA NemoClaw (OpenShell)": updated with what the verified setup showed (the Gateway calls Guardian as `/usr/local/bin/node`; the state directory's `.env` route, the stop/start route on 0.1.0 and the `nemoclaw credentials add` route are confirmed; paths under `/sandbox` go to Ask).
 - Root README: "NVIDIA NemoClaw (guide)" row.
+- 2026-11-13: the setup was repeated by a second person on a fresh machine, and plugin 0.1.1 was verified on the same setup, including an in-place Gateway restart. The guide and the plugin README now say so.
 
 ## guardian-ap2 0.1.0
 

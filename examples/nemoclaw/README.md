@@ -1,6 +1,6 @@
 # Guardian with NVIDIA NemoClaw (guide)
 
-> **Verified on Guardian staging with NVIDIA NemoClaw `v0.0.143`, NVIDIA OpenShell `0.0.116` and OpenClaw `2026.10.5`, with `@odingard/guardian-openclaw` 0.1.0.** An allowed shell command ran, a destructive one waited for a person and ran once after approval, and one on a connection set to Off was refused with no prompt. Each left a receipt that verifies with staging's keys.
+> **Verified on Guardian staging with NVIDIA NemoClaw `v0.0.143`, NVIDIA OpenShell `0.0.116` and OpenClaw `2026.10.5`, with `@odingard/guardian-openclaw` 0.1.0, and repeated by a second person on a fresh machine.** An allowed shell command ran, a destructive one waited for a person and ran once after approval, and one on a connection set to Off was refused with no prompt. Each left a receipt that verifies with staging's keys. Plugin 0.1.1 was then verified on the same setup, including an in-place Gateway restart.
 >
 > **The verified run used Guardian staging** (`guardian-api-staging.odingard.com`), with these files changed only in the host name. The commands and files below name the production host, `guardian-api.odingard.com`. That host, and verifying receipts with production's keys, were not part of the run.
 >
@@ -47,9 +47,10 @@ Versions this guide was verified with:
 | OpenClaw (in the sandbox) | `2026.10.5`; the Gateway runs on Node.js 24.22.1                                                                                                     |
 | Sandbox image             | `ghcr.io/nvidia/nemoclaw/openclaw-sandbox@sha256:435934d9928e953f2ac8dd2da963eaca9312c9b61501bdd428ec42494bc4def8` (NemoClaw picks it itself)        |
 | Guardian plugin           | `@odingard/guardian-openclaw@0.1.0`, npm integrity `sha512-XM5fHYKJ0Q8sS4F5tpHFWWDmVLdzZJzatSf6GjEf8O/BBvq+QYE/F1I3fF1qQhQkqR7GNbajfCAY7u6Kz1IoiA==` |
+| Guardian plugin 0.1.1     | `@odingard/guardian-openclaw@0.1.1`, npm integrity `sha512-a/tOniv/AxOBLypV/Rf+P72FLhd5gYpaSGMWh7ziQOCzCLSpeeUguC9Xkw/agBdT6sMUgYVs0eGFK3zycex/Dg==` |
 | Guardian API              | Staging, `guardian-api-staging.odingard.com`. The files here name production, `guardian-api.odingard.com`, which was not part of the run.                |
 
-This guide was verified with plugin 0.1.0, and its commands name 0.1.0. Plugin 0.1.1 has not been verified with it. 0.1.1 differs in three ways that matter here: it keeps the credential placeholder in the Gateway's environment, so every process the Gateway starts inherits it ([step 4](#4-add-the-one-egress-rule)); it logs one more line at start ([step 9](#9-check)); and it is meant to survive an in-place Gateway restart ([step 8](#8-stop-and-start-the-sandbox)).
+This guide's commands name 0.1.0, the version the full run used. Plugin 0.1.1 was verified on the same setup: installed in place of 0.1.0, it kept Guardian configured through an in-place `gateway restart` (same Gateway process before and after), and an allowed call then ran with a receipt that verifies. To use 0.1.1, put `0.1.1` in place of `0.1.0` in step 5 and check its integrity against the 0.1.1 row above. 0.1.1 differs in three ways that matter here: it keeps the credential placeholder in the Gateway's environment, so every process the Gateway starts inherits it ([step 4](#4-add-the-one-egress-rule)); it logs one more line at start ([step 9](#9-check)); and it survives an in-place Gateway restart ([step 8](#8-stop-and-start-the-sandbox)).
 
 Files in this folder:
 
@@ -231,7 +232,7 @@ nemoclaw my-agent stop && nemoclaw my-agent start
 The start prints "Native agent gateway is still starting" for about 40 seconds, then "Probe complete…". A container start gives the Gateway a fresh environment from OpenShell, with the credential placeholder.
 
 - **Plugin 0.1.0:** use stop then start, **not** `nemoclaw my-agent gateway restart`. NemoClaw restarts the Gateway in place with a copy of its environment, and 0.1.0 has removed the placeholder from it by then, so after an in-place restart the Gateway logs "Guardian plugin is not configured" and blocks every governed call. Make no OpenClaw change (`config set`, `plugins …`, `devices …`, `.env`) after the last start; if you must, stop and start again.
-- **Plugin 0.1.1 (not verified with this guide):** it keeps the OpenShell placeholder in the Gateway's environment, so that the Gateway stays configured after an in-place restart. That has not been verified on NemoClaw; use stop then start with 0.1.1 too.
+- **Plugin 0.1.1:** it keeps the OpenShell placeholder in the Gateway's environment, so the Gateway stays configured after an in-place restart (`nemoclaw my-agent gateway restart`). Verified on NemoClaw `v0.0.143`: the Gateway kept the same process, logged that it kept the placeholder, and an allowed call then ran. Stop then start also works.
 
 ## 9. Check
 
@@ -270,6 +271,7 @@ Approve in Guardian, not with OpenClaw's `/approve`. Guardian's decision is the 
 
 - **Paths under `/sandbox` go to Ask.** NemoClaw sets `OPENCLAW_HOME=/sandbox`, so the plugin treats that tree as OpenClaw's control plane: a shell command that names a path under `/sandbox` (outside `/sandbox/workspace*`) is `shell_destructive` and waits for a person. That includes the agent's own workspace, `/sandbox/.openclaw/workspace`, so `ls -la /sandbox` asks while `ls -la` with no path is allowed. In testing, other wordings of the Allow message (such as "List the files in your workspace") made the agent add a path under `/sandbox`, so the call went to Ask; the wording in the table is the one that gave a bare `ls -la`.
 - **Ask for shell commands by name.** OpenClaw's own tools, such as its `ls` tool, reach Guardian as `openclaw.<tool>` names and are denied (`INVALID_REQUEST`) until you add them with **Add tools** and **Allow a tool by name**.
+- **The agent may add a path on its own.** Even when asked for a bare `ls -la`, the agent sometimes adds a path under `/sandbox`, and that call waits for a person. Deny it and ask again; in testing the bare command was allowed on a later try.
 - **Each new request is decided on its own.** After an approved command runs, the agent may retry or check its own work with another command. That is a new request: it can go to your phone again, and you approve or deny it separately.
 - **The agent's summary can be wrong.** For example, after a follow-up check is denied, the agent may report that the approved command was blocked, even though it ran. It may also call Guardian by another name. The Activity page and the receipt are the record.
 
@@ -317,7 +319,7 @@ It fetches Guardian's published verification keys from that host, then checks th
 | You see                                                               | Likely cause and fix                                                                                                                                                                                                                                                              |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every call blocked: "the install is not protected"                    | The opt-out flag did not reach the plugin. Check the line in `/sandbox/.openclaw/.env` (step 7), then stop and start (step 8). If it is still blocked, the Gateway's working directory may be `/sandbox/.openclaw`, where the flag is ignored.                                    |
-| "Guardian plugin is not configured"                                   | With 0.1.0, usually an in-place Gateway restart (`gateway restart`, or a config change that restarted it): stop and start. Otherwise the provider is missing: check `openshell sandbox provider list my-agent`; register it with `nemoclaw credentials add` and rebuild (step 3). |
+| "Guardian plugin is not configured"                                   | With 0.1.0, usually an in-place Gateway restart (`gateway restart`, or a config change that restarted it): stop and start, or use 0.1.1, which keeps the credential through it. Otherwise the provider is missing: check `openshell sandbox provider list my-agent`; register it with `nemoclaw credentials add` and rebuild (step 3). |
 | Calls blocked because Guardian is unreachable (`SERVICE_UNAVAILABLE`) | The sandbox cannot reach Guardian. Check `openshell logs my-agent --source sandbox` for a `DENIED` line for the Guardian host: a missing preset, or a binary the preset does not list (`binary '/usr/local/bin/node' not allowed` means the preset names a different binary).     |
 | `credential_endpoint_mismatch` (HTTP 403) from the proxy              | The request went to a host or path the provider profile does not list. Use the same host in the profile, the preset and `baseUrl`.                                                                                                                                                |
 | Calls denied as `INVALID_REQUEST`                                     | The tool is not on the connection or not allowed for the agent. Add it with **Add tools** and **Allow a tool by name** (step 2).                                                                                                                                                  |
@@ -329,7 +331,6 @@ It fetches Guardian's published verification keys from that host, then checks th
 ## Not covered yet
 
 - Guardian production (`guardian-api.odingard.com`): the verified run used Guardian staging. The production host in these files, and verifying receipts with production's keys, were not run.
-- Plugin 0.1.1, including an in-place Gateway restart with it (use stop then start).
 - Narrowing the CLI device's scope (step 6): not shown to take effect.
 - An approval held for most of the 5-minute window: approvals were given within seconds, so a long wait cut short by an OpenClaw or NemoClaw timeout has not been ruled out.
 - Turning off the OpenShell gateway's own telemetry.
