@@ -1312,7 +1312,7 @@ export function withoutPins(input: unknown): unknown {
   return Object.freeze(rest);
 }
 
-/** The one pin validator, shared with Guardian (packages/contracts tools.ts). */
+/** The one pin validator, shared with Guardian (contracts/tools.ts). */
 function isPinRecord(value: unknown): value is ContentPin {
   return isContentPinRecord(value);
 }

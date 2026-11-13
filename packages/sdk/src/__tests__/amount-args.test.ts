@@ -131,6 +131,13 @@ describe("readToolAmount (public contracts)", () => {
     expect(
       readToolAmount(withCurrency, { amount: 100, currency: "usd" }).kind,
     ).toBe("money");
+    for (const currency of ["USD", "Usd"]) {
+      expect(readToolAmount(withCurrency, { amount: 100, currency })).toEqual({
+        kind: "money",
+        amountMinor: 100,
+        currency: "usd",
+      });
+    }
     expect(readToolAmount(withCurrency, { amount: 100 })).toEqual({
       kind: "refused",
       code: "CURRENCY_MISSING",

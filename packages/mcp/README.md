@@ -158,7 +158,8 @@ guardian-mcp proxy \
 Each call of that tool carries the declaration and the amount the proxy reads, and Guardian decides on the amount: allow up to the limit, hold for a person above it (`guardian_claim` forwards the call once after approval), block above the maximum. A call whose amount cannot be read, or whose declaration is not the owner's, is refused and nothing is forwarded. In code: `createGovernedProxy({ ..., amountArgs: { purchase: { argument: "amount", unit: "minor", currency: "usd" } } })`.
 
 - The upstream MCP server runs the tool, so the limit applies to Guardian's decision. The proxy forwards the arguments Guardian decided on.
-- Guardian reads one argument. By setting it, the owner states that this argument sets the charge; other arguments that change it (a quantity, a tip) are not seen. An allowed-arguments list blocks calls with any other argument.
+- Guardian reads one argument. By setting it, the owner states that this argument sets the charge; other arguments that change it (a quantity, a tip) are not seen. An allowed-arguments list blocks calls with any other argument. Without a currency argument, the owner also states that the tool charges in US dollars; Guardian can't check that.
+- One upstream server is one connection, and every tool on a connection needs an amount (or none does). A server that also lists tools without an amount (a search, a list) can't get a dollar limit; put tools that spend money on their own connection.
 - A malformed `--amount-arg`, an invalid declaration or two declarations for one tool are refused at start, with a message that says what to fix.
 - Works with stdio and remote (`--url`) upstreams.
 
