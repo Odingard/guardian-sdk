@@ -17,6 +17,10 @@ import { join } from "node:path";
 
 import {
   canonicalJson,
+  CONTENT_PIN_MODES,
+  CONTENT_PINS_ARGUMENT,
+  CONTENT_PINS_MAX,
+  isContentPinRecord,
   TOOL_ARGUMENTS_MAX_BYTES,
 } from "./contracts/index.js";
 
@@ -32,8 +36,8 @@ import {
  * see the file. POSIX only: on Windows every pin attempt is refused.
  */
 
-/** The reserved argument key that carries the pins. */
-export const CONTENT_PIN_KEY = "guardianContentPins";
+/** The reserved argument key that carries the pins (shared with contracts). */
+export const CONTENT_PIN_KEY = CONTENT_PINS_ARGUMENT;
 
 export const CONTENT_CHANGED_SINCE_APPROVAL = "CONTENT_CHANGED_SINCE_APPROVAL";
 export const CONTENT_PIN_MISSING = "CONTENT_PIN_MISSING";
@@ -181,7 +185,7 @@ export type PinnedFile = Readonly<{
 }>;
 
 /** At most this many pins per call. */
-export const MAX_CONTENT_PINS = 16;
+export const MAX_CONTENT_PINS = CONTENT_PINS_MAX;
 /** Default cap per pinned file (25 MiB). */
 export const DEFAULT_MAX_PIN_BYTES = 25 * 1024 * 1024;
 /** Default cap for all pinned files of one call (64 MiB). */
@@ -194,8 +198,7 @@ export const PREVIEW_MAX_BYTES = 2048;
 /** At most this many `previewRoots` per file argument. */
 export const PREVIEW_MAX_ROOTS = 16;
 
-const VALID_MODES: ReadonlySet<string> = new Set(["bytes", "copy", "recheck"]);
-const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const VALID_MODES: ReadonlySet<string> = CONTENT_PIN_MODES;
 
 /** Error thrown by every content-pin check; `reasonCode` says which. */
 export class ContentPinError extends Error {
@@ -1309,21 +1312,9 @@ export function withoutPins(input: unknown): unknown {
   return Object.freeze(rest);
 }
 
+/** The one pin validator, shared with Guardian (packages/contracts tools.ts). */
 function isPinRecord(value: unknown): value is ContentPin {
-  if (!isPlainRecord(value)) return false;
-  return (
-    typeof value.arg === "string" &&
-    typeof value.index === "number" &&
-    Number.isInteger(value.index) &&
-    value.index >= 0 &&
-    typeof value.mode === "string" &&
-    VALID_MODES.has(value.mode) &&
-    typeof value.size === "number" &&
-    Number.isInteger(value.size) &&
-    value.size >= 0 &&
-    typeof value.sha256 === "string" &&
-    SHA256_PATTERN.test(value.sha256)
-  );
+  return isContentPinRecord(value);
 }
 
 export type VerifiedArguments = Readonly<{

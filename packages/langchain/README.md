@@ -126,6 +126,10 @@ const tools = guardianTools([sendReport], {
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
 
+## Dollar amounts on tools — `amountArgs` (0.6)
+
+If the owner set a dollar amount on a tool in the Guardian console, pass the same declaration in `amountArgs`, e.g. `amountArgs: { purchase: { argument: "amount", unit: "minor", currency: "usd" } }`. The wrapper passes it to the SDK unchanged: each call of that tool carries the declaration and the amount, Guardian decides on the amount, and a call whose amount cannot be read is blocked. In `remote` mode (the default) Guardian sends the call, so the limit applies to what reaches the tool; in `inProcess` mode your code runs the tool, so the limit applies to Guardian's decision. The owner states, by naming the argument, that it sets the charge. See the [SDK README](../sdk/README.md#dollar-amounts-on-tools--amountargs-06).
+
 ## What the triad means here
 
 - `ALLOW` — Guardian mints a single-use capability. Remote: `client.execute`

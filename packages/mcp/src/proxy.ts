@@ -30,6 +30,7 @@ import {
   type GuardianDecisionResult,
   type GuardianRequestResult,
   type FileArgsSpec,
+  type GuardianAdapterOptions,
 } from "@odingard/guardian-sdk";
 
 export type UpstreamTool = {
@@ -100,6 +101,19 @@ export type GovernedProxyOptions = Readonly<{
    * machine.
    */
   upstreamTransport?: "stdio" | "remote";
+  /**
+   * The owner's amount declarations, tool name → declaration (CLI
+   * `--amount-arg`), exactly as set on each tool in the Guardian console,
+   * e.g. `{ purchase: { argument: "amount", unit: "minor", currency: "usd" } }`.
+   * Passed to the SDK's `amountArgs` unchanged: each call of a declared tool
+   * carries the declaration and the amount read from that argument, and
+   * Guardian reads the amount itself and decides on it. A call whose amount
+   * cannot be read, or whose declaration is not the owner's, is refused and
+   * nothing is forwarded. The upstream server runs the tool, so the limit
+   * applies to Guardian's decision; the proxy forwards the arguments Guardian
+   * decided on. An invalid declaration is a configuration error at start.
+   */
+  amountArgs?: GuardianAdapterOptions["amountArgs"];
 }>;
 
 /** A declared pin for a remote upstream: a configuration error at start. */
@@ -538,6 +552,7 @@ export function createGovernedProxy(
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     ...(options.agentName ? { agentName: options.agentName } : {}),
     ...(Object.keys(fileArgs).length > 0 ? { fileArgs } : {}),
+    ...(options.amountArgs ? { amountArgs: options.amountArgs } : {}),
   });
   // Shared by the per-call contexts below.
   ctx.installed ??= new Set();

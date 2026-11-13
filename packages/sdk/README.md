@@ -221,6 +221,35 @@ fileArgs: {
 
 `pinFile(path, { allowAbsent })` and `verifyPin(path, pin)` are the same checks for code that pins a file itself (the coding-agent hook uses them).
 
+## Dollar amounts on tools — `amountArgs` (0.6)
+
+An owner can put a dollar limit on a tool in the Guardian console: allow up to an amount, ask a person above it, and block above a maximum. The owner names the argument that holds the amount on the tool. Guardian reads the amount from the arguments of each call and decides on it. Your agent sends the same declaration with each call, with `amountArgs`:
+
+```ts
+const guard = createGuard({
+  client,
+  connectionId: "pcn_…",
+  amountArgs: {
+    // exactly as set on the tool in the Guardian console
+    purchase: { argument: "amount", unit: "minor", currency: "usd" },
+  },
+});
+const purchase = guard("purchase", async ({ sku, amount }) =>
+  shop.buy({ sku, amountCents: amount }),
+);
+await purchase({ sku: "mug-1", amount: 2000 }); // $20.00
+```
+
+- **What the limit binds.** For a tool Guardian sends itself (registered with a web address, `remote` mode), Guardian's tool adapter sends the call with the arguments Guardian decided on, so the limit applies to what reaches the tool. For a tool your own code runs (`inProcess`, a tool registered as your own code), the limit applies to Guardian's decision and the receipt, not to what your code runs.
+- **You state that the argument sets the charge.** Guardian reads one top-level argument. When the owner sets it, they state that this argument sets how much the tool charges; if other arguments (a quantity, a tip, a second amount) change the charge, Guardian can't see that. `allowedArguments: ["amount", "sku"]` blocks calls that carry any other argument; it does not show how the tool computes its charge. Content pins from `fileArgs` count as allowed.
+- **Units.** `unit: "minor"` is cents: a whole number, `2000` or `"2000"`. `unit: "major"` is dollars: a whole number (`20`) or text with up to two decimals (`"19.99"`). A JSON number with cents (`19.99`), a sign, `$`, commas, spaces, leading zeros or an exponent are refused. Currency: US dollars (`currency: "usd"`). With `currencyArgument: "currency"` each call must carry `"usd"` in that argument.
+- **A call whose amount cannot be read is blocked.** The SDK sends it without an amount and Guardian refuses it before any decision; the `GuardianDenied` hint says which argument could not be read. Nothing runs.
+- **The declaration must match the console.** A declared tool is refused unless the call carries the owner's declaration exactly, and a tool the owner did not declare is refused if the call carries one. The SDK's error names the declaration it sent. If the owner changes the declaration, a call held for approval is refused when it is claimed; propose it again.
+- An invalid declaration (a dotted name, another currency, an unknown field, an `allowedArguments` list without the amount argument) throws a `TypeError` when the tool is wrapped.
+- In the console a declared tool needs a maximum on the grant; without one every call of that tool is blocked.
+- `readToolAmount(declaration, args)` and `ToolAmountDeclarationSchema` (from `@odingard/guardian-sdk/contracts`) are the reader and the schema Guardian uses.
+- Supported in `@odingard/guardian-sdk` 0.6.0, `@odingard/guardian-mcp` 0.5.0, `@odingard/guardian-langchain` 0.6.0, `@odingard/guardian-vercel-ai` 0.6.0 and `@odingard/guardian-openai-agents` 0.4.0. Through any other integration or an earlier version (guardian-hook, OpenClaw, x402, AP2, the Python SDK), a tool with an amount set in the console is refused.
+
 ## What the agent can and cannot do
 
 - The agent only ever holds a scoped, revocable agent credential (`gak_…`).

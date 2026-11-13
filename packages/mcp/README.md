@@ -139,6 +139,29 @@ For each declared `<tool>:<argument>` the proxy (the SDK on your machine) reads 
 - **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the proxy, and files a tool opens without naming them in a declared argument are not pinned.
 
+### Dollar amounts on tools: `--amount-arg` (0.5)
+
+If the owner set a dollar amount on a tool in the Guardian console (which argument holds the amount, cents or dollars), give the proxy the same declaration:
+
+```bash
+guardian-mcp proxy --amount-arg purchase=amount:minor -- npx -y my-shop-mcp-server
+```
+
+`<argument>:minor` means cents (`2000` is $20.00), `<argument>:major` dollars (`20` or `"19.99"`); the currency is US dollars. For a currency argument or an "allowed arguments" list, give the declaration as JSON, exactly as in the console:
+
+```bash
+guardian-mcp proxy \
+  --amount-arg 'purchase={"argument":"amount","unit":"minor","currency":"usd","allowedArguments":["amount","sku"]}' \
+  -- npx -y my-shop-mcp-server
+```
+
+Each call of that tool carries the declaration and the amount the proxy reads, and Guardian decides on the amount: allow up to the limit, hold for a person above it (`guardian_claim` forwards the call once after approval), block above the maximum. A call whose amount cannot be read, or whose declaration is not the owner's, is refused and nothing is forwarded. In code: `createGovernedProxy({ ..., amountArgs: { purchase: { argument: "amount", unit: "minor", currency: "usd" } } })`.
+
+- The upstream MCP server runs the tool, so the limit applies to Guardian's decision. The proxy forwards the arguments Guardian decided on.
+- Guardian reads one argument. By setting it, the owner states that this argument sets the charge; other arguments that change it (a quantity, a tip) are not seen. An allowed-arguments list blocks calls with any other argument.
+- A malformed `--amount-arg`, an invalid declaration or two declarations for one tool are refused at start, with a message that says what to fix.
+- Works with stdio and remote (`--url`) upstreams.
+
 ## Govern a remote MCP server: `guardian-mcp proxy --url` (0.3.3 and later)
 
 **Status: tested against a real Guardian; production proof pending.** It ran

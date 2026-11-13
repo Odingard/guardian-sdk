@@ -195,6 +195,10 @@ The Agents SDK renames tools whose names contain characters other than letters a
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
 
+## Dollar amounts on tools — `amountArgs` (0.4)
+
+If the owner set a dollar amount on a tool in the Guardian console, pass the same declaration in `amountArgs`, keyed by the tool's name, e.g. `amountArgs: { purchase: { argument: "amount", unit: "minor", currency: "usd" } }`. Each call of that tool carries the declaration and the amount, Guardian decides on the amount, and a call whose amount cannot be read is blocked. In the default `inProcess` mode your `execute` runs the tool, so the limit applies to Guardian's decision, not to what your code runs. The owner states, by naming the argument, that it sets the charge. An entry under the name you wrote is moved to the name the Agents SDK gives the tool (`buy-item` becomes `buy_item`); two entries that disagree are refused when the tool is built. See the [SDK README](../sdk/README.md#dollar-amounts-on-tools--amountargs-06).
+
 ## Not covered
 
 Only function tools built with `guardianTool` / `createGuardianTool` are
