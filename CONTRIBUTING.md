@@ -13,6 +13,35 @@ Thanks for helping build Human Authority Infrastructure for Autonomous AI.
   `packages/sdk/src/guard.ts`). Don't copy the semantics.
 - **Docs, examples, fixes** — pull requests welcome.
 
+### Payment guards (exception)
+
+`packages/x402`, `packages/ap2` and `packages/link` call `request` /
+`claim` / `execute` themselves instead of `runThroughGuardian`, because the
+shared triad cannot give them these guarantees today:
+
+- **Redeem before the payment.** In `inProcess` mode the triad runs the
+  action, then redeems the capability. A payment guard redeems first, so
+  revocation, expiry and single use land before money moves. `remote` mode
+  would need Guardian to make the payment, but these guards sign or log in
+  locally.
+- **Wait for the person.** In `result` mode an ASK comes back as a held
+  request, to be retried later. A payment guard blocks until the person
+  decides, within the request's TTL. It also refuses a rule ALLOW on a tool
+  that needs a person, before redeeming.
+- **Request fields.** The triad sends no `ttlMs` (the guards bound the wait
+  with it) and no `amountArgument` (the link guard sends it so console dollar
+  limits apply).
+- **Receipt binding.** After a person approves, the guard reads the portable
+  receipt. It refuses unless the receipt names that request, tool,
+  connection and the exact arguments. It also refuses a claim answer that
+  names another request. The triad has neither check.
+- **Bounded calls.** Each Guardian call has a timeout.
+
+A payment guard must still keep the triad's conventions. The link guard
+sends `adapterId` when set and refuses the reserved `guardianContentPins`
+argument. x402 and ap2 do not do either yet. Move a guard onto the triad
+once it covers these points.
+
 ## Development
 
 ```bash

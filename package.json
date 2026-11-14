@@ -14,6 +14,7 @@
     "packages/steel",
     "packages/x402",
     "packages/ap2",
+    "packages/link",
     "examples"
   ],
   "scripts": {

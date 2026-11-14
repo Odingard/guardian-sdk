@@ -1,0 +1,181 @@
+// The ledger does not grow without end: finished decisions older than the
+// retention window are dropped on write, decisions in progress are kept, a
+// full ledger refuses before Guardian is asked, and a replay of a dropped
+// decision is still refused (by Guardian's single-use execute).
+import { describe, expect, it } from "vitest";
+
+import { fakeGuardian, fakeLink, makeGuard, ops, terms, testStore } from "./helpers.js";
+
+const DAY = 86_400_000;
+const KEY = "guardian-link:v1:ledger";
+const stored = (store: ReturnType<typeof testStore>) =>
+  (JSON.parse(store.data.get(KEY)!.value) as { decisions: { requestId: string; state: string }[] }).decisions;
+
+describe("one limit per currency", () => {
+  it("refuses a currency listed twice, in any case", () => {
+    const usd = { currency: "usd", askAbove: 1_000, max: 5_000 } as const;
+    expect(() => makeGuard({ limits: [usd, { ...usd, max: 20_000 }] })).toThrow("guardian-link: one limit per currency.");
+    expect(() => makeGuard({ limits: [usd, { ...usd, currency: "USD" as never }] })).toThrow(
+      "guardian-link: one limit per currency.",
+    );
+    expect(() =>
+      makeGuard({ currencies: ["usd", "cad"], limits: [usd, { currency: "cad", askAbove: 0, max: 100 }] }),
+    ).not.toThrow();
+  });
+});
+
+describe("ledger retention", () => {
+  it("drops finished decisions past the window and keeps those in progress", async () => {
+    let now = Date.parse("2026-11-14T10:00:00Z");
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const { guard } = makeGuard({ store, link, now: () => now, ledgerRetentionMs: 2 * DAY });
+
+    const read = await guard.spend(terms()); // will be card-read (finished)
+    await guard.withCard(read.spendRequestId, () => "ok");
+    const canceled = await guard.create(terms()); // will be canceled (finished)
+    await guard.cancel(canceled.spendRequestId);
+    const open = await guard.create(terms()); // stays "created" (in progress)
+    expect(stored(store).map((e) => e.state)).toEqual(["card-read", "canceled", "created"]);
+
+    now += 3 * DAY;
+    const fresh = await guard.create(terms()); // a write prunes
+    expect(stored(store).map((e) => e.requestId)).toEqual([open.requestId, fresh.requestId]);
+
+    // The kept decision still works; the dropped ones fail closed.
+    await guard.requestApproval(open.spendRequestId);
+    await expect(guard.withCard(read.spendRequestId, () => "again")).rejects.toMatchObject({
+      code: "UNKNOWN_SPEND_REQUEST",
+    });
+    await expect(guard.requestApproval(canceled.spendRequestId)).rejects.toMatchObject({
+      code: "UNKNOWN_SPEND_REQUEST",
+    });
+    expect(link.cardsRead).toBe(1);
+  });
+
+  it("keeps finished decisions inside the window", async () => {
+    let now = Date.parse("2026-11-14T10:00:00Z");
+    const store = testStore();
+    const { guard } = makeGuard({ store, now: () => now });
+    const first = await guard.create(terms());
+    await guard.cancel(first.spendRequestId);
+    now += 29 * DAY;
+    await guard.create(terms());
+    expect(stored(store).map((e) => e.requestId)).toContain(first.requestId);
+  });
+
+  it("a replay of a dropped decision is still refused, by Guardian, before Link", async () => {
+    let now = Date.parse("2026-11-14T10:00:00Z");
+    const store = testStore();
+    const guardian = fakeGuardian({ reuseRequestId: "req_000000000042", remembersUse: true });
+    const { guard, link } = makeGuard({ store, guardian, now: () => now, ledgerRetentionMs: DAY });
+    const first = await guard.create(terms());
+    await guard.cancel(first.spendRequestId);
+    now += 2 * DAY;
+    // Any write prunes; the old entry is gone from the ledger.
+    const { guard: other } = makeGuard({ store, now: () => now, ledgerRetentionMs: DAY });
+    await other.create(terms());
+    expect(stored(store).map((e) => e.requestId)).not.toContain("req_000000000042");
+
+    const before = ops(link).filter((o) => o === "create").length;
+    await expect(guard.create(terms())).rejects.toMatchObject({
+      code: "EXECUTE_FAILED",
+      guardianReasonCode: "CAPABILITY_USED",
+    });
+    expect(ops(link).filter((o) => o === "create").length).toBe(before);
+  });
+
+  it("refuses retention and cap settings out of bounds", () => {
+    for (const ledgerRetentionMs of [0, DAY - 1, 366 * DAY, DAY + 0.5]) {
+      expect(() => makeGuard({ ledgerRetentionMs })).toThrow(/ledgerRetentionMs/);
+    }
+    for (const ledgerMaxEntries of [0, 9, 100_001, 10.5]) {
+      expect(() => makeGuard({ ledgerMaxEntries })).toThrow(/ledgerMaxEntries/);
+    }
+    expect(() => makeGuard({ ledgerRetentionMs: DAY, ledgerMaxEntries: 10 })).not.toThrow();
+  });
+});
+
+describe("ledger cap", () => {
+  it("a full ledger refuses before Guardian is asked; in-progress decisions still move on", async () => {
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const { guard, guardian } = makeGuard({ store, link, ledgerMaxEntries: 10 });
+    const handles = [];
+    for (let i = 0; i < 10; i += 1) handles.push(await guard.create(terms()));
+    const asked = guardian.calls.filter((c) => c.op === "request").length;
+
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+    expect(guardian.calls.filter((c) => c.op === "request").length).toBe(asked);
+
+    // Open requests can still go all the way, and be canceled.
+    await guard.requestApproval(handles[0]!.spendRequestId);
+    await guard.waitForLinkApproval(handles[0]!.spendRequestId, { timeoutMs: 1_000 });
+    expect(await guard.withCard(handles[0]!.spendRequestId, () => "ok")).toBe("ok");
+    await guard.cancel(handles[1]!.spendRequestId);
+    // Finished entries inside the window still count: still full.
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+  });
+});
+
+describe("a failed second policy check", () => {
+  it("marks the claimed decision refused, so it never holds a ledger slot in progress", async () => {
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const original = link.approvalPolicy.bind(link);
+    let policyCalls = 0;
+    link.approvalPolicy = async () => {
+      policyCalls += 1;
+      if (policyCalls === 2) return { state: "unknown" };
+      return original();
+    };
+    const { guard } = makeGuard({ store, link });
+
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LINK_APPROVAL_POLICY_UNKNOWN" });
+    expect(policyCalls).toBe(2);
+    expect(ops(link).filter((op) => op === "create")).toHaveLength(0);
+    expect(stored(store).map((e) => e.state)).toEqual(["refused"]);
+  });
+});
+
+describe("a failed bind after Link create", () => {
+  it("cancels the spend request Link made and names it on the refusal", async () => {
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const create = link.createSpendRequest.bind(link);
+    link.createSpendRequest = async (input) => {
+      const view = await create(input);
+      store.failing = true; // the store goes down right after Link creates
+      return view;
+    };
+    const { guard } = makeGuard({ store, link });
+
+    const error = await guard.create(terms()).then(
+      () => null,
+      (e: unknown) => e as { code?: string; spendRequestId?: string },
+    );
+    expect(error?.code).toBe("STORE_UNAVAILABLE");
+    expect(error?.spendRequestId).toMatch(/^lsrq_/);
+    expect(ops(link)).toContain("cancel");
+  });
+});
+
+describe("abandoned open spend requests", () => {
+  it("free their ledger slots once Link can no longer approve them (7 days + 1 hour)", async () => {
+    let now = Date.parse("2026-11-14T10:00:00Z");
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const { guard } = makeGuard({ store, link, now: () => now, ledgerMaxEntries: 10 });
+    for (let i = 0; i < 10; i += 1) await guard.create(terms()); // never taken further
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+
+    now += 7 * DAY; // inside Link's expiry: still held
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+
+    now += 2 * 3_600_000; // past 7 days + 1 hour: dropped, and a new decision fits
+    const fresh = await guard.create(terms());
+    expect(stored(store).map((e) => e.state)).toEqual(["created"]);
+    expect(stored(store)[0]!.requestId).toBeDefined();
+    expect(fresh.spendRequestId).toMatch(/^lsrq_/);
+  });
+});
