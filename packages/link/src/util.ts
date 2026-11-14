@@ -24,6 +24,7 @@ export type RefusalCode =
   // the ledger
   | "DECISION_ALREADY_USED"
   | "STORE_UNAVAILABLE"
+  | "LEDGER_FULL"
   // Guardian
   | "GUARDIAN_UNREACHABLE"
   | "GUARDIAN_TIMEOUT"

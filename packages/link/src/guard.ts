@@ -69,6 +69,20 @@ export type LinkGuardConfig = Readonly<{
    */
   store?: LinkGuardStore;
   /**
+   * How long finished decisions (card read, canceled, refused, superseded,
+   * outcome unknown) stay in the store, from when they were made. Default
+   * 30 days; from 1 to 365 days. Decisions still in progress are never
+   * dropped. See the README, "Replay protection".
+   */
+  ledgerRetentionMs?: number;
+  /**
+   * Most decisions the store holds. When it is full after dropping old
+   * finished ones, new spends are refused (`LEDGER_FULL`) before Guardian
+   * is asked. Default 1,000; from 10 to 100,000. Size it under your
+   * store's value limit (an entry is at most about 30 KB, typically 1 KB).
+   */
+  ledgerMaxEntries?: number;
+  /**
    * The amount declaration set on both tools in the Guardian console, so
    * console dollar limits apply (`LINK_AMOUNT_DECLARATION`). Needs an
    * `@odingard/guardian-sdk` that carries it; USD only.
@@ -209,7 +223,13 @@ export class LinkGuard {
       }
     }
     this.#currencies = Object.freeze([...currencies]);
+    // One limit per currency: with two, only the first would apply, so a
+    // looser earlier entry could undercut a stricter later one.
+    const seen = new Set<string>();
     for (const l of config.limits ?? []) {
+      const key = typeof l?.currency === "string" ? l.currency.toLowerCase() : String(l?.currency);
+      if (seen.has(key)) throw new Error("guardian-link: one limit per currency.");
+      seen.add(key);
       if (!currencies.includes(l.currency)) {
         throw new Error(`guardian-link: limit for currency ${String(l.currency)}, which is not enabled.`);
       }
@@ -260,7 +280,16 @@ export class LinkGuard {
       MAX_CLAIM_POLL_INTERVAL_MS,
     );
     if (config.onRecord) this.#onRecord = config.onRecord;
-    this.#ledger = new Ledger(config.store ?? processStore());
+    const DAY = 86_400_000;
+    const retentionMs = config.ledgerRetentionMs ?? 30 * DAY;
+    if (!Number.isSafeInteger(retentionMs) || retentionMs < DAY || retentionMs > 365 * DAY) {
+      throw new Error("guardian-link: ledgerRetentionMs must be a whole number of ms from 1 day to 365 days.");
+    }
+    const maxEntries = config.ledgerMaxEntries ?? 1_000;
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 10 || maxEntries > 100_000) {
+      throw new Error("guardian-link: ledgerMaxEntries must be a whole number from 10 to 100,000.");
+    }
+    this.#ledger = new Ledger(config.store ?? processStore(), { now: this.#now, retentionMs, maxEntries });
   }
 
   // ---------------------------------------------------------------- records
@@ -431,6 +460,8 @@ export class LinkGuard {
       const terms = readTerms(raw, this.#currencies);
       const { reasons } = this.#reasons(terms);
       await this.#checkNoPolicy();
+      // A full ledger refuses before Guardian is asked, so no decision is spent.
+      await this.#ledger.checkRoom();
       const d = await this.#decide(terms, reasons, null);
       const entry: DecisionEntry = {
         requestId: d.requestId,
@@ -556,6 +587,7 @@ export class LinkGuard {
           spendRequestId,
         });
       }
+      await this.#ledger.checkRoom();
       const d = await this.#decide(terms, reasons, spendRequestId);
       const next: DecisionEntry = {
         requestId: d.requestId,

@@ -30,7 +30,11 @@
     policy exists or Link answers anything but "No approval policy has been
     configured".
   - **DRAFT:** Stored decisions are checked when read; a store only the
-    guard can write to is required for replay protection.
+    guard can write to is required for replay protection. Finished decisions
+    older than the retention window (default 30 days) are dropped; Guardian's
+    single-use `execute` still refuses a replay of one. A full store refuses
+    new spends (`LEDGER_FULL`) before Guardian is asked.
+  - **DRAFT:** One local limit per currency; a second is refused.
   - **DRAFT:** The card is read once, through `--output-file` into a private
     folder that is deleted when the call ends (folders a crash left behind
     are wiped the next time the adapter is built), and never appears in the

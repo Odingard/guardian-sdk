@@ -90,6 +90,11 @@ export type FakeGuardianOptions = {
   claimAnswersFor?: (requestId: string) => string;
   /** Hand out this request id (and capability) again: a replayed decision. */
   reuseRequestId?: string;
+  /**
+   * With `reuseRequestId`: like the real Guardian, a capability redeemed
+   * once stays redeemed, so `execute` refuses the replay (CAPABILITY_USED).
+   */
+  remembersUse?: boolean;
 };
 
 export type FakeGuardian = GuardianClient & {
@@ -120,6 +125,9 @@ export function fakeGuardian(opts: FakeGuardianOptions = {}): FakeGuardian {
       const requestId = opts.reuseRequestId ?? `req_${String(counter).padStart(12, "0")}`;
       if (typeof d === "object") return { ok: false, reasonCode: d.deny, requestId };
       const token = `cap_${requestId}`;
+      if (d === "ALLOW" && opts.remembersUse && state.get(requestId)?.used) {
+        return { ok: true, requestId, decision: "ALLOW", capabilityToken: token };
+      }
       if (d === "ALLOW") {
         // A replayed decision keeps its "used" flag only in the real Guardian;
         // this fake hands out a fresh capability, so the guard's ledger is

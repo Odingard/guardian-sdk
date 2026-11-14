@@ -137,8 +137,77 @@ function entryOk(e: unknown): e is DecisionEntry {
   }
 }
 
+/** States in which the guard does nothing more with a decision. */
+const TERMINAL: ReadonlySet<DecisionEntry["state"]> = new Set([
+  "card-read",
+  "canceled",
+  "refused",
+  "superseded",
+  "outcome-unknown",
+]);
+
+export type LedgerLimits = Readonly<{
+  now: () => number;
+  /** Finished decisions older than this (from `createdAtMs`) are dropped on write. */
+  retentionMs: number;
+  /** Most entries the document may hold. */
+  maxEntries: number;
+}>;
+
+/**
+ * Why dropping old finished decisions keeps replay protection:
+ *
+ * - A decision acts only after Guardian's `execute` redeemed its
+ *   capability, and that happens before the guard writes the entry or
+ *   calls Link. `execute` is single-use and a request expires within its
+ *   TTL (at most 300 s), so a decision handed out again later is refused
+ *   by Guardian itself (`CAPABILITY_USED` or expired) before Link is
+ *   called. The guard's own "seen before" check is a second line for the
+ *   short time a request is live; the retention window (at least 1 day) is
+ *   far longer than any request TTL.
+ * - Entries still in progress (`acting`, `created`, `approval-requested`)
+ *   are never dropped: they hold what an approved request may still do.
+ * - A dropped finished entry fails closed: the guard no longer knows its
+ *   spend request, so `requestApproval`, `withCard`, `update` and `cancel`
+ *   refuse it (`UNKNOWN_SPEND_REQUEST`), and a card already read stays
+ *   unreadable through the guard.
+ * - If Link returned a dropped entry's spend request id for a new create,
+ *   that request is not in `created` with the decided terms (it was
+ *   approved, used, canceled or expired), so the guard cancels and refuses.
+ */
 export class Ledger {
-  constructor(private readonly store: LinkGuardStore) {}
+  private readonly limits: LedgerLimits;
+  constructor(
+    private readonly store: LinkGuardStore,
+    limits?: LedgerLimits,
+  ) {
+    this.limits = limits ?? { now: Date.now, retentionMs: 30 * 86_400_000, maxEntries: 1_000 };
+  }
+
+  /** Drops finished entries older than the retention window. */
+  private prune(doc: LedgerDoc): void {
+    const cutoff = this.limits.now() - this.limits.retentionMs;
+    doc.decisions = doc.decisions.filter((e) => !(TERMINAL.has(e.state) && e.createdAtMs < cutoff));
+  }
+
+  private full(doc: LedgerDoc): boolean {
+    return doc.decisions.length >= this.limits.maxEntries;
+  }
+
+  /**
+   * Refuses (`LEDGER_FULL`) when no new decision fits even after dropping
+   * old finished ones. Checked before Guardian is asked.
+   */
+  async checkRoom(): Promise<void> {
+    const { doc } = await this.read();
+    this.prune(doc);
+    if (this.full(doc)) {
+      throw refused(
+        "LEDGER_FULL",
+        "The guard's store holds as many decisions as it may; finish or cancel open spend requests, or raise ledgerMaxEntries. Nothing was asked.",
+      );
+    }
+  }
 
   private async read(): Promise<{ doc: LedgerDoc; version: string | null }> {
     let current: { value: string; version: string } | null;
@@ -169,7 +238,14 @@ export class Ledger {
   private async update<T>(change: (doc: LedgerDoc) => T): Promise<T> {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const { doc, version } = await this.read();
+      this.prune(doc);
+      const before = doc.decisions.length;
       const result = change(doc);
+      // Only a change that adds a decision can be refused for room, so
+      // decisions in progress can always move on (or be canceled).
+      if (doc.decisions.length > before && doc.decisions.length > this.limits.maxEntries) {
+        throw refused("LEDGER_FULL", "The guard's store holds as many decisions as it may; nothing was written.");
+      }
       let written: boolean;
       try {
         written = await this.store.compareAndSet(LEDGER_KEY, version, JSON.stringify(doc));

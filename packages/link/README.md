@@ -35,7 +35,7 @@ not from a real run.
 - **Currencies:** USD by default. CAD, EUR and GBP can be enabled. Amounts are
   integer cents (minor units). Before Guardian is asked, the guard refuses
   anything above 50,000 minor units in any currency, and above the `max` you
-  set for that currency. Link's own limit is 50,000 US cents or the
+  set for that currency (one limit per currency; a second is refused). Link's own limit is 50,000 US cents or the
   equivalent in the request's currency, so in CAD, EUR or GBP a request the
   guard lets through can still be above Link's limit; Link then refuses it.
 - **The merchant is evidence, not a lock.** A Link card works at any merchant.
@@ -102,6 +102,23 @@ durable `store`. Only the guard may be able to write to that store: whoever
 can write it can mark a used decision unused. The guard checks every stored
 entry when it reads it and refuses one it cannot read exactly
 (`STORE_UNAVAILABLE`).
+
+**DRAFT: Replay protection and retention.** The guard keeps all its
+decisions in one stored document, so it drops old ones on each write:
+finished decisions (card read, canceled, refused, superseded, outcome
+unknown) made more than `ledgerRetentionMs` ago (default 30 days, 1 to 365
+days). Decisions still in progress are never dropped. This keeps replay
+protection because a decision acts only after Guardian's `execute`
+redeemed it, before the guard writes anything or calls Link. `execute` is
+single-use and a Guardian request expires within 5 minutes, so a dropped
+decision handed out again is refused by Guardian itself before Link is
+called. A dropped decision's spend request is unknown to the guard from
+then on, so the guard refuses to act on it or read its card. The store
+holds at most `ledgerMaxEntries` decisions (default 1,000, 10 to 100,000;
+an entry is typically about 1 KB, at most about 30 KB). When it is full
+after dropping old ones, a new spend is refused (`LEDGER_FULL`) before
+Guardian is asked, and open spend requests can still be completed or
+canceled.
 
 ## DRAFT: Setup
 
