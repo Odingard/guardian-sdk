@@ -253,7 +253,8 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the
 Hosted setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
-Example, not yet tested against Guardian. The install step is unverified: in
+Tested locally against a real Guardian with a scripted stand-in for Hermes;
+not yet proven on Hermes itself. The install step is unverified: in
 the only real attempt, `hermes plugins enable guardian` answered that the
 plugin was "not installed or bundled". Install `odingard-guardian` into the
 same Python environment Hermes runs in, list `guardian` under

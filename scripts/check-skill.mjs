@@ -70,8 +70,8 @@ export const STATUS = {
   "4B": [
     { row: "Claude Agent SDK (TypeScript)", status: "Proven on production" },
   ],
-  "4C": [{ row: "Codex CLI", status: "Example, not yet tested" }],
-  "4D": [{ row: "DeepSeek Harness", status: "Example, not yet tested" }],
+  "4C": [{ row: "Codex CLI", status: "Tested locally against a real Guardian" }],
+  "4D": [{ row: "DeepSeek Harness", status: "Tested locally against a real Guardian" }],
   "4E": [
     { row: "Any MCP server, local (stdio)", status: "Proven on production" },
     {
@@ -102,7 +102,7 @@ export const STATUS = {
     },
     { row: "Python with CrewAI", status: "Example, not yet tested" },
     { row: "Claude Agent SDK (Python)", status: "Example, not yet tested" },
-    { row: "Hermes Agent", status: "Example, not yet tested" },
+    { row: "Hermes Agent", status: "Tested locally against a real Guardian" },
   ],
   "4H": [{ row: "OpenClaw", status: "Proven on production (shell commands)" }],
 };

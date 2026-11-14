@@ -68,11 +68,11 @@ document, and how far each has been tested.
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian`                                    | Tested against Guardian; production proof pending |
 | Python with CrewAI                              | `odingard-guardian`                                    | Example, not yet tested                           |
 | Claude Agent SDK (Python)                       | `odingard-guardian`                                    | Example, not yet tested                           |
-| Codex CLI                                       | `@odingard/guardian-hook`                              | Example, not yet tested                           |
-| DeepSeek Harness                                | `@odingard/guardian-hook`                              | Example, not yet tested                           |
-| Hermes Agent                                    | `odingard-guardian`                                    | Example, not yet tested                           |
-| ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Example, not yet tested                           |
-| Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
+| Codex CLI                                       | `@odingard/guardian-hook`                              | Tested locally against a real Guardian            |
+| DeepSeek Harness                                | `@odingard/guardian-hook`                              | Tested locally against a real Guardian            |
+| Hermes Agent                                    | `odingard-guardian`                                    | Tested locally against a real Guardian            |
+| ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Tested locally against a real Guardian            |
+| Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Tested locally against a real Guardian            |
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
 | NVIDIA NemoClaw (guide)                         | `@odingard/guardian-openclaw` ([guide](examples/nemoclaw)) | Verified on staging with NemoClaw v0.0.143 (shell commands); not tamper-proof |
@@ -81,7 +81,13 @@ document, and how far each has been tested.
 
 "Tested against Guardian" means the integration ran end to end against the
 real Guardian server code, with real approvals and receipts verified offline,
-but not yet on hosted production.
+but not yet on hosted production. "Tested locally against a real Guardian"
+means a scripted stand-in for the agent (no model) ran the shipped package and
+the example's config file end to end against the real Guardian server code:
+allow, ask then approve or deny, deny, and the fail-closed cases each
+example's status names, with receipts verified offline. The stand-ins and the
+Guardian server code are not in this repository, so these runs cannot be
+repeated from it. The agent itself has not run it against Guardian yet.
 
 ## Quickstart
 
@@ -202,7 +208,8 @@ pip install odingard-guardian   # in Hermes' Python; ships the Hermes plugin "gu
 Hermes calls the plugin before every tool call (terminal, file edits,
 `execute_code`, the browser, MCP tools, …). Guardian decides; a block holds.
 Read-only tools are not routed, and anything outside Hermes' tool dispatch is
-not governed. Example, not yet tested against Guardian. The install step is
+not governed. Tested locally against a real Guardian with a scripted stand-in
+for Hermes; not yet proven on Hermes itself. The install step is
 unverified: `hermes plugins enable guardian` failed with "not installed or
 bundled" in the only real attempt, so check that Hermes loads the plugin. See
 [examples/hermes](examples/hermes/README.md).
@@ -235,7 +242,7 @@ node x402/simulated-payments.mjs  # x402 payments: ALLOW, ASK above a cap, DENY,
 node ap2/simulated-payments.mjs   # AP2 mandates: delegation, ALLOW, ASK above a cap, DENY, before the agent key signs (SIMULATED, no network)
 ```
 
-Recipes (LIVE, examples not yet tested): [ZeroClaw](examples/zeroclaw/README.md) ·
+Recipes (LIVE; tested locally against a real Guardian, not yet proven live): [ZeroClaw](examples/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](examples/byo/README.md).
 
 ## Repository layout
