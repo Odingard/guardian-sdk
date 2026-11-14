@@ -116,7 +116,11 @@ function denied(
   };
 }
 
-/** The execute was sent, but its answer does not say whether it was redeemed. */
+/**
+ * The execute was sent, but its answer does not say whether it was redeemed.
+ * Same rule as `executeOutcomeUnknown` in packages/sdk/src/guard.ts; keep
+ * the two in step (CONTRIBUTING, "Coding-agent hooks").
+ */
 function executeOutcomeUnknown(executed: {
   reasonCode: string;
   outcomeUnknown?: boolean;
@@ -132,7 +136,8 @@ function executeOutcomeUnknown(executed: {
  * After a lost execute answer: Guardian's recorded attempts for the
  * request. Only a verified attempt or a definitive abort settles it;
  * anything else (none recorded yet, still committing, the lookup failing,
- * no lookup available) stays unknown.
+ * no lookup available) stays unknown. Same rules as `lookUpExecution` in
+ * packages/sdk/src/guard.ts; keep the two in step.
  */
 async function lookUpExecution(
   client: DecideOptions["client"],
