@@ -92,16 +92,27 @@ export class LinkCliError extends Error {
   }
 }
 
-/** Environment the CLI would read in place of `--auth` or the real Link hosts. */
-const STRIPPED_ENV = [
-  "LINK_AUTH_FILE",
-  "LINK_ACCESS_TOKEN",
-  "LINK_REFRESH_TOKEN",
-  "LINK_NO_REFRESH",
-  "LINK_API_BASE_URL",
-  "LINK_AUTH_BASE_URL",
-  "LINK_HTTP_PROXY",
-];
+/**
+ * The CLI's environment is built from an allowlist, not from the guard's
+ * whole environment. Anything else could change what runs with the guard's
+ * login: `LINK_*` (another login or host), `NODE_OPTIONS` / `NODE_PATH`
+ * (code preloaded into link-cli), `NODE_EXTRA_CA_CERTS`,
+ * `NODE_TLS_REJECT_UNAUTHORIZED` and the `*_PROXY` variables (traffic to Link
+ * intercepted). Proxies are therefore not passed to the CLI.
+ */
+const ALLOWED_ENV = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "SYSTEMROOT"] as const;
+
+/** The environment the CLI runs with: the allowlist, plus no update check. */
+export function cliEnvironment(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = { NO_UPDATE_NOTIFIER: "1" };
+  for (const k of ALLOWED_ENV) {
+    const v = source[k];
+    if (typeof v === "string") env[k] = v;
+  }
+  return env;
+}
 
 const defaultRun: LinkCliRunner = (file, args, opts) =>
   new Promise((resolve) => {
@@ -429,8 +440,7 @@ export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
   }
   const authPath = config.authPath;
   const base = config.tmpDir ?? tmpdir();
-  const env: Record<string, string | undefined> = { ...process.env, NO_UPDATE_NOTIFIER: "1" };
-  for (const k of STRIPPED_ENV) delete env[k];
+  const env = cliEnvironment();
   // Based on the longest limit any adapter may use, not this one's.
   sweepStale(base, STALE_DIR_MS);
 

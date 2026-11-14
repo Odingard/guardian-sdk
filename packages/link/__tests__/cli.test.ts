@@ -151,6 +151,18 @@ describe("linkCliAdapter", () => {
     const cli = fakeCli();
     const prev = process.env.LINK_ACCESS_TOKEN;
     process.env.LINK_ACCESS_TOKEN = "agent-token-must-not-be-used";
+    const planted = {
+      NODE_OPTIONS: "--require=/tmp/agent-preload.js",
+      NODE_PATH: "/tmp/agent-modules",
+      NODE_EXTRA_CA_CERTS: "/tmp/agent-ca.pem",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      https_proxy: "http://127.0.0.1:9",
+      HTTP_PROXY: "http://127.0.0.1:9",
+      ALL_PROXY: "http://127.0.0.1:9",
+    } as const;
+    const prevPlanted = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, planted);
     try {
       const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: cli.run, tmpDir: cardDir });
       const guard = createLinkGuard({
@@ -175,6 +187,9 @@ describe("linkCliAdapter", () => {
         expect(r.args).not.toContain("--approval-detail");
         expect(r.env.LINK_ACCESS_TOKEN).toBeUndefined();
         expect(r.env.NO_UPDATE_NOTIFIER).toBe("1");
+        for (const k of Object.keys(planted)) expect(r.env[k]).toBeUndefined();
+        expect(r.env.PATH).toBe(process.env.PATH);
+        expect(Object.keys(r.env).every((k) => /^(PATH|HOME|LANG|LC_ALL|LC_CTYPE|TZ|TMPDIR|SYSTEMROOT|NO_UPDATE_NOTIFIER)$/.test(k))).toBe(true);
       }
       const create = cli.runs.find((r) => r.args[2] === "create")!.args;
       expect(create).toEqual(
@@ -193,6 +208,10 @@ describe("linkCliAdapter", () => {
     } finally {
       if (prev === undefined) delete process.env.LINK_ACCESS_TOKEN;
       else process.env.LINK_ACCESS_TOKEN = prev;
+      for (const [k, v] of Object.entries(prevPlanted)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 

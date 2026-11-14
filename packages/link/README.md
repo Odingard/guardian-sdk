@@ -137,7 +137,10 @@ canceled.
    resolves), checked again before every command. `timeoutMs` is 1 ms to
    10 minutes. It
    runs each command from a new private folder of its own, never from the
-   guard's working folder.
+   guard's working folder, with a minimal environment: only `PATH`, `HOME`,
+   the locale variables, `TZ` and `TMPDIR` are passed. `NODE_OPTIONS`,
+   `NODE_PATH`, the other `NODE_*` settings, proxy variables and `LINK_*`
+   settings are not, so a proxy cannot be used to reach Link.
 3. Log in to Link for the guard only, into a file only the guard can read:
    `link-cli auth login --client-name "Guardian guard" --auth /path/guard-link-auth.json`,
    then `chmod 600` the file. The adapter refuses, before every command, a
