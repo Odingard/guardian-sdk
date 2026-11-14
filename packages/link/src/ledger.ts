@@ -146,6 +146,14 @@ const TERMINAL: ReadonlySet<DecisionEntry["state"]> = new Set([
   "outcome-unknown",
 ]);
 
+/**
+ * A one-time Link spend request expires at most 7 days after it is created
+ * (the CLI adapter refuses a longer `expires_at`); one hour of slack is
+ * added. After that Link can no longer approve it, so an entry still open
+ * in the guard can never move on.
+ */
+export const OPEN_ENTRY_MAX_AGE_MS = 7 * 24 * 3_600_000 + 3_600_000;
+
 export type LedgerLimits = Readonly<{
   now: () => number;
   /** Finished decisions older than this (from `createdAtMs`) are dropped on write. */
@@ -166,7 +174,10 @@ export type LedgerLimits = Readonly<{
  *   short time a request is live; the retention window (at least 1 day) is
  *   far longer than any request TTL.
  * - Entries still in progress (`acting`, `created`, `approval-requested`)
- *   are never dropped: they hold what an approved request may still do.
+ *   are kept while Link could still approve their spend request, and
+ *   dropped once they are older than `OPEN_ENTRY_MAX_AGE_MS` (Link's
+ *   7-day expiry plus slack): an abandoned request then frees its slot.
+ *   Within that window, a full ledger refuses new decisions (`LEDGER_FULL`).
  * - A dropped finished entry fails closed: the guard no longer knows its
  *   spend request, so `requestApproval`, `withCard`, `update` and `cancel`
  *   refuse it (`UNKNOWN_SPEND_REQUEST`), and a card already read stays
@@ -184,10 +195,17 @@ export class Ledger {
     this.limits = limits ?? { now: Date.now, retentionMs: 30 * 86_400_000, maxEntries: 1_000 };
   }
 
-  /** Drops finished entries older than the retention window. */
+  /**
+   * Drops finished entries older than the retention window, and open
+   * entries older than Link's spend request expiry (they can never move on).
+   */
   private prune(doc: LedgerDoc): void {
-    const cutoff = this.limits.now() - this.limits.retentionMs;
-    doc.decisions = doc.decisions.filter((e) => !(TERMINAL.has(e.state) && e.createdAtMs < cutoff));
+    const now = this.limits.now();
+    const finishedCutoff = now - this.limits.retentionMs;
+    const openCutoff = now - OPEN_ENTRY_MAX_AGE_MS;
+    doc.decisions = doc.decisions.filter((e) =>
+      TERMINAL.has(e.state) ? e.createdAtMs >= finishedCutoff : e.createdAtMs >= openCutoff,
+    );
   }
 
   private full(doc: LedgerDoc): boolean {

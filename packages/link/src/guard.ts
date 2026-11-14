@@ -595,6 +595,9 @@ export class LinkGuard {
       const changedOutside = differences(entry.terms, before, spendRequestId);
       if (changedOutside.length > 0) await this.#refuseChanged(entry, before, changedOutside);
       if (before.status !== "created") {
+        if (!WAITING.has(before.status)) {
+          await this.#ledger.mark(entry.requestId, "refused").catch(() => undefined);
+        }
         throw refused("WRONG_STATE", `The spend request is ${before.status}; it cannot be changed.`, undefined, {
           spendRequestId,
         });

@@ -107,7 +107,10 @@ entry when it reads it and refuses one it cannot read exactly
 decisions in one stored document, so it drops old ones on each write:
 finished decisions (card read, canceled, refused, superseded, outcome
 unknown) made more than `ledgerRetentionMs` ago (default 30 days, 1 to 365
-days). Decisions still in progress are never dropped. This keeps replay
+days). Decisions still in progress are kept while Link could still
+approve their spend request, and dropped once they are older than 7 days
+and 1 hour (Link's expiry for a one-time spend request, plus slack). Until
+then, a full ledger refuses new spends (`LEDGER_FULL`). This keeps replay
 protection because a decision acts only after Guardian's `execute`
 redeemed it, before the guard writes anything or calls Link. `execute` is
 single-use and a Guardian request expires within 5 minutes, so a dropped

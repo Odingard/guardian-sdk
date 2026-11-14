@@ -159,3 +159,23 @@ describe("a failed bind after Link create", () => {
     expect(ops(link)).toContain("cancel");
   });
 });
+
+describe("abandoned open spend requests", () => {
+  it("free their ledger slots once Link can no longer approve them (7 days + 1 hour)", async () => {
+    let now = Date.parse("2026-11-14T10:00:00Z");
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const { guard } = makeGuard({ store, link, now: () => now, ledgerMaxEntries: 10 });
+    for (let i = 0; i < 10; i += 1) await guard.create(terms()); // never taken further
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+
+    now += 7 * DAY; // inside Link's expiry: still held
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
+
+    now += 2 * 3_600_000; // past 7 days + 1 hour: dropped, and a new decision fits
+    const fresh = await guard.create(terms());
+    expect(stored(store).map((e) => e.state)).toEqual(["created"]);
+    expect(stored(store)[0]!.requestId).toBeDefined();
+    expect(fresh.spendRequestId).toMatch(/^lsrq_/);
+  });
+});
