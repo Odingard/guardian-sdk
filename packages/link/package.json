@@ -1,0 +1,54 @@
+{
+  "name": "@odingard/guardian-link",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DRAFT, not released: Guardian for the Stripe Link agent wallet. Guardian decides a Link spend request (ALLOW/ASK/DENY on the exact merchant, amount, currency, line items and total) before it is created, in Link test mode.",
+  "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outdir=dist && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@odingard/guardian-sdk": "^0.5.0 || ^0.6.0"
+  },
+  "devDependencies": {
+    "@odingard/guardian-sdk": "^0.5.0 || ^0.6.0",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "guardian",
+    "stripe-link",
+    "link",
+    "payments",
+    "ai-agents",
+    "authorization",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/link"
+  },
+  "homepage": "https://odingard.com/guardian"
+}
