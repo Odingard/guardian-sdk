@@ -2,7 +2,7 @@
 
 ## Docs: agent integrations tested locally against a real Guardian (unreleased)
 
-- Codex CLI, DeepSeek Harness, Hermes Agent, ZeroClaw and bring-your-own containers: status "Tested locally against a real Guardian" in place of "Example, not yet tested". A scripted stand-in for each agent (no model) ran the shipped package and the example's config file end to end against the real Guardian server code: allow, ask then approve or deny, deny and fail-closed cases, receipts verified offline. None has run on the real agent against Guardian yet. No code change.
+- Codex CLI, DeepSeek Harness, Hermes Agent, ZeroClaw and bring-your-own containers: status "Tested locally against a real Guardian" in place of "Example, not yet tested". A scripted stand-in for each agent (no model) ran the shipped package and the example's config file end to end against the real Guardian server code: allow, ask then approve or deny, deny and the fail-closed cases each example names, receipts verified offline. None has run on the real agent against Guardian yet. No code change.
 - **skill.md 1.0.5.** The new status words for Codex CLI, DeepSeek Harness and Hermes (hash in `skill/CHANGELOG.md`).
 
 ## sdk 0.6.0 / guardian-mcp 0.5.0 / guardian-langchain 0.6.0 / guardian-vercel-ai 0.6.0 / guardian-openai-agents 0.4.0 (unreleased)

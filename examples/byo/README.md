@@ -4,7 +4,8 @@
 with a framework.** A scripted container (serving `/health` and `/chat`, one
 `guardian-mcp proxy` session kept open) ran allow, ask then approve or deny and
 deny calls against the real Guardian server code, with receipts verified
-offline, and a claim sent to a fresh MCP process ran nothing. Each recipe
+offline; with Guardian unreachable or no credential nothing was forwarded,
+and a claim sent to a fresh MCP process ran nothing. Each recipe
 below still needs a real Guardian agent, a real model key and the framework
 installed; none has run end to end with a framework yet. The framework
 APIs below were checked against the released source: `crewai` /

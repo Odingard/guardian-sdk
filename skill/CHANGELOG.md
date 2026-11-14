@@ -13,7 +13,7 @@ The hash must equal the one recorded below for its version.
 ## 1.0.5
 
 - Date: 2026-11-14
-- SHA-256: `fcfec00844966b18653f6da97878b705ea8edb45f1cd96e3fd6c4df371da0278`
+- SHA-256: `809c721d459eee6d281a8a9e30394a97af307220e51985d1dcaff8b6a5362322`
 - Pins: unchanged from 1.0.4.
 - Codex CLI, DeepSeek Harness and Hermes: "tested locally against a real Guardian" in place of "example, not yet tested". Two sentences in 4C shortened. No other change.
 

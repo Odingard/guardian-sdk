@@ -4,7 +4,8 @@
 on ZeroClaw.** A scripted stand-in for ZeroClaw started the two server entries
 in [`config.toml`](config.toml) as written (a local server, and a remote one
 with `--url` and an API-key header) and ran allow, ask then approve or deny,
-deny and Guardian-unreachable calls against the real Guardian server code,
+deny, Guardian-unreachable and no-credential calls against the real Guardian
+server code (nothing was forwarded in the last two),
 with receipts verified offline; the key never reached the agent. Nothing here
 has run on a real ZeroClaw yet. The ZeroClaw settings are taken from
 ZeroClaw's own docs (`docs/book/src/tools/mcp.md`, `tools/overview.md`,

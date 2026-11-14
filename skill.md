@@ -2,7 +2,7 @@
 name: guardian-setup
 description: Set up Guardian in this project. Detects the stack, wires in the right Guardian integration, has the person create the agent credential safely, sets first rules and runs one approval test.
 guardian-skill-version: 1.0.5
-date: 2026-11-13
+date: 2026-11-14
 packages:
   "@odingard/guardian-hook": 0.4.0
   "@odingard/guardian-mcp": 0.5.0

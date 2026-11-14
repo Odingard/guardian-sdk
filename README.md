@@ -84,8 +84,10 @@ real Guardian server code, with real approvals and receipts verified offline,
 but not yet on hosted production. "Tested locally against a real Guardian"
 means a scripted stand-in for the agent (no model) ran the shipped package and
 the example's config file end to end against the real Guardian server code:
-allow, ask then approve or deny, deny and fail-closed cases, with receipts
-verified offline. The agent itself has not run it against Guardian yet.
+allow, ask then approve or deny, deny, and the fail-closed cases each
+example's status names, with receipts verified offline. The stand-ins and the
+Guardian server code are not in this repository, so these runs cannot be
+repeated from it. The agent itself has not run it against Guardian yet.
 
 ## Quickstart
 
