@@ -702,6 +702,10 @@ export class LinkGuard {
       const fields = differences(entry.terms, view, spendRequestId);
       if (fields.length > 0) await this.#refuseChanged(entry, view, fields);
       if (view.status !== "created") {
+        // A spend request Link has closed can never move on: free its ledger slot.
+        if (!WAITING.has(view.status)) {
+          await this.#ledger.mark(entry.requestId, "refused").catch(() => undefined);
+        }
         throw refused("WRONG_STATE", `The spend request is ${view.status}.`, undefined, { spendRequestId });
       }
       await this.#ledger.move(entry.requestId, ["created"], "approval-requested", () =>
@@ -754,6 +758,8 @@ export class LinkGuard {
           return;
         }
         if (!WAITING.has(view.status)) {
+          // Denied, canceled or expired in Link: final, so the decision is too.
+          await this.#ledger.mark(entry.requestId, "refused").catch(() => undefined);
           throw refused("LINK_NOT_APPROVED", `Link reports the spend request as ${view.status}.`, undefined, {
             spendRequestId,
           });
@@ -793,6 +799,9 @@ export class LinkGuard {
       const fields = differences(entry.terms, view, spendRequestId);
       if (fields.length > 0) await this.#refuseChanged(entry, view, fields);
       if (view.status !== "approved") {
+        if (!WAITING.has(view.status)) {
+          await this.#ledger.mark(entry.requestId, "refused").catch(() => undefined);
+        }
         throw refused("LINK_NOT_APPROVED", `Link reports the spend request as ${view.status}.`, undefined, {
           spendRequestId,
         });

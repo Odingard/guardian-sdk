@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SPEND_ABOVE_CAP_TOOL } from "../src/index.js";
-import { CONTEXT, fakeGuardian, fakeLink, makeGuard, ops, orderLog, terms } from "./helpers.js";
+import { CONTEXT, fakeGuardian, fakeLink, makeGuard, ops, orderLog, terms, testStore } from "./helpers.js";
 
 const NEW = terms({
   amount: 4_200,
@@ -182,13 +182,18 @@ describe("Link's own approval", () => {
     expect(await guard.withCard(spendRequestId, () => "ok")).toBe("ok");
   });
 
-  it("denied in Link: refused", async () => {
-    const { guard } = makeGuard({ link: fakeLink({ personInLink: "deny" }) });
+  it("denied in Link: refused, and the decision is final so it frees its ledger slot", async () => {
+    const store = testStore();
+    const { guard } = makeGuard({ store, link: fakeLink({ personInLink: "deny" }) });
     const { spendRequestId } = await guard.spend(terms());
     await expect(guard.waitForLinkApproval(spendRequestId, { timeoutMs: 50 })).rejects.toMatchObject({
       code: "LINK_NOT_APPROVED",
     });
-    await expect(guard.withCard(spendRequestId, () => 1)).rejects.toMatchObject({ code: "LINK_NOT_APPROVED" });
+    const decisions = (
+      JSON.parse(store.data.get("guardian-link:v1:ledger")!.value) as { decisions: { state: string }[] }
+    ).decisions;
+    expect(decisions.map((e) => e.state)).toEqual(["refused"]);
+    await expect(guard.withCard(spendRequestId, () => 1)).rejects.toMatchObject({ code: "WRONG_STATE" });
   });
 
   it("no answer in Link in time: refused", async () => {
