@@ -59,22 +59,25 @@ export type LinkCliAdapterConfig = Readonly<{
   /**
    * The CLI command, by absolute path: for example
    * `["/usr/bin/node", "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"]`.
-   * The first entry must be an absolute path to a file no one else can
-   * write to; a bare name (looked up in PATH) and npx, npm, pnpm, yarn or
-   * bun are refused. Other entries that are not flags must be absolute
-   * paths. The CLI runs from a private folder the adapter makes, never from
-   * the guard's working folder.
+   * Every entry that is not a flag must be an absolute path to a regular
+   * file owned by the guard's user or root that no one else can write to,
+   * in a folder owned by the guard's user or root that no one else can
+   * write to (checked when the adapter is built and before every command).
+   * A bare name (looked up in PATH) and npx, npm, pnpm, yarn or bun are
+   * refused. The CLI runs from a private folder the adapter makes, never
+   * from the guard's working folder.
    */
   command: readonly string[];
-  /** Per-command limit. Default 60 s. */
+  /** Per-command limit: a whole number of ms from 1 to 600,000 (10 min). Default 60 s. */
   timeoutMs?: number;
   /** For tests: runs the command. Default: `execFile`, no shell. */
   run?: LinkCliRunner;
   /**
    * Where the adapter makes its private folder for each call (and reads the
    * card in it). Default: the OS temp folder. Folders left behind by a
-   * crash (`guardian-link-*`, owned by this user, older than twice the
-   * per-command limit) are wiped when the adapter is built.
+   * crash (`guardian-link-*`, owned by this user, not changed for 21
+   * minutes: twice the longest per-command limit plus a minute) are wiped
+   * when the adapter is built.
    */
   tmpDir?: string;
 }>;
@@ -196,6 +199,12 @@ function checkCommandFile(path: string): void {
     if ((fst.mode & 0o022) !== 0) {
       throw new Error(`guardian-link: no one else may write to the folder of the \`command\` file ${path}.`);
     }
+    // The folder's owner can replace the file whatever its mode.
+    if (uid() !== undefined && fst.uid !== uid() && fst.uid !== 0) {
+      throw new Error(
+        `guardian-link: the folder of the \`command\` file ${path} must belong to the guard's user or root.`,
+      );
+    }
   }
 }
 
@@ -220,6 +229,15 @@ function checkCommand(command: unknown): string[] {
 }
 
 const DIR_PREFIX = "guardian-link-";
+
+/** The longest per-command limit any adapter may use. */
+export const MAX_CLI_TIMEOUT_MS = 600_000;
+/**
+ * A private folder younger than this may belong to a call still running
+ * in another adapter or process (at most two commands of the longest
+ * limit, plus a minute), so the sweep leaves it alone.
+ */
+export const STALE_DIR_MS = 2 * MAX_CLI_TIMEOUT_MS + 60_000;
 
 /**
  * Wipes and removes private folders a crash left behind: only folders
@@ -401,14 +419,20 @@ function checkId(id: string): void {
  */
 export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
   checkAuthFile(config.authPath);
-  const [file, ...lead] = checkCommand(config.command);
+  // A frozen copy: changing the caller's array later changes nothing.
+  const command = Object.freeze([...checkCommand(config.command)]);
+  const [file, ...lead] = command;
   const run = config.run ?? defaultRun;
   const timeoutMs = config.timeoutMs ?? 60_000;
+  if (typeof timeoutMs !== "number" || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_CLI_TIMEOUT_MS) {
+    throw new Error(`guardian-link: \`timeoutMs\` must be a whole number of ms from 1 to ${MAX_CLI_TIMEOUT_MS}.`);
+  }
   const authPath = config.authPath;
   const base = config.tmpDir ?? tmpdir();
   const env: Record<string, string | undefined> = { ...process.env, NO_UPDATE_NOTIFIER: "1" };
   for (const k of STRIPPED_ENV) delete env[k];
-  sweepStale(base, 2 * timeoutMs + 60_000);
+  // Based on the longest limit any adapter may use, not this one's.
+  sweepStale(base, STALE_DIR_MS);
 
   /** Runs one command from a fresh private folder (mode 0700), deleted when the call ends. */
   const inPrivateDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
@@ -431,6 +455,9 @@ export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
 
   const cliIn = async (dir: string, what: string, args: readonly string[]): Promise<LinkCliRunResult> => {
     checkAuthFile(authPath);
+    // Again before every command: a file or folder swapped after the
+    // adapter was built is caught.
+    checkCommand(command);
     try {
       return await run(file!, [...lead, ...args, "--format", "json", "--auth", authPath], { timeoutMs, env, cwd: dir });
     } catch {

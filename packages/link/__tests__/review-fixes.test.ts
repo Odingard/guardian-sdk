@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { linkCliAdapter, type LinkCliRunner, type LinkSpendRequestView } from "../src/index.js";
+import { MAX_CLI_TIMEOUT_MS, STALE_DIR_MS } from "../src/cli.js";
 import { cliFixture, fakeGuardian, fakeLink, makeGuard, ops, priced, terms, testStore } from "./helpers.js";
 
 /** The CLI by absolute path: fixture files in a private folder (never run: the runner is a fake). */
@@ -120,6 +121,65 @@ describe("the CLI is run by absolute path, from a private folder", () => {
     expect(() => linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun })).toThrow(/guard's user or root/);
   });
 
+  it.runIf(process.getuid?.() === 0)(
+    "refuses a 0755 folder that belongs to another user, even holding a root-owned file (needs root)",
+    () => {
+      const [program] = COMMAND as [string, string];
+      const theirs = join(dir, "theirs");
+      mkdirSync(theirs);
+      chmodSync(theirs, 0o755);
+      const script = join(theirs, "cli.js");
+      writeFileSync(script, "//\n");
+      chmodSync(script, 0o644);
+      expect(() => linkCliAdapter({ authPath: auth, command: [program, script], run: noRun })).not.toThrow();
+      chownSync(theirs, 12_345, 12_345);
+      expect(() => linkCliAdapter({ authPath: auth, command: [program, script], run: noRun })).toThrow(
+        /folder of the `command` file .* must belong to the guard's user or root/,
+      );
+      // Also where a link resolves.
+      const linked = join(fixture.dir, "linked.js");
+      symlinkSync(script, linked);
+      expect(() => linkCliAdapter({ authPath: auth, command: [program, linked], run: noRun })).toThrow(
+        /must belong to the guard's user or root/,
+      );
+    },
+  );
+
+  it("checks the command files again before every command: a swap after construction is refused", async () => {
+    const runs: string[] = [];
+    const run: LinkCliRunner = async (_f, a) => {
+      runs.push(a.join(" "));
+      return { exitCode: 0, stdout: JSON.stringify({ rules: [] }), stderr: "" };
+    };
+    const command = [...COMMAND];
+    const link = linkCliAdapter({ authPath: auth, command, run });
+    await link.approvalPolicy();
+    expect(runs).toHaveLength(1);
+    // Changing the caller's array changes nothing.
+    command[1] = join(dir, "elsewhere.js");
+    await link.approvalPolicy();
+    expect(runs).toHaveLength(2);
+    // A file made writable after construction is refused before it runs.
+    chmodSync(COMMAND[1]!, 0o666);
+    await expect(link.approvalPolicy()).rejects.toThrow(/no one else may write/);
+    chmodSync(COMMAND[1]!, 0o644);
+    chmodSync(fixture.dir, 0o777);
+    await expect(link.approvalPolicy()).rejects.toThrow(/folder of the `command` file/);
+    chmodSync(fixture.dir, 0o700);
+    expect(runs).toHaveLength(2);
+  });
+
+  it("timeoutMs must be a whole number of ms from 1 to 600,000", () => {
+    for (const timeoutMs of [0, -1, 1.5, 600_001, Number.NaN, Number.POSITIVE_INFINITY, "60000" as never]) {
+      expect(() => linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun, timeoutMs })).toThrow(
+        /timeoutMs/,
+      );
+    }
+    for (const timeoutMs of [1, 60_000, 600_000]) {
+      expect(() => linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun, timeoutMs })).not.toThrow();
+    }
+  });
+
   it("runs every command from a fresh private folder that is gone afterwards", async () => {
     const base = join(dir, "work");
     mkdirSync(base, { mode: 0o700 });
@@ -194,6 +254,24 @@ describe("crash residue", () => {
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(other)).toBe(true);
+  });
+
+  it("never wipes a folder younger than the longest window, whatever this adapter's timeout", () => {
+    const base = join(dir, "work");
+    mkdirSync(base, { mode: 0o700 });
+    const young = join(base, "guardian-link-young");
+    const old = join(base, "guardian-link-old");
+    for (const d of [young, old]) {
+      mkdirSync(d, { mode: 0o700 });
+      writeFileSync(join(d, "card.json"), "{}", { mode: 0o600 });
+    }
+    const at = (msAgo: number) => new Date(Date.now() - msAgo);
+    utimesSync(young, at(STALE_DIR_MS - 60_000), at(STALE_DIR_MS - 60_000));
+    utimesSync(old, at(STALE_DIR_MS + 60_000), at(STALE_DIR_MS + 60_000));
+    linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun, tmpDir: base, timeoutMs: 1 });
+    expect(existsSync(young)).toBe(true);
+    expect(existsSync(old)).toBe(false);
+    expect(STALE_DIR_MS).toBe(2 * MAX_CLI_TIMEOUT_MS + 60_000);
   });
 });
 

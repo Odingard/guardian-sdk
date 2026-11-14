@@ -115,8 +115,10 @@ entry when it reads it and refuses one it cannot read exactly
    The adapter refuses a bare name looked up in PATH, npx, npm, pnpm, yarn
    and bun, and a relative script path. Every entry that is not a flag (the
    program and the script) must be an existing regular file owned by the
-   guard's user or root that others cannot write to, in a folder others
-   cannot write to (also where a link resolves). It
+   guard's user or root that others cannot write to, in a folder owned by
+   the guard's user or root that others cannot write to (also where a link
+   resolves), checked again before every command. `timeoutMs` is 1 ms to
+   10 minutes. It
    runs each command from a new private folder of its own, never from the
    guard's working folder.
 3. Log in to Link for the guard only, into a file only the guard can read:
