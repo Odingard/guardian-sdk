@@ -15,7 +15,7 @@ Guardian before it runs (input typed into an already open session with
 Guardian sees the command, or for a patch only its target paths and
 operations plus a size and SHA-256 digest. It never sees file contents.
 
-Status: tested with simulated Codex payloads and a stand-in Guardian (the Codex tests in `packages/hook`, and `node agent-hooks.mjs codex`). **Not yet proven live:** no real Codex run against a real Guardian yet, locally or hosted.
+Status: tested locally against a real Guardian. A scripted stand-in for Codex applies this `hooks.json` as Codex does (the matcher, the command line, Codex's reading of exit codes) and runs the published hook against the real Guardian server code: allow, ask then approve or deny, no approval in time, deny, and the fail-closed cases (Guardian unreachable, no credential, hook not installed), with receipts verified offline. Also tested with simulated Codex payloads and a stand-in Guardian (the Codex tests in `packages/hook`, and `node agent-hooks.mjs codex`). **Not yet proven live:** no real Codex run against a real Guardian yet, locally or hosted.
 
 ## SIMULATED: see what Codex would receive (no account needed)
 

@@ -12,8 +12,14 @@ Hermes plugin `guardian`. It asks Guardian before the tool runs:
 - anything Guardian denies, or that nobody approves in time, does not run;
 - every allowed call leaves a receipt you can verify offline.
 
-Status: tested with a fake Guardian only (`packages/python/tests/test_hermes.py`).
-**Not yet proven live** on Hermes, locally or hosted.
+Status: tested locally against a real Guardian. A scripted stand-in for Hermes
+loads the installed plugin from its entry point with the `plugins` settings in
+[`config.yaml`](config.yaml), calls it before each tool call, and runs the tool
+only when it does not block: allow, ask then approve or deny, no approval in
+time, deny and the fail-closed cases pass against the real Guardian server
+code, with receipts verified offline. Also tested with a fake Guardian
+(`packages/python/tests/test_hermes.py`). **Not yet proven live** on Hermes,
+locally or hosted.
 
 ## Try it without Hermes (SIMULATED)
 
