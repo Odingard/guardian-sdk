@@ -47,6 +47,8 @@ tool OpenClaw runs, including MCP tools and tools added by other plugins.
 | `DENY`        | `{ block: true, blockReason }`          | Nothing runs. The agent is told why and not to work around it.                                                         |
 | Anything else | `{ block: true, blockReason }`          | Missing config, unreachable Guardian, crash, timeout, cancelled call, failed redemption: nothing runs (fail closed).   |
 
+A block reason from Guardian names its request (`Request req_…`). If Guardian's answer to the redemption is lost, the plugin looks the request up: a redemption Guardian recorded as verified runs; anything else is blocked with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT`), and nothing runs.
+
 **Guardian is the authority for ASK.** The plugin does not return OpenClaw's
 `requireApproval`: an OpenClaw `/approve` would let the call run with no
 Guardian decision and no receipt. The person approves in Guardian; OpenClaw's
@@ -370,7 +372,7 @@ install -o root -g root -m 0444 /root/openclaw.json.new "$S/openclaw.json.bak"
 # registry's integrity), compare that integrity with the one in the Guardian
 # release notes, unpack it and swap it in. The plugin is one self-contained
 # directory (dist is bundled), so nothing else changes.
-V=0.1.1
+V=0.1.2
 mkdir -p /root/guardian && cd /root/guardian
 npm pack "@odingard/guardian-openclaw@$V" --registry https://registry.npmjs.org/ --json > "pack-$V.json"
 grep '"integrity"' "pack-$V.json"

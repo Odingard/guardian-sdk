@@ -255,6 +255,190 @@ describe("decide", () => {
   });
 });
 
+describe("decide: request ids and lost redemption answers", () => {
+  const allowed: Result = {
+    ok: true,
+    requestId: "req_9",
+    decision: "ALLOW",
+    capabilityToken: "cap",
+  };
+  type Receipts = NonNullable<Client["receipts"]>;
+  const withReceipts = (
+    client: Client,
+    calls: string[],
+    answer: Awaited<ReturnType<Receipts>> | (() => never),
+  ): Client => ({
+    ...client,
+    async receipts(requestId) {
+      calls.push(`receipts ${requestId}`);
+      if (typeof answer === "function") answer();
+      return answer as Awaited<ReturnType<Receipts>>;
+    },
+  });
+
+  it("a refusal tells the agent the request id", async () => {
+    const { client } = fakeClient({
+      request: { ok: false, reasonCode: "NOT_AUTHORIZED", requestId: "req_7" },
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict.decision).toBe("deny");
+    expect(verdict.reason).toMatch(
+      /^Guardian blocked shell_deploy \(NOT_AUTHORIZED\): .*\. Request req_7\. Do not retry/,
+    );
+  });
+
+  it("an approval that was declined tells the agent the request id", async () => {
+    const { client } = fakeClient({
+      request: {
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: "req_8",
+      },
+      claims: [{ ok: false, reasonCode: "NOT_AUTHORIZED", requestId: "req_8" }],
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict.reason).toMatch(/\(NOT_AUTHORIZED\).*Request req_8\./);
+  });
+
+  it("an unreachable Guardian names no request (Guardian never saw one)", async () => {
+    const { client } = fakeClient({
+      request: {
+        ok: false,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        requestId: "req_local",
+      },
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict.decision).toBe("deny");
+    expect(verdict.reason).toMatch(
+      /\(SERVICE_UNAVAILABLE\): Guardian could not be reached/,
+    );
+    expect(verdict.reason).not.toMatch(/req_local/);
+  });
+
+  it("a lost redemption answer is settled by lookup: verified → the call runs", async () => {
+    const fake = fakeClient({
+      request: allowed,
+      execute: {
+        ok: false,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        outcomeUnknown: true,
+      },
+    });
+    const client = withReceipts(fake.client, fake.calls, {
+      ok: true,
+      requestId: "req_9",
+      receipts: [{ state: "verified", attemptId: "att_1" }],
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict).toMatchObject({ decision: "allow", requestId: "req_9" });
+    expect(verdict.reason).toMatch(/request req_9/);
+    expect(fake.calls).toEqual([
+      "request shell_deploy",
+      "execute req_9",
+      "receipts req_9",
+    ]);
+  });
+
+  it("a thrown execute is looked up too", async () => {
+    const fake = fakeClient({ request: allowed });
+    const client = withReceipts(
+      {
+        ...fake.client,
+        async execute() {
+          throw new Error("socket hang up");
+        },
+      },
+      fake.calls,
+      { ok: true, requestId: "req_9", receipts: [{ state: "verified" }] },
+    );
+    expect((await decide(terraform, base(client))).decision).toBe("allow");
+  });
+
+  it("a lost answer for a redemption Guardian aborted is a deny", async () => {
+    const fake = fakeClient({
+      request: allowed,
+      execute: { ok: false, reasonCode: "HTTP_502", outcomeUnknown: true },
+    });
+    const client = withReceipts(fake.client, fake.calls, {
+      ok: true,
+      requestId: "req_9",
+      receipts: [{ state: "aborted" }],
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict.decision).toBe("deny");
+    expect(verdict.reason).toMatch(/\(EXECUTION_NOT_SENT\).*Request req_9\./);
+  });
+
+  it.each([
+    ["the lookup fails", { ok: false, reasonCode: "SERVICE_UNAVAILABLE" }],
+    ["nothing is recorded yet", { ok: true, requestId: "req_9", receipts: [] }],
+    [
+      "the attempt is still committing",
+      { ok: true, requestId: "req_9", receipts: [{ state: "committing" }] },
+    ],
+  ] as const)(
+    "an unsettled lost answer is a deny that says nothing ran and not to retry (%s)",
+    async (_name, answer) => {
+      const fake = fakeClient({
+        request: allowed,
+        execute: {
+          ok: false,
+          reasonCode: "SERVICE_UNAVAILABLE",
+          outcomeUnknown: true,
+        },
+      });
+      const client = withReceipts(fake.client, fake.calls, answer as never);
+      const verdict = await decide(terraform, base(client));
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.requestId).toBe("req_9");
+      expect(verdict.reason).toMatch(
+        /^Guardian blocked shell_deploy \(EXECUTION_OUTCOME_UNKNOWN\)/,
+      );
+      expect(verdict.reason).toMatch(
+        /Request req_9\. Nothing ran\. Do not retry/,
+      );
+      expect(verdict.reason).not.toMatch(/could not be reached/);
+    },
+  );
+
+  it("a lookup that throws, or no lookup at all, is a deny", async () => {
+    const fake = fakeClient({
+      request: allowed,
+      execute: {
+        ok: false,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        outcomeUnknown: true,
+      },
+    });
+    const throwing = withReceipts(fake.client, fake.calls, () => {
+      throw new Error("down");
+    });
+    expect((await decide(terraform, base(throwing))).reason).toMatch(
+      /EXECUTION_OUTCOME_UNKNOWN/,
+    );
+    expect((await decide(terraform, base(fake.client))).reason).toMatch(
+      /EXECUTION_OUTCOME_UNKNOWN/,
+    );
+  });
+
+  it("a definitive refusal of the redemption is not looked up", async () => {
+    const fake = fakeClient({
+      request: allowed,
+      execute: { ok: false, reasonCode: "CAPABILITY_REVOKED" },
+    });
+    const client = withReceipts(fake.client, fake.calls, {
+      ok: true,
+      requestId: "req_9",
+      receipts: [{ state: "verified" }],
+    });
+    const verdict = await decide(terraform, base(client));
+    expect(verdict.decision).toBe("deny");
+    expect(verdict.reason).toMatch(/\(CAPABILITY_REVOKED\).*Request req_9\./);
+    expect(fake.calls.some((c) => c.startsWith("receipts"))).toBe(false);
+  });
+});
+
 describe("Claude Code hook I/O", () => {
   const stdin = (tool_name: string, tool_input: object) =>
     JSON.stringify({

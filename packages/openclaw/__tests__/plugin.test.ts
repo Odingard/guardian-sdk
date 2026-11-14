@@ -327,6 +327,79 @@ describe("fail closed", () => {
     expect(JSON.stringify(out)).not.toContain(CREDENTIAL);
   });
 
+  it("a lost redemption answer is looked up with the real client: verified runs, unsettled blocks", async () => {
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    const run = async (receipts: () => Response) => {
+      const paths: string[] = [];
+      const fetch = vi.fn(async (url: string) => {
+        const path = new URL(url).pathname;
+        paths.push(path);
+        if (path === "/v1/agent/requests") {
+          return json({
+            ok: true,
+            requestId: "req_lostanswer1",
+            decision: "ALLOW",
+            capabilityToken: "cap",
+          });
+        }
+        if (path === "/v1/agent/execute") {
+          throw new TypeError("socket hang up");
+        }
+        return receipts();
+      });
+      const handler = createGuardianToolHandler({
+        config: { ...CONFIG, baseUrl: "https://guardian.example" },
+        env: { GUARDIAN_AGENT_CREDENTIAL: CREDENTIAL },
+        fetch: fetch as never,
+      });
+      return { out: await handler(exec("npm test")), paths };
+    };
+    const verified = await run(() =>
+      json({
+        ok: true,
+        requestId: "req_lostanswer1",
+        receipts: [{ state: "verified", attemptId: "att_1" }],
+      }),
+    );
+    expect(verified.out).toEqual({ params: { command: "npm test" } });
+    expect(verified.paths).toEqual([
+      "/v1/agent/requests",
+      "/v1/agent/execute",
+      "/v1/agent/receipts/req_lostanswer1",
+    ]);
+    const unsettled = await run(() =>
+      json({ ok: false, code: "SERVICE_UNAVAILABLE" }, 503),
+    );
+    expect(unsettled.out).toMatchObject({
+      block: true,
+      blockReason: expect.stringMatching(
+        /EXECUTION_OUTCOME_UNKNOWN.*Request req_lostanswer1\. Nothing ran\. Do not retry/,
+      ),
+    });
+  });
+
+  it("a refusal names the request", async () => {
+    const g = fakeGuardian({
+      ok: false,
+      reasonCode: "NOT_AUTHORIZED",
+      requestId: "req_no",
+    });
+    const handler = createGuardianToolHandler({
+      config: CONFIG,
+      client: g.client,
+    });
+    expect(await handler(exec("ls"))).toMatchObject({
+      block: true,
+      blockReason: expect.stringMatching(
+        /\(NOT_AUTHORIZED\).*Request req_no\./,
+      ),
+    });
+  });
+
   it("a crashing client blocks the call", async () => {
     const client: Client = {
       request: async () => {

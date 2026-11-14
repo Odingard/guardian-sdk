@@ -21,6 +21,16 @@ plain code), sync or ``async``::
 * ASK   → :class:`GuardianApprovalPending` is raised. Nothing runs. Call
   ``.resume()`` after a human approves.
 * DENY  → :class:`GuardianDenied` is raised. Your function never runs.
+  An unreachable Guardian raises :class:`GuardianUnavailable` (a subclass
+  of :class:`GuardianDenied`): nothing was decided and nothing runs.
+
+When Guardian's answer to the final redemption is lost (no answer, a 5xx,
+an unreadable answer), the request is looked up in Guardian
+(``client.receipts``): a verified execution is reported as success, with
+its receipt. If the lookup does not settle it, the call raises
+:class:`GuardianExecutionFailed` with ``outcome_unknown=True`` and
+``reason_code="EXECUTION_OUTCOME_UNKNOWN"``: the action ran (in-process) or
+may have run (remote) and must not be retried.
 
 **In-process mode is decision-gated.** Your function runs after ALLOW and
 *before* the capability is redeemed, so a revocation that lands in between
@@ -55,7 +65,7 @@ from typing import (
 )
 
 from ._canonical import CanonicalJsonError, canonical_json
-from .client import AsyncGuardianClient, GuardianClient, RequestResult
+from .client import AsyncGuardianClient, ExecuteResult, GuardianClient, RequestResult
 from .content_pins import (
     FileArgsDeclaration,
     CONTENT_CHANGED_SINCE_APPROVAL,
@@ -78,8 +88,10 @@ from .content_pins import (
 )
 
 __all__ = [
+    "EXECUTION_OUTCOME_UNKNOWN",
     "Guard",
     "GuardianDenied",
+    "GuardianUnavailable",
     "GuardianApprovalPending",
     "GuardianExecutionFailed",
     "ResumeResult",
@@ -98,6 +110,10 @@ _HELD = ("APPROVAL_REQUIRED", "APPROVAL_PENDING")
 #: registered in the console). Guardian does not say whether that entry is
 #: record-only, so the call is refused before anything runs.
 _INSTALL_MAYBE_DONE = ("TOOL_ALREADY_INSTALLED", "INVALID_REQUEST")
+
+#: Reason code of a call whose final redemption answer was lost and that a
+#: lookup of the request did not settle: it ran, or may have run.
+EXECUTION_OUTCOME_UNKNOWN = "EXECUTION_OUTCOME_UNKNOWN"
 
 
 class GuardianDenied(Exception):
@@ -120,6 +136,39 @@ class GuardianDenied(Exception):
         suffix = f" request_id={request_id}" if request_id else ""
         tail = f". {hint}" if hint else ""
         super().__init__(f'Guardian denied "{tool_name}" (reason_code={reason_code}){suffix}{tail}')
+
+
+class GuardianUnavailable(GuardianDenied):
+    """Guardian could not be reached (``reason_code="SERVICE_UNAVAILABLE"``).
+
+    Not a decision: Guardian did not answer, so the call was not checked and
+    did not run. A subclass of :class:`GuardianDenied`, so code that catches
+    denials keeps refusing the call.
+    """
+
+    def __init__(
+        self,
+        tool_name: str,
+        reason_code: str = "SERVICE_UNAVAILABLE",
+        request_id: Optional[str] = None,
+        hint: Optional[str] = None,
+    ) -> None:
+        super().__init__(tool_name, reason_code, request_id, hint)
+        # The message says what happened: no answer, not a refusal.
+        Exception.__init__(
+            self,
+            f'Guardian could not be reached to check "{tool_name}" (reason_code={reason_code}), '
+            "so it did not run. Try again later.",
+        )
+
+
+def _denied_error(
+    tool_name: str, reason_code: str, request_id: Optional[str], hint: Optional[str] = None
+) -> GuardianDenied:
+    """The exception for a refusal; an unreachable Guardian is worded as such."""
+    if reason_code == "SERVICE_UNAVAILABLE":
+        return GuardianUnavailable(tool_name, reason_code, request_id)
+    return GuardianDenied(tool_name, reason_code, request_id, hint)
 
 
 def denial_hint(tool_name: str, reason_code: str, stage: str = "invoke") -> Optional[str]:
@@ -172,6 +221,13 @@ class GuardianExecutionFailed(Exception):
     other than ``sent-verified`` is also an execution failure: ``reason_code``
     is ``EXECUTION_<STATUS>`` (for example ``EXECUTION_OUTCOME_PENDING``) and
     ``receipt`` holds Guardian's receipt.
+
+    ``outcome_unknown=True`` (``reason_code="EXECUTION_OUTCOME_UNKNOWN"``):
+    Guardian's answer to the redemption was lost and looking the request up
+    did not settle it. The call ran (in-process) or may have run (remote);
+    Guardian may hold its record. Do not retry: a retry is a new request and
+    may repeat the action. ``detail`` says what was observed (for example
+    ``SERVICE_UNAVAILABLE``).
     """
 
     def __init__(
@@ -181,16 +237,37 @@ class GuardianExecutionFailed(Exception):
         reason_code: str,
         local_effect_ran: bool = False,
         receipt: Optional[Dict[str, Any]] = None,
+        outcome_unknown: bool = False,
+        detail: Optional[str] = None,
     ) -> None:
         self.tool_name = tool_name
         self.request_id = request_id
         self.reason_code = reason_code
         self.local_effect_ran = local_effect_ran
         self.receipt = receipt
-        super().__init__(
-            f'Guardian execution of "{tool_name}" failed (request_id={request_id}, '
-            f"reason_code={reason_code}{', local_effect_ran=True' if local_effect_ran else ''})"
-        )
+        self.outcome_unknown = outcome_unknown
+        self.detail = detail
+        details = f"reason_code={reason_code}" + (f", detail={detail}" if detail else "")
+        if local_effect_ran:
+            details += ", local_effect_ran=True"
+        if outcome_unknown and local_effect_ran:
+            message = (
+                f'"{tool_name}" ran, but Guardian could not confirm that it recorded it; '
+                f"do not retry; check request_id {request_id} ({details})"
+            )
+        elif outcome_unknown:
+            message = (
+                f'Guardian execution of "{tool_name}" may have happened; '
+                f"do not retry; check request_id {request_id} ({details})"
+            )
+        elif local_effect_ran:
+            message = (
+                f'"{tool_name}" ran, but Guardian could not record it; do not retry '
+                f"(request_id={request_id}, {details})"
+            )
+        else:
+            message = f'Guardian execution of "{tool_name}" failed (request_id={request_id}, {details})'
+        super().__init__(message)
 
 
 def _content_pin_refusal(err: GuardianExecutionFailed) -> bool:
@@ -219,6 +296,13 @@ def execution_failed_message(err: GuardianExecutionFailed) -> str:
         return (
             f"{err.tool_name} did not run: {what} ({err.reason_code}{rid}). "
             "Tell the user; a changed file needs a new approval."
+        )
+    if err.local_effect_ran and err.outcome_unknown:
+        # The lookup did not settle it: Guardian may hold the record.
+        return (
+            f"{err.tool_name} ran, but Guardian could not confirm that it recorded it "
+            f"({err.reason_code}{rid}). Do not call it again; tell the user it ran "
+            "and that the request needs checking."
         )
     if err.local_effect_ran:
         return (
@@ -290,7 +374,8 @@ def to_arguments_record(value: Any) -> Dict[str, Any]:
 # results back. Operations: ("request", invocation) → RequestResult,
 # ("claim", request_id) → RequestResult, ("execute", request_id, token) →
 # ExecuteResult, ("run",) → the wrapped function's output,
-# ("receipt", request_id, receipt) → None.
+# ("receipt", request_id, receipt) → None, ("lookup", request_id) →
+# ("verified", receipt) | ("not-sent",) | ("unknown",).
 
 
 class _Ask(Exception):
@@ -363,7 +448,9 @@ def _deny(
                 "message": f"{message} {hint}" if hint else message,
             }
         }
-    raise GuardianDenied(tool_name, reason_code, request_id, hint)
+    if reason_code == "SERVICE_UNAVAILABLE":
+        hint = None  # Guardian did not answer: no next step but trying later
+    raise _denied_error(tool_name, reason_code, request_id, hint)
 
 
 def _execution_failed(opts: _Options, err: GuardianExecutionFailed) -> Generator:
@@ -379,9 +466,10 @@ def _execution_failed(opts: _Options, err: GuardianExecutionFailed) -> Generator
     return {
         "guardian": {
             "decision": "ALLOW",
-            "outcome": "ran_unrecorded"
+            "outcome": ("ran_unconfirmed" if err.outcome_unknown else "ran_unrecorded")
             if err.local_effect_ran
             else ("not_run" if _content_pin_refusal(err) else "unknown"),
+            **({"outcome_unknown": True} if err.outcome_unknown else {}),
             "tool_name": err.tool_name,
             **({"request_id": err.request_id} if err.request_id else {}),
             "reason_code": err.reason_code,
@@ -417,6 +505,44 @@ def _ask_result(tool_name: str, request_id: str, install: bool = False) -> Dict[
     }
 
 
+def _outcome_unknown(executed: Any) -> bool:
+    """The execute was sent but its answer does not say whether it was redeemed."""
+    if getattr(executed, "outcome_unknown", False) is True:
+        return True
+    code = getattr(executed, "reason_code", None) or ""
+    return code == "SERVICE_UNAVAILABLE" or (
+        code.startswith("HTTP_") and (code == "HTTP_0" or (len(code) == 8 and code[5] == "5" and code[5:].isdigit()))
+    )
+
+
+def _lookup_answer(request_id: str, answer: Any) -> tuple:
+    """Classify Guardian's recorded attempts for a request (``client.receipts``).
+
+    ``("verified", receipt)`` when an attempt is verified, ``("not-sent",)``
+    when every attempt was aborted or its commit rejected, ``("unknown",)``
+    otherwise (none recorded yet, still committing, the lookup failing).
+    """
+    if getattr(answer, "ok", False) is not True or not isinstance(getattr(answer, "receipts", None), list):
+        return ("unknown",)
+    records = [r for r in answer.receipts]
+    for record in records:
+        if isinstance(record, dict) and record.get("state") == "verified":
+            return (
+                "verified",
+                {
+                    "schemaVersion": 1,
+                    "requestId": request_id,
+                    "receiptReference": record.get("attemptId"),
+                    "status": "sent-verified",
+                },
+            )
+    if records and all(
+        isinstance(r, dict) and r.get("state") in ("aborted", "commit-rejected") for r in records
+    ):
+        return ("not-sent",)
+    return ("unknown",)
+
+
 def _as_held(result: RequestResult) -> RequestResult:
     if not result.ok and result.reason_code in _HELD and result.request_id:
         return RequestResult(ok=True, request_id=result.request_id, decision="ASK", reason_code=result.reason_code)
@@ -443,9 +569,33 @@ def _settle(
                     )
                 )
             executed = yield ("execute", request_id, result.capability_token)
+            if not executed.ok and _outcome_unknown(executed):
+                # The answer was lost: Guardian's record settles it.
+                found = yield ("lookup", request_id)
+                if found[0] == "verified":
+                    executed = ExecuteResult(ok=True, receipt=found[1])
+                elif found[0] == "not-sent":
+                    return (
+                        yield from _execution_failed(
+                            opts, GuardianExecutionFailed(tool_name, request_id, "EXECUTION_NOT_SENT")
+                        )
+                    )
+                else:
+                    return (
+                        yield from _execution_failed(
+                            opts,
+                            GuardianExecutionFailed(
+                                tool_name,
+                                request_id,
+                                EXECUTION_OUTCOME_UNKNOWN,
+                                outcome_unknown=True,
+                                detail=executed.reason_code or "EXECUTE_FAILED",
+                            ),
+                        )
+                    )
             if not executed.ok:
-                # Guardian was asked to perform the call; a lost or refused
-                # answer does not prove it did not happen.
+                # Guardian was asked to perform the call; a refused answer
+                # does not prove it did not happen.
                 return (
                     yield from _execution_failed(
                         opts,
@@ -490,6 +640,26 @@ def _settle(
             )
         output = yield ("run",)
         executed = yield ("execute", request_id, result.capability_token)
+        if not executed.ok and _outcome_unknown(executed):
+            # The function ran and Guardian's answer was lost: Guardian's
+            # record of the request settles it.
+            found = yield ("lookup", request_id)
+            if found[0] == "verified":
+                executed = ExecuteResult(ok=True, receipt=found[1])
+            elif found[0] == "unknown":
+                return (
+                    yield from _execution_failed(
+                        opts,
+                        GuardianExecutionFailed(
+                            tool_name,
+                            request_id,
+                            EXECUTION_OUTCOME_UNKNOWN,
+                            local_effect_ran=True,
+                            outcome_unknown=True,
+                            detail=executed.reason_code or "EXECUTE_FAILED",
+                        ),
+                    )
+                )
         if not executed.ok:
             # The function already ran: never report this as "did not run".
             return (
@@ -640,7 +810,7 @@ def _resume_install(
         not claimed.ok and claimed.reason_code in _HELD
     ):
         raise _Ask(request_id, "install")
-    raise GuardianDenied(
+    raise _denied_error(
         tool_name,
         (claimed.reason_code or "MISSING_CAPABILITY"),
         claimed.request_id if claimed.ok else None,
@@ -697,6 +867,29 @@ class _Run:
         except Exception:  # noqa: BLE001 — never turn an exception into a run
             return CONTENT_PIN_UNREADABLE
         return None
+
+    def _lookup(self, request_id: str) -> tuple:
+        """The ``("lookup", request_id)`` op: Guardian's record of the request.
+        A client without ``receipts``, or a lookup that fails, is unknown."""
+        receipts = getattr(self.guard.client, "receipts", None)
+        if not callable(receipts):
+            return ("unknown",)
+        try:
+            return _lookup_answer(request_id, receipts(request_id))
+        except Exception:  # noqa: BLE001 — a failed lookup settles nothing
+            return ("unknown",)
+
+    async def _alookup(self, request_id: str) -> tuple:
+        receipts = getattr(self.guard.client, "receipts", None)
+        if not callable(receipts):
+            return ("unknown",)
+        try:
+            answer = receipts(request_id)
+            if inspect.isawaitable(answer):
+                answer = await answer
+            return _lookup_answer(request_id, answer)
+        except Exception:  # noqa: BLE001
+            return ("unknown",)
 
     def _cleanup(self) -> None:
         prepared, self._prepared = self._prepared, None
@@ -757,6 +950,8 @@ class _Run:
                     value = client.claim(op[1])
                 elif kind == "execute":
                     value = client.execute(request_id=op[1], capability_token=op[2])
+                elif kind == "lookup":
+                    value = self._lookup(op[1])
                 elif kind == "pin_check":
                     value = self._pin_check(op[1])
                 elif kind == "run":
@@ -794,6 +989,8 @@ class _Run:
                     value = await client.claim(op[1])
                 elif kind == "execute":
                     value = await client.execute(request_id=op[1], capability_token=op[2])
+                elif kind == "lookup":
+                    value = await self._alookup(op[1])
                 elif kind == "pin_check":
                     if self.file_args or carries_reserved_key(self.args):
                         value = await asyncio.to_thread(self._pin_check, op[1])

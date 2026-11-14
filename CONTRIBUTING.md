@@ -42,6 +42,16 @@ sends `adapterId` when set and refuses the reserved `guardianContentPins`
 argument. x402 and ap2 do not do either yet. Move a guard onto the triad
 once it covers these points.
 
+### Coding-agent hooks (exception)
+
+`packages/hook` (and `packages/openclaw`, which uses the hook's decision
+code) also call `request` / `claim` / `execute` themselves. The agent runs
+the tool itself after the hook answers, so the hook redeems the capability
+before the call runs and waits for the person within the request's TTL,
+like a payment guard. After a lost redemption answer it looks the request
+up with the same rules as the triad (`executeOutcomeUnknown` and
+`lookUpExecution` in `packages/sdk/src/guard.ts`); change both together.
+
 ## Development
 
 ```bash

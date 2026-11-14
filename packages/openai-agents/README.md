@@ -91,7 +91,9 @@ the agent.
   receipt recorded (`onReceipt` gets it). A failed redemption raises
   `GuardianExecutionFailed` with `localEffectRan: true`. Without your own
   `errorFunction`, the model is told the tool ran without a receipt and not
-  to call it again. If the SDK's own `timeoutMs` has already fired, the SDK
+  to call it again, with the requestId. When Guardian's answer was lost and
+  looking the request up did not settle it, the model is told the tool ran,
+  that Guardian could not confirm it recorded it, and not to call it again. If the SDK's own `timeoutMs` has already fired, the SDK
   has told the model the tool timed out, and this failure is not reported
   to the model.
 - `ASK` — your `execute` does not run. By default the call throws
@@ -105,7 +107,7 @@ the agent.
   waiting for approval, and `onApprovalPending(pending)` gives your app the
   handle.
 - `DENY` — your `execute` never runs. The model gets a plain refusal
-  (`Guardian denied refund_order (POLICY_DENY). It did not run. …`). With
+  (`Guardian denied refund_order (POLICY_DENY). It did not run (requestId req_…). …`). With
   `onDeny: "throw"`, `GuardianDenied` goes to the tool's `errorFunction`
   instead.
 - Guardian error, network failure, timeout or a cancelled call — your

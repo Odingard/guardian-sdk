@@ -45,7 +45,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested, but not yet proven against a live Guardian and a live model                                               | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
-| [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. | [packages/x402](packages/x402)                   |
+| [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Supports USDC on Base Sepolia (testnet); live proof pending. Base mainnet is off by default. | [packages/x402](packages/x402)                   |
 | [`@odingard/guardian-ap2`](https://www.npmjs.com/package/@odingard/guardian-ap2)                     | Your agent pays over AP2 v0.2: Guardian decides closed Checkout and Payment Mandates before the agent key signs them (pinned merchant keys, USD). Not yet proven live | [packages/ap2](packages/ap2)                     |
 
 ## Works with
@@ -76,7 +76,7 @@ document, and how far each has been tested.
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
 | NVIDIA NemoClaw (guide)                         | `@odingard/guardian-openclaw` ([guide](examples/nemoclaw)) | Verified on staging with NemoClaw v0.0.143 (shell commands); not tamper-proof |
-| x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. |
+| x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Supports USDC on Base Sepolia (testnet); live proof pending. Base mainnet is off by default. |
 | AP2 mandates (TypeScript)                       | `@odingard/guardian-ap2`                               | Live proof pending (no public AP2 sandbox) |
 
 "Tested against Guardian" means the integration ran end to end against the
