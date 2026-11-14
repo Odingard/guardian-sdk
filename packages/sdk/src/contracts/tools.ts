@@ -43,6 +43,67 @@ export const ToolNameSchema = z
   );
 export type ToolName = z.infer<typeof ToolNameSchema>;
 
+/**
+ * The owner's statement of which argument of a tool holds the
+ * amount it charges. Names are top-level argument names only (no dots,
+ * paths or pointers), as fileArgs uses. Set on a catalog entry by the
+ * owner only; the agent's integration echoes it on tool.invoke as
+ * `amountArgument`, and binding requires the echo to equal the catalog.
+ */
+export const TOOL_ARGUMENT_NAME_MAX_LENGTH = 64;
+export const TOOL_ALLOWED_ARGUMENTS_MAX = 64;
+/** Currencies a tool amount may be in (minor units of US dollars only). */
+export const TOOL_AMOUNT_CURRENCIES: readonly string[] = ["usd"];
+
+export const ToolArgumentNameSchema = z
+  .string()
+  .min(1)
+  .max(TOOL_ARGUMENT_NAME_MAX_LENGTH)
+  .refine(
+    (name) =>
+      !/[./[\]]/.test(name) &&
+      ![...name].some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      }),
+    "argument names are top-level names (no dots, paths or pointers)",
+  )
+  .refine((name) => name !== "__proto__", "argument name is reserved");
+
+export const ToolAmountDeclarationSchema = z
+  .object({
+    argument: ToolArgumentNameSchema,
+    unit: z.enum(["minor", "major"]),
+    currency: z.literal("usd"),
+    currencyArgument: ToolArgumentNameSchema.optional(),
+    allowedArguments: z
+      .array(ToolArgumentNameSchema)
+      .min(1)
+      .max(TOOL_ALLOWED_ARGUMENTS_MAX)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (declaration) => declaration.currencyArgument !== declaration.argument,
+    "the currency argument must differ from the amount argument",
+  )
+  .refine(
+    (declaration) =>
+      declaration.allowedArguments === undefined ||
+      new Set(declaration.allowedArguments).size ===
+        declaration.allowedArguments.length,
+    "allowedArguments must be distinct",
+  )
+  .refine(
+    (declaration) =>
+      declaration.allowedArguments === undefined ||
+      (declaration.allowedArguments.includes(declaration.argument) &&
+        (declaration.currencyArgument === undefined ||
+          declaration.allowedArguments.includes(declaration.currencyArgument))),
+    "allowedArguments must include the amount and currency arguments",
+  );
+export type ToolAmountDeclaration = z.infer<typeof ToolAmountDeclarationSchema>;
+
 /** A catalog entry: a named tool that renders to one allowlisted https call. */
 export const ToolHttpDescriptorSchema = z
   .object({
@@ -51,6 +112,7 @@ export const ToolHttpDescriptorSchema = z
     transport: z.literal("http").optional(),
     method: ApiRequestMethodSchema,
     url: ApiRequestUrlSchema,
+    amount: ToolAmountDeclarationSchema.optional(),
   })
   .strict();
 export type ToolHttpDescriptor = z.infer<typeof ToolHttpDescriptorSchema>;
@@ -69,6 +131,7 @@ export const ToolRecordDescriptorSchema = z
     name: ToolNameSchema,
     description: z.string().max(TOOL_DESCRIPTION_MAX_LENGTH).optional(),
     transport: z.literal("record"),
+    amount: ToolAmountDeclarationSchema.optional(),
   })
   .strict();
 export type ToolRecordDescriptor = z.infer<typeof ToolRecordDescriptorSchema>;
@@ -118,6 +181,8 @@ export const ToolInvokeParametersV1Schema = z
     connectionId: ConnectionIdSchema,
     toolName: ToolNameSchema,
     arguments: ToolArgumentsSchema,
+    /** The echo of the catalog entry's amount declaration. */
+    amountArgument: ToolAmountDeclarationSchema.optional(),
   })
   .strict();
 export type ToolInvokeParametersV1 = z.infer<
@@ -150,6 +215,214 @@ export const McpEnableParametersV1Schema = z
   .strict();
 export type McpEnableParametersV1 = z.infer<typeof McpEnableParametersV1Schema>;
 
+export type ToolAmountRefusal =
+  | "AMOUNT_MISSING"
+  | "AMOUNT_INVALID"
+  | "CURRENCY_MISSING"
+  | "CURRENCY_NOT_ALLOWED"
+  | "AMOUNT_ARGUMENT_NOT_ALLOWED";
+
+export type ToolAmountReading =
+  | Readonly<{ kind: "none" }>
+  | Readonly<{ kind: "money"; amountMinor: number; currency: "usd" }>
+  | Readonly<{ kind: "refused"; code: ToolAmountRefusal }>;
+
+/** Minor units as text, as api.request reads them. */
+const TOOL_MINOR_UNITS = /^(0|[1-9][0-9]{0,15})$/;
+/** Whole dollars with up to two decimals, as text. */
+const TOOL_MAJOR_UNITS = /^(0|[1-9][0-9]{0,12})(?:\.([0-9]{1,2}))?$/;
+
+/**
+ * content pins: the reserved argument under which the SDK adds the
+ * digest of each pinned file argument to a call, and the shape of one pin.
+ * The one pin validator, shared by the SDK's execute-time re-check
+ * (packages/sdk content-pins.ts) and readToolAmount's allowedArguments
+ * check.
+ */
+export const CONTENT_PINS_ARGUMENT = "guardianContentPins";
+/** At most this many pins per call. */
+export const CONTENT_PINS_MAX = 16;
+/** The modes a pinned file argument may be declared with. */
+export const CONTENT_PIN_MODES: ReadonlySet<string> = new Set([
+  "bytes",
+  "copy",
+  "recheck",
+]);
+const CONTENT_PIN_SHA256 = /^sha256:[0-9a-f]{64}$/;
+
+export type ContentPinRecord = Readonly<{
+  arg: string;
+  index: number;
+  mode: "bytes" | "copy" | "recheck";
+  size: number;
+  sha256: string;
+}>;
+
+/** True for one well-formed pin (other fields, e.g. a preview, are display data). */
+export function isContentPinRecord(value: unknown): value is ContentPinRecord {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const pin = value as Record<string, unknown>;
+  return (
+    typeof pin.arg === "string" &&
+    typeof pin.index === "number" &&
+    Number.isInteger(pin.index) &&
+    pin.index >= 0 &&
+    typeof pin.mode === "string" &&
+    CONTENT_PIN_MODES.has(pin.mode) &&
+    typeof pin.size === "number" &&
+    Number.isInteger(pin.size) &&
+    pin.size >= 0 &&
+    typeof pin.sha256 === "string" &&
+    CONTENT_PIN_SHA256.test(pin.sha256)
+  );
+}
+
+/**
+ * Whether the reserved content-pin argument
+ * may pass allowedArguments. Only valid pin metadata qualifies: a list of
+ * 1 to CONTENT_PINS_MAX well-formed pins, each for a listed argument the
+ * call carries. It never admits any other extra argument, and it does not
+ * check the files: the SDK re-checks every pin before the tool runs.
+ */
+function contentPinsWithin(
+  value: unknown,
+  allowed: readonly string[],
+  args: ToolArguments,
+): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= CONTENT_PINS_MAX &&
+    value.every(
+      (pin) =>
+        isContentPinRecord(pin) &&
+        pin.arg !== CONTENT_PINS_ARGUMENT &&
+        allowed.includes(pin.arg) &&
+        Object.prototype.hasOwnProperty.call(args, pin.arg),
+    )
+  );
+}
+
+function ownValue(args: ToolArguments, name: string): unknown {
+  return Object.prototype.hasOwnProperty.call(args, name)
+    ? args[name]
+    : undefined;
+}
+
+/**
+ * The one reader of a tool call's amount, shared by tool.invoke's
+ * parameter gate and authority facts and by the SDK. Reads only
+ * `args[declaration.argument]` (top level, own property). Anything it
+ * cannot read exactly is refused, never read as zero: no sign, `$`,
+ * commas, spaces or exponent, and dollars are read by text arithmetic,
+ * never floating point. Without a declaration there is no amount.
+ */
+export function readToolAmount(
+  declaration: ToolAmountDeclaration | undefined,
+  args: ToolArguments,
+): ToolAmountReading {
+  if (declaration === undefined) return { kind: "none" };
+  const refuse = (code: ToolAmountRefusal): ToolAmountReading => ({
+    kind: "refused",
+    code,
+  });
+  if (
+    declaration.allowedArguments !== undefined &&
+    Object.keys(args).some(
+      (name) =>
+        !declaration.allowedArguments!.includes(name) &&
+        !(
+          name === CONTENT_PINS_ARGUMENT &&
+          contentPinsWithin(args[name], declaration.allowedArguments!, args)
+        ),
+    )
+  ) {
+    return refuse("AMOUNT_ARGUMENT_NOT_ALLOWED");
+  }
+  const raw = ownValue(args, declaration.argument);
+  if (raw === undefined || raw === null) return refuse("AMOUNT_MISSING");
+  let amountMinor: number;
+  if (declaration.unit === "minor") {
+    if (typeof raw === "number") {
+      if (!Number.isSafeInteger(raw) || raw < 0) {
+        return refuse("AMOUNT_INVALID");
+      }
+      amountMinor = raw === 0 ? 0 : raw;
+    } else if (typeof raw === "string") {
+      if (!TOOL_MINOR_UNITS.test(raw)) return refuse("AMOUNT_INVALID");
+      amountMinor = Number(raw);
+    } else {
+      return refuse("AMOUNT_INVALID");
+    }
+  } else if (typeof raw === "number") {
+    if (
+      !Number.isSafeInteger(raw) ||
+      raw < 0 ||
+      !Number.isSafeInteger(raw * 100)
+    ) {
+      return refuse("AMOUNT_INVALID");
+    }
+    amountMinor = raw === 0 ? 0 : raw * 100;
+  } else if (typeof raw === "string") {
+    const match = TOOL_MAJOR_UNITS.exec(raw);
+    if (match === null) return refuse("AMOUNT_INVALID");
+    const whole = Number(match[1]);
+    const cents = Number((match[2] ?? "").padEnd(2, "0"));
+    amountMinor = whole * 100 + cents;
+  } else {
+    return refuse("AMOUNT_INVALID");
+  }
+  if (!Number.isSafeInteger(amountMinor)) return refuse("AMOUNT_INVALID");
+  if (declaration.currencyArgument !== undefined) {
+    const currency = ownValue(args, declaration.currencyArgument);
+    if (currency === undefined || currency === null) {
+      return refuse("CURRENCY_MISSING");
+    }
+    if (
+      typeof currency !== "string" ||
+      !TOOL_AMOUNT_CURRENCIES.includes(currency.toLowerCase())
+    ) {
+      return refuse("CURRENCY_NOT_ALLOWED");
+    }
+  }
+  return { kind: "money", amountMinor, currency: "usd" };
+}
+
+function sameAmountDeclaration(
+  left: ToolAmountDeclaration | undefined,
+  right: ToolAmountDeclaration | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === undefined && right === undefined;
+  }
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+/** Methods whose rendered call carries no body (no arguments are sent). */
+const TOOL_NO_BODY_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
+
+/**
+ * Whether a call's arguments reach the tool: a record tool runs in-host
+ * with them, an http tool sends them as the JSON body, except GET and HEAD,
+ * which render no body (renderToolInvocation).
+ */
+export function toolReceivesArguments(tool: ToolDescriptor): boolean {
+  return tool.transport === "record" || !TOOL_NO_BODY_METHODS.has(tool.method);
+}
+
+/**
+ * An amount declaration binds the amount the
+ * tool receives, so it is accepted only on a tool whose arguments reach it.
+ * On a GET or HEAD tool the endpoint never sees the approved amount, and a
+ * charging endpoint could exceed the cap. Owner paths refuse such a
+ * declaration and binding refuses the call (TOOL_AMOUNT_NOT_SENT).
+ */
+export function toolAmountSendable(tool: ToolDescriptor): boolean {
+  return tool.amount === undefined || toolReceivesArguments(tool);
+}
+
 /**
  * Renders an invocation to the canonical api.request envelope the adapter
  * executes: the catalog method/url plus the arguments as a JSON body. Shared
@@ -165,9 +438,7 @@ export function renderToolInvocation(
     method: parsedTool.method,
     url: parsedTool.url,
     headers: [{ name: "content-type", value: "application/json" }],
-    ...(parsedTool.method === "GET" || parsedTool.method === "HEAD"
-      ? {}
-      : { body }),
+    ...(toolReceivesArguments(parsedTool) ? { body } : {}),
   };
 }
 
@@ -243,10 +514,38 @@ export function validateToolInvokeBinding(input: {
   if (!rendered.success) {
     return { ok: false, reasonCode: "ENDPOINT_OUTSIDE_ALLOWLIST" };
   }
+  // The echoed amount declaration must equal the owner's parsed
+  // catalog entry (both absent, or both present and equal). Compared on the
+  // strictly parsed descriptor only, never the raw stored entry, and before
+  // the record early return so record tools are covered.
+  if (
+    !sameAmountDeclaration(input.params.amountArgument, rendered.data.amount)
+  ) {
+    return { ok: false, reasonCode: "TOOL_AMOUNT_DECLARATION_MISMATCH" };
+  }
+  // A declared amount on a tool that sends no arguments (GET, HEAD) never
+  // reaches the endpoint, so it cannot bind what is charged (fail closed).
+  if (!toolAmountSendable(rendered.data)) {
+    return { ok: false, reasonCode: "TOOL_AMOUNT_NOT_SENT" };
+  }
   // A record-transport tool has no endpoint: the impl runs inside the
   // tool-server host at commit, so no allowlist leg exists.
   if (rendered.data.transport === "record") {
     return { ok: true };
+  }
+  // readToolAmount lets content pins past allowedArguments because the
+  // SDK removes them before a record tool runs. An http tool would
+  // send them to the endpoint as an argument the owner did not list.
+  const allowed = rendered.data.amount?.allowedArguments;
+  if (
+    allowed !== undefined &&
+    Object.prototype.hasOwnProperty.call(
+      input.params.arguments,
+      CONTENT_PINS_ARGUMENT,
+    ) &&
+    !allowed.includes(CONTENT_PINS_ARGUMENT)
+  ) {
+    return { ok: false, reasonCode: "TOOL_ARGUMENT_NOT_ALLOWED" };
   }
   if (
     !apiEndpointWithinAllowlist(
@@ -266,6 +565,11 @@ export function validateMcpInstallBinding(input: {
     endpointAllowlist?: readonly string[];
   };
 }): { ok: true } | { ok: false; reasonCode: string } {
+  // Amount declarations are set by the owner only, never by an
+  // agent's install.
+  if (input.params.tool.amount !== undefined) {
+    return { ok: false, reasonCode: "TOOL_AMOUNT_OWNER_ONLY" };
+  }
   const tools = input.connection.toolServer?.tools;
   if (tools === undefined) {
     return { ok: false, reasonCode: "CONNECTION_UNAVAILABLE" };
