@@ -100,6 +100,50 @@ function whole(value: unknown, what: string, min: number, max: number): number {
   return value;
 }
 
+/** Totals that add to the items, and totals that are taken off them. */
+const ADDED: readonly TotalType[] = ["tax", "fulfillment", "shipping", "fee", "gift_wrap", "tip"];
+const TAKEN_OFF: readonly TotalType[] = ["discount", "store_credit"];
+
+/**
+ * The line items and totals must add up, so the person is not shown a $3
+ * item for a $199.99 total. With `items` the sum of quantity x unit amount:
+ * - `items_base_amount`, if given (once), equals `items`;
+ * - `subtotal`, if given (once), equals `items` minus `items_discount`;
+ * - `total` equals `items` minus `items_discount`, `discount` and
+ *   `store_credit`, plus `tax`, `fulfillment`, `shipping`, `fee`,
+ *   `gift_wrap` and `tip`.
+ * Amounts are given as positive numbers. Anything else is refused.
+ */
+function checkArithmetic(
+  lineItems: readonly { quantity: number; unitAmount: number }[],
+  totals: readonly { type: TotalType; amount: number }[],
+): void {
+  const items = lineItems.reduce((sum, it) => sum + it.quantity * it.unitAmount, 0);
+  const sumOf = (types: readonly TotalType[]) =>
+    totals.filter((t) => types.includes(t.type)).reduce((sum, t) => sum + t.amount, 0);
+  const once = (type: TotalType) => {
+    const found = totals.filter((t) => t.type === type);
+    if (found.length > 1) throw refused("TOTAL_MISMATCH", `totals may list ${type} only once.`);
+    return found[0]?.amount;
+  };
+  const itemsDiscount = sumOf(["items_discount"]);
+  const base = once("items_base_amount");
+  if (base !== undefined && base !== items) {
+    throw refused("TOTAL_MISMATCH", "items_base_amount must equal the line items (quantity x unit amount).");
+  }
+  const subtotal = once("subtotal");
+  if (subtotal !== undefined && subtotal !== items - itemsDiscount) {
+    throw refused("TOTAL_MISMATCH", "subtotal must equal the line items less items_discount.");
+  }
+  const expected = items - itemsDiscount - sumOf(TAKEN_OFF) + sumOf(ADDED);
+  if (once("total") !== expected) {
+    throw refused(
+      "TOTAL_MISMATCH",
+      "total must equal the line items less discounts plus tax, shipping, fees and tip.",
+    );
+  }
+}
+
 export function amountDisplay(amount: number, currency: string): string {
   const whole = Math.floor(amount / 100);
   const cents = String(amount % 100).padStart(2, "0");
@@ -177,6 +221,7 @@ export function readTerms(
   if (grand.length !== 1 || grand[0]!.amount !== amount) {
     throw refused("TOTAL_MISMATCH", "totals must have exactly one total entry, equal to amount.");
   }
+  checkArithmetic(lineItems, totals);
 
   const context = text(raw.context, "context", { min: LINK_MIN_CONTEXT, max: MAX_CONTEXT });
 
@@ -215,8 +260,16 @@ export function differences(
   if (typeof view.currency !== "string" || view.currency.toLowerCase() !== terms.currency) {
     out.push("currency");
   }
-  if (view.credentialType !== undefined && view.credentialType !== "card") out.push("credentialType");
-  if (view.context !== undefined && view.context !== terms.context) out.push("context");
+  if (view.credentialType !== "card") out.push("credentialType");
+  if (view.context !== terms.context) out.push("context");
+  // Fields Link returned that the guard never sets and cannot accept, such
+  // as a recurring schedule or metadata (the adapter names them).
+  if (!Array.isArray(view.unexpectedFields)) out.push("unexpectedFields");
+  else {
+    for (const name of view.unexpectedFields) {
+      out.push(typeof name === "string" && /^[a-z0-9_.[\]]{1,64}$/.test(name) ? name : "unexpectedFields");
+    }
+  }
   const items = view.lineItems;
   if (
     !Array.isArray(items) ||

@@ -34,6 +34,16 @@ export function terms(overrides: Partial<Record<keyof LinkSpendTerms, unknown>> 
   } as LinkSpendTerms;
 }
 
+/** Terms for one item at `amount`, with a matching total. */
+export function priced(amount: number, overrides: Partial<Record<keyof LinkSpendTerms, unknown>> = {}): LinkSpendTerms {
+  return terms({
+    amount,
+    lineItems: [{ name: "Working in Public", quantity: 1, unitAmount: amount }],
+    totals: [{ type: "total", displayText: "Total", amount }],
+    ...overrides,
+  });
+}
+
 let log: string[] | undefined;
 /** One shared order log: fake Guardian and fake Link calls. */
 export function orderLog(): string[] {
@@ -286,8 +296,9 @@ export function fakeLink(opts: FakeLinkOptions = {}): FakeLink {
         totals: input.totals.map((t) => ({ ...t })),
         test: input.test,
         idempotencyKey: input.idempotencyKey,
+        unexpectedFields: [],
         ...(opts.createAs?.(input) ?? {}),
-      };
+      } as StoredRequest;
       if (!requests.has(id)) requests.set(id, stored);
       byKey.set(input.idempotencyKey, id);
       if (opts.createThrows === "after-create") throw new Error("timeout");

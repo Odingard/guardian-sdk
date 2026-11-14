@@ -58,6 +58,13 @@ export type LinkSpendRequestView = Readonly<{
   credentialType?: string;
   lineItems?: readonly Readonly<{ name?: unknown; quantity?: unknown; unitAmount?: unknown }>[];
   totals?: readonly Readonly<{ type?: unknown; displayText?: unknown; amount?: unknown }>[];
+  /**
+   * Names of fields Link returned that the guard neither compares nor can
+   * accept (a recurring schedule, metadata, a line item's URL, an unknown
+   * field, an expiry past Link's one-time default). Empty when none; the
+   * guard refuses any spend request where it is not empty.
+   */
+  unexpectedFields: readonly string[];
 }>;
 
 /** Raw card details, as the adapter read them. The guard wraps them in a `LinkCard`. */

@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLinkGuard, linkCliAdapter, type LinkCliRunner } from "../src/index.js";
 import { CONNECTION, fakeGuardian, TEST_CARD_NUMBER, TEST_CVC, terms, testStore } from "./helpers.js";
 
+/** The CLI by absolute path: node and a script (never run: the runner is a fake). */
+const COMMAND = [process.execPath, "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"];
+
 let dir: string;
 let auth: string;
 let cardDir: string;
@@ -40,16 +43,20 @@ const VALUE_FLAGS = new Set([
   "--output-file",
 ]);
 
-type FakeCliOptions = { policy?: "none-404" | "empty" | "rules" | "auth-error" };
+type FakeCliOptions = {
+  policy?: "none-404" | "other-404" | "empty" | "rules" | "auth-error";
+  /** Extra fields Link returns on every spend request. */
+  extra?: Record<string, unknown>;
+};
 
 /** A fake link-cli: parses the flags the adapter sends and keeps requests in memory. */
 function fakeCli(opts: FakeCliOptions = {}) {
-  const runs: { file: string; args: string[]; env: Record<string, string | undefined> }[] = [];
+  const runs: { file: string; args: string[]; env: Record<string, string | undefined>; cwd: string }[] = [];
   const reqs = new Map<string, Record<string, unknown>>();
   let n = 0;
   const run: LinkCliRunner = async (file, argv, o) => {
-    runs.push({ file, args: [...argv], env: { ...o.env } });
-    const args = argv[0] === "@stripe/link-cli" ? argv.slice(1) : [...argv];
+    runs.push({ file, args: [...argv], env: { ...o.env }, cwd: o.cwd });
+    const args = argv[0] === COMMAND[1] ? argv.slice(1) : [...argv];
     const flags: Record<string, string[]> = {};
     const pos: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
@@ -69,7 +76,17 @@ function fakeCli(opts: FakeCliOptions = {}) {
       if (opts.policy === "rules") return ok({ rules: [{ action: "create", limits: {} }] });
       if (opts.policy === "empty") return ok({ rules: [] });
       if (opts.policy === "auth-error") return { exitCode: 1, stdout: "", stderr: "Failed to retrieve approval policy (401): unauthorized" };
-      return { exitCode: 1, stdout: JSON.stringify({ code: "UNKNOWN", message: "Failed to retrieve approval policy (404): no policy" }), stderr: "" };
+      if (opts.policy === "other-404") {
+        return { exitCode: 1, stdout: JSON.stringify({ message: "Failed to retrieve approval policy (404): Not found" }), stderr: "" };
+      }
+      return {
+        exitCode: 1,
+        stdout: JSON.stringify({
+          code: "UNKNOWN",
+          message: "Failed to retrieve approval policy (404): No approval policy has been configured",
+        }),
+        stderr: "",
+      };
     }
     if (group === "spend-request" && cmd === "create") {
       n += 1;
@@ -91,6 +108,12 @@ function fakeCli(opts: FakeCliOptions = {}) {
           const o = kv(s);
           return { type: o.type, display_text: o.display_text, amount: Number(o.amount) };
         }),
+        payment_details: "csmrpd_test_1",
+        created_at: "2026-11-14T10:00:00Z",
+        updated_at: "2026-11-14T10:00:00Z",
+        expires_at: "2026-11-21T10:00:00Z",
+        recurring: null,
+        ...opts.extra,
       };
       reqs.set(rid, r);
       return ok(r);
@@ -124,7 +147,7 @@ describe("linkCliAdapter", () => {
     const prev = process.env.LINK_ACCESS_TOKEN;
     process.env.LINK_ACCESS_TOKEN = "agent-token-must-not-be-used";
     try {
-      const link = linkCliAdapter({ authPath: auth, run: cli.run, tmpDir: cardDir, command: ["npx", "@stripe/link-cli"] });
+      const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: cli.run, tmpDir: cardDir });
       const guard = createLinkGuard({
         guardian: fakeGuardian(),
         connectionId: CONNECTION,
@@ -138,8 +161,9 @@ describe("linkCliAdapter", () => {
       expect(last4).toBe(TEST_CARD_NUMBER.slice(-4));
 
       for (const r of cli.runs) {
-        expect(r.file).toBe("npx");
-        expect(r.args[0]).toBe("@stripe/link-cli");
+        expect(r.file).toBe(COMMAND[0]);
+        expect(r.args[0]).toBe(COMMAND[1]);
+        expect(r.cwd.startsWith(join(cardDir, "guardian-link-"))).toBe(true);
         expect(r.args.slice(-4)).toEqual(["--format", "json", "--auth", auth]);
         expect(r.args).not.toContain("--approve");
         expect(r.args).not.toContain("--use-approval-policy");
@@ -169,22 +193,23 @@ describe("linkCliAdapter", () => {
 
   it("reads the approval policy: 404 or no rules is none, rules is present, anything else unknown", async () => {
     const states: string[] = [];
-    for (const policy of ["none-404", "empty", "rules", "auth-error"] as const) {
-      const link = linkCliAdapter({ authPath: auth, run: fakeCli({ policy }).run });
+    for (const policy of ["none-404", "other-404", "empty", "rules", "auth-error"] as const) {
+      const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: fakeCli({ policy }).run });
       states.push((await link.approvalPolicy()).state);
     }
-    expect(states).toEqual(["none", "none", "present", "unknown"]);
+    // A 404 without Link's documented "No approval policy has been configured" is unknown.
+    expect(states).toEqual(["none", "unknown", "none", "present", "unknown"]);
   });
 
   it("refuses a login file anyone else can read, a relative path or a missing file", () => {
     chmodSync(auth, 0o644);
-    expect(() => linkCliAdapter({ authPath: auth, run: fakeCli().run })).toThrow(/owner only/);
-    expect(() => linkCliAdapter({ authPath: "link-auth.json", run: fakeCli().run })).toThrow(/absolute/);
-    expect(() => linkCliAdapter({ authPath: join(dir, "missing.json"), run: fakeCli().run })).toThrow(/does not exist/);
+    expect(() => linkCliAdapter({ authPath: auth, command: COMMAND, run: fakeCli().run })).toThrow(/owner only/);
+    expect(() => linkCliAdapter({ authPath: "link-auth.json", command: COMMAND, run: fakeCli().run })).toThrow(/absolute/);
+    expect(() => linkCliAdapter({ authPath: join(dir, "missing.json"), command: COMMAND, run: fakeCli().run })).toThrow(/does not exist/);
   });
 
   it("creates test-mode card requests only", async () => {
-    const link = linkCliAdapter({ authPath: auth, run: fakeCli().run });
+    const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: fakeCli().run });
     const base = {
       credentialType: "card",
       merchantName: "M",
@@ -207,7 +232,7 @@ describe("linkCliAdapter", () => {
       stdout: `{"card":{"number":"${TEST_CARD_NUMBER}"}}`,
       stderr: `cvc ${TEST_CVC}`,
     });
-    const link = linkCliAdapter({ authPath: auth, run: leaky, tmpDir: cardDir });
+    const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: leaky, tmpDir: cardDir });
     const err = await link.readCard("lsrq_cli_1").then(() => new Error("no refusal"), (e: unknown) => e as Error);
     expect(err.message).not.toContain(TEST_CARD_NUMBER);
     expect(err.message).not.toContain(TEST_CVC);
@@ -216,7 +241,7 @@ describe("linkCliAdapter", () => {
 
   it("refuses ids that are not Link spend request ids", async () => {
     const cli = fakeCli();
-    const link = linkCliAdapter({ authPath: auth, run: cli.run });
+    const link = linkCliAdapter({ authPath: auth, command: COMMAND, run: cli.run });
     await expect(link.retrieveSpendRequest("--include")).rejects.toThrow(/spend request id/);
     await expect(link.readCard("lsrq_1;rm -rf")).rejects.toThrow(/spend request id/);
     expect(cli.runs).toHaveLength(0);
@@ -228,7 +253,7 @@ describe("linkCliAdapter", () => {
       writeFileSync(out, JSON.stringify({ spend_request_id: "lsrq_other", card: { number: TEST_CARD_NUMBER } }));
       return { exitCode: 0, stdout: JSON.stringify([{ id: "lsrq_cli_1", status: "approved" }]), stderr: "" };
     };
-    const link = linkCliAdapter({ authPath: auth, run, tmpDir: cardDir });
+    const link = linkCliAdapter({ authPath: auth, command: COMMAND, run, tmpDir: cardDir });
     await expect(link.readCard("lsrq_cli_1")).rejects.toThrow(/card file/);
     expect(readdirSync(cardDir)).toEqual([]);
     expect(existsSync(join(cardDir, "card.json"))).toBe(false);

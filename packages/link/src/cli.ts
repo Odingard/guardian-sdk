@@ -1,13 +1,23 @@
 // A Link adapter that runs the Stripe Link CLI (`link-cli`, from
-// `@stripe/link-cli`) in test mode. It holds the path to the guard's own
-// Link login file, refuses a login file anyone else can read, passes
-// `--test` on every create, never passes `--approve` or
-// `--use-approval-policy`, reads cards only through `--output-file` into a
-// private folder it deletes, and never puts the CLI's output in an error.
+// `@stripe/link-cli`) in test mode. It runs the CLI by absolute path only
+// (never through PATH or npx), from a private folder of its own, holds the
+// path to the guard's own Link login file, refuses a login file anyone else
+// can read or change, passes `--test` on every create, never passes
+// `--approve` or `--use-approval-policy`, reads cards only through
+// `--output-file` into that private folder, which is deleted when the call
+// ends, and never puts the CLI's output in an error.
 import { execFile } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import type {
   LinkAdapter,
@@ -28,23 +38,43 @@ export type LinkCliRunResult = Readonly<{ exitCode: number; stdout: string; stde
 export type LinkCliRunner = (
   file: string,
   args: readonly string[],
-  opts: Readonly<{ timeoutMs: number; env: Readonly<Record<string, string | undefined>> }>,
+  opts: Readonly<{
+    timeoutMs: number;
+    env: Readonly<Record<string, string | undefined>>;
+    /** A private folder the adapter made for this call. */
+    cwd: string;
+  }>,
 ) => Promise<LinkCliRunResult>;
 
 export type LinkCliAdapterConfig = Readonly<{
   /**
    * The guard's own Link login file (`link-cli auth login --auth <path>`).
-   * Must be a regular file readable by its owner only (mode 0600). Never
-   * give this path to the agent.
+   * Must be an absolute path ending in `.json`, to a regular file (not a
+   * link, one hard link only) owned by the user running the guard and
+   * readable by that user only (mode 0600), in a folder owned by that user
+   * that no one else can write to. Never give this path to the agent.
    */
   authPath: string;
-  /** The CLI command. Default `["link-cli"]`. For example `["npx", "@stripe/link-cli@<version>"]`. */
-  command?: readonly string[];
+  /**
+   * The CLI command, by absolute path: for example
+   * `["/usr/bin/node", "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"]`.
+   * The first entry must be an absolute path to a file no one else can
+   * write to; a bare name (looked up in PATH) and npx, npm, pnpm, yarn or
+   * bun are refused. Other entries that are not flags must be absolute
+   * paths. The CLI runs from a private folder the adapter makes, never from
+   * the guard's working folder.
+   */
+  command: readonly string[];
   /** Per-command limit. Default 60 s. */
   timeoutMs?: number;
   /** For tests: runs the command. Default: `execFile`, no shell. */
   run?: LinkCliRunner;
-  /** For tests: where the private card folder is made. Default: the OS temp folder. */
+  /**
+   * Where the adapter makes its private folder for each call (and reads the
+   * card in it). Default: the OS temp folder. Folders left behind by a
+   * crash (`guardian-link-*`, owned by this user, older than twice the
+   * per-command limit) are wiped when the adapter is built.
+   */
   tmpDir?: string;
 }>;
 
@@ -78,6 +108,7 @@ const defaultRun: LinkCliRunner = (file, args, opts) =>
         timeout: opts.timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
         env: opts.env as NodeJS.ProcessEnv,
+        cwd: opts.cwd,
         windowsHide: true,
         shell: false,
       },
@@ -93,10 +124,13 @@ const defaultRun: LinkCliRunner = (file, args, opts) =>
     );
   });
 
+const uid = () => (typeof process.getuid === "function" ? process.getuid() : undefined);
+
 function checkAuthFile(path: string): void {
   if (typeof path !== "string" || !isAbsolute(path)) {
     throw new Error("guardian-link: `authPath` must be an absolute path.");
   }
+  if (!path.endsWith(".json")) throw new Error("guardian-link: `authPath` must end in .json.");
   let st;
   try {
     st = lstatSync(path);
@@ -104,11 +138,88 @@ function checkAuthFile(path: string): void {
     throw new Error("guardian-link: the Link login file does not exist; run `link-cli auth login --auth <path>` first.");
   }
   if (!st.isFile()) throw new Error("guardian-link: the Link login file must be a regular file, not a link.");
+  if (st.nlink !== 1) throw new Error("guardian-link: the Link login file must have exactly one hard link.");
   if ((st.mode & 0o077) !== 0) {
     throw new Error("guardian-link: the Link login file must be readable by its owner only (chmod 600).");
   }
-  if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+  if (uid() !== undefined && st.uid !== uid()) {
     throw new Error("guardian-link: the Link login file must belong to the user running the guard.");
+  }
+  let parent;
+  try {
+    parent = lstatSync(dirname(path));
+  } catch {
+    throw new Error("guardian-link: the Link login file's folder cannot be read.");
+  }
+  if (!parent.isDirectory()) throw new Error("guardian-link: the Link login file's folder must be a folder, not a link.");
+  if (uid() !== undefined && parent.uid !== uid()) {
+    throw new Error("guardian-link: the Link login file's folder must belong to the user running the guard.");
+  }
+  if ((parent.mode & 0o022) !== 0) {
+    throw new Error("guardian-link: no one else may write to the Link login file's folder (chmod go-w).");
+  }
+}
+
+/** Package runners that would fetch or resolve the CLI by name. */
+const RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx"]);
+
+function checkCommand(command: unknown): string[] {
+  if (!Array.isArray(command) || command.length === 0 || !command.every((c) => typeof c === "string" && c)) {
+    throw new Error("guardian-link: `command` must list the CLI and its leading arguments.");
+  }
+  const [file, ...lead] = command as string[];
+  if (!isAbsolute(file!)) {
+    throw new Error("guardian-link: `command` must start with an absolute path; a name looked up in PATH is refused.");
+  }
+  if (RUNNERS.has(basename(file!).replace(/\.(cmd|exe)$/i, "").toLowerCase())) {
+    throw new Error("guardian-link: run the Link CLI by its own path, not through npx, npm, pnpm, yarn or bun.");
+  }
+  for (const arg of lead) {
+    if (!arg.startsWith("-") && !isAbsolute(arg)) {
+      throw new Error("guardian-link: every `command` entry that is not a flag must be an absolute path.");
+    }
+  }
+  let st;
+  try {
+    st = statSync(file!);
+  } catch {
+    throw new Error("guardian-link: the `command` file does not exist.");
+  }
+  if (!st.isFile()) throw new Error("guardian-link: the `command` file must be a file.");
+  if ((st.mode & 0o022) !== 0) throw new Error("guardian-link: no one else may write to the `command` file.");
+  return command as string[];
+}
+
+const DIR_PREFIX = "guardian-link-";
+
+/**
+ * Wipes and removes private folders a crash left behind: only folders
+ * named `guardian-link-*`, owned by this user and not changed for longer
+ * than `staleMs` (so a call still running elsewhere keeps its folder).
+ */
+function sweepStale(base: string, staleMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(base);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - staleMs;
+  for (const name of names) {
+    if (!name.startsWith(DIR_PREFIX)) continue;
+    const dir = join(base, name);
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory() || (uid() !== undefined && st.uid !== uid()) || st.mtimeMs > cutoff) continue;
+      for (const f of readdirSync(dir)) {
+        const fp = join(dir, f);
+        const fst = lstatSync(fp);
+        if (fst.isFile()) writeFileSync(fp, Buffer.alloc(fst.size));
+      }
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
   }
 }
 
@@ -135,9 +246,95 @@ function parseOutput(stdout: string): Record<string, unknown> | null {
 const num = (v: unknown) => (typeof v === "number" ? v : undefined);
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
-/** Reads Link's snake_case spend request into the guard's view. Drops any card. */
+/** Link fields the guard compares with the decided terms. */
+const COMPARED = new Set([
+  "merchant_name",
+  "merchant_url",
+  "context",
+  "amount",
+  "currency",
+  "credential_type",
+  "line_items",
+  "totals",
+]);
+/**
+ * Link fields that are not spend terms: Link's own state, and the person's
+ * own payment method, chosen in Link. Not compared. `card` is dropped.
+ */
+const NOT_TERMS = new Set([
+  "id",
+  "status",
+  "payment_method",
+  "payment_details",
+  "network_id",
+  "card_brand",
+  "card_last4",
+  "approval_url",
+  "card",
+  "card_output_file",
+  "status_details",
+  "payment_status_details",
+  "link_transaction_id",
+  "activity_url",
+  "created_at",
+  "updated_at",
+]);
+/** Link fields the guard never sets: they must be absent, null or empty. */
+const MUST_BE_EMPTY = new Set(["recurring", "metadata", "shared_payment_token", "link_pay_token"]);
+const LINE_ITEM_FIELDS = new Set(["name", "quantity", "unit_amount"]);
+const TOTAL_FIELDS = new Set(["type", "display_text", "amount"]);
+/** Link's default expiry for a one-time request is 7 days; one hour of slack. */
+const MAX_EXPIRY_MS = 7 * 24 * 3_600_000 + 3_600_000;
+
+const empty = (v: unknown) =>
+  v === undefined || v === null || v === "" || (isPlainObject(v) && Object.keys(v).length === 0);
+
+/** Names of fields in `raw` the guard does not accept. */
+function unexpectedFields(raw: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(raw)) {
+    if (COMPARED.has(key) || NOT_TERMS.has(key)) continue;
+    if (MUST_BE_EMPTY.has(key)) {
+      if (!empty(value)) out.push(key);
+      continue;
+    }
+    if (key === "expires_at") {
+      if (value === null || value === undefined) continue;
+      const created = typeof raw.created_at === "string" ? Date.parse(raw.created_at) : NaN;
+      const expires = typeof value === "string" ? Date.parse(value) : NaN;
+      if (!Number.isFinite(created) || !Number.isFinite(expires) || expires - created > MAX_EXPIRY_MS) {
+        out.push("expires_at");
+      }
+      continue;
+    }
+    out.push(/^[a-z0-9_]{1,64}$/.test(key) ? key : "unknown_field");
+  }
+  const nested = (list: unknown, name: string, allowed: Set<string>) => {
+    if (!Array.isArray(list)) return;
+    list.forEach((it: unknown, i: number) => {
+      if (!isPlainObject(it)) return;
+      for (const [key, value] of Object.entries(it)) {
+        if (!allowed.has(key) && value !== null && value !== undefined) {
+          out.push(`${name}[${i}].${/^[a-z0-9_]{1,64}$/.test(key) ? key : "unknown_field"}`);
+        }
+      }
+    });
+  };
+  nested(raw.line_items, "line_items", LINE_ITEM_FIELDS);
+  nested(raw.totals, "totals", TOTAL_FIELDS);
+  return out;
+}
+
+/**
+ * Reads Link's snake_case spend request into the guard's view. Drops any
+ * card. Fields the guard does not accept are named in `unexpectedFields`.
+ */
 export function viewFromLink(raw: Record<string, unknown>): LinkSpendRequestView {
-  const view: Record<string, unknown> = { id: str(raw.id) ?? "", status: str(raw.status) ?? "" };
+  const view: Record<string, unknown> = {
+    id: str(raw.id) ?? "",
+    status: str(raw.status) ?? "",
+    unexpectedFields: unexpectedFields(raw),
+  };
   const set = (key: string, value: unknown) => {
     if (value !== undefined) view[key] = value;
   };
@@ -160,6 +357,9 @@ export function viewFromLink(raw: Record<string, unknown>): LinkSpendRequestView
   return view as LinkSpendRequestView;
 }
 
+/** What the CLI prints (JSON, exit 1) when no approval policy exists. */
+const NO_POLICY_MESSAGE = "Failed to retrieve approval policy (404): No approval policy has been configured";
+
 function checkId(id: string): void {
   if (typeof id !== "string" || !SPEND_REQUEST_ID_RE.test(id)) {
     throw new Error("guardian-link: not a Link spend request id.");
@@ -172,27 +372,43 @@ function checkId(id: string): void {
  */
 export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
   checkAuthFile(config.authPath);
-  const command = config.command ?? ["link-cli"];
-  if (!Array.isArray(command) || command.length === 0 || !command.every((c) => typeof c === "string" && c)) {
-    throw new Error("guardian-link: `command` must list the CLI and its leading arguments.");
-  }
-  const [file, ...lead] = command as string[];
+  const [file, ...lead] = checkCommand(config.command);
   const run = config.run ?? defaultRun;
   const timeoutMs = config.timeoutMs ?? 60_000;
   const authPath = config.authPath;
+  const base = config.tmpDir ?? tmpdir();
   const env: Record<string, string | undefined> = { ...process.env, NO_UPDATE_NOTIFIER: "1" };
   for (const k of STRIPPED_ENV) delete env[k];
+  sweepStale(base, 2 * timeoutMs + 60_000);
 
-  const cli = async (what: string, args: readonly string[]): Promise<LinkCliRunResult> => {
-    checkAuthFile(authPath);
-    let result: LinkCliRunResult;
+  /** Runs one command from a fresh private folder (mode 0700), deleted when the call ends. */
+  const inPrivateDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(base, DIR_PREFIX));
     try {
-      result = await run(file!, [...lead, ...args, "--format", "json", "--auth", authPath], { timeoutMs, env });
+      return await fn(dir);
+    } finally {
+      try {
+        for (const f of readdirSync(dir)) {
+          const fp = join(dir, f);
+          const st = lstatSync(fp);
+          if (st.isFile()) writeFileSync(fp, Buffer.alloc(st.size));
+        }
+      } catch {
+        // nothing was written
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const cliIn = async (dir: string, what: string, args: readonly string[]): Promise<LinkCliRunResult> => {
+    checkAuthFile(authPath);
+    try {
+      return await run(file!, [...lead, ...args, "--format", "json", "--auth", authPath], { timeoutMs, env, cwd: dir });
     } catch {
       throw new LinkCliError(what, null);
     }
-    return result;
   };
+  const cli = (what: string, args: readonly string[]) => inPrivateDir((dir) => cliIn(dir, what, args));
 
   const request = async (what: string, args: readonly string[]): Promise<LinkSpendRequestView> => {
     const result = await cli(what, args);
@@ -206,9 +422,10 @@ export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
     async approvalPolicy(): Promise<LinkApprovalPolicyState> {
       const result = await cli("approval-policy retrieve", ["approval-policy", "retrieve"]);
       if (result.exitCode !== 0) {
-        // Link answers "no policy" with an API error. Only a 404 for this
-        // call is read as "none"; any other failure is unknown.
-        return /retrieve approval policy \(404\)/.test(`${result.stdout}\n${result.stderr}`)
+        // Link answers "no policy" with a 404 and its documented message.
+        // Only exactly that is read as "none"; any other failure is unknown.
+        const out = parseOutput(result.stdout);
+        return out && out.message === NO_POLICY_MESSAGE
           ? { state: "none" }
           : { state: "unknown", detail: "approval-policy retrieve failed" };
       }
@@ -275,29 +492,23 @@ export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
 
     async readCard(id: string) {
       checkId(id);
-      const dir = mkdtempSync(join(config.tmpDir ?? tmpdir(), "guardian-link-"));
-      const out = join(dir, "card.json");
-      try {
-        const result = await cli("spend-request retrieve --include card", [
-          "spend-request",
-          "retrieve",
-          id,
-          "--include",
-          "card",
-          "--output-file",
-          out,
-        ]);
-        if (result.exitCode !== 0) throw new LinkCliError("spend-request retrieve --include card", result.exitCode);
+      // The card file is written into the call's private folder, which is
+      // wiped and deleted when the call ends.
+      return inPrivateDir(async (dir) => {
+        const out = join(dir, "card.json");
+        const what = "spend-request retrieve --include card";
+        const result = await cliIn(dir, what, ["spend-request", "retrieve", id, "--include", "card", "--output-file", out]);
+        if (result.exitCode !== 0) throw new LinkCliError(what, result.exitCode);
         const shown = parseOutput(result.stdout);
-        if (!shown) throw new LinkCliError("spend-request retrieve --include card", result.exitCode);
+        if (!shown) throw new LinkCliError(what, result.exitCode);
         let saved: unknown;
         try {
           saved = JSON.parse(readFileSync(out, "utf8"));
         } catch {
-          throw new LinkCliError("spend-request retrieve --include card (card file)", result.exitCode);
+          throw new LinkCliError(`${what} (card file)`, result.exitCode);
         }
         if (!isPlainObject(saved) || saved.spend_request_id !== id || !isPlainObject(saved.card)) {
-          throw new LinkCliError("spend-request retrieve --include card (card file)", result.exitCode);
+          throw new LinkCliError(`${what} (card file)`, result.exitCode);
         }
         const c = saved.card;
         const card: LinkCardData = {
@@ -312,15 +523,7 @@ export function linkCliAdapter(config: LinkCliAdapterConfig): LinkAdapter {
           ...(typeof c.valid_until === "string" ? { validUntil: c.valid_until } : {}),
         };
         return { request: viewFromLink(shown), card };
-      } finally {
-        try {
-          const size = statSync(out).size;
-          writeFileSync(out, Buffer.alloc(size));
-        } catch {
-          // no file was written
-        }
-        rmSync(dir, { recursive: true, force: true });
-      }
+      });
     },
 
     async cancelSpendRequest(id: string) {

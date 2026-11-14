@@ -404,7 +404,7 @@ export class LinkGuard {
     const needsPerson = reasons.length > 0;
     const tool = needsPerson ? SPEND_ABOVE_CAP_TOOL : SPEND_TOOL;
     const args = { ...terms, spendRequestId, reviewReasons: [...reasons] };
-    const purpose = `${spendRequestId ? "Change a" : "Create a"} Stripe Link test spend request: ${terms.amountDisplay} at ${terms.merchantName} (${terms.merchantHost})${needsPerson ? " (needs a person's approval)" : ""}`;
+    const purpose = `${spendRequestId ? "Change a" : "Create a"} Stripe Link test spend request: ${terms.amountDisplay} at merchant ${JSON.stringify(terms.merchantName)} (${terms.merchantHost})${needsPerson ? " (needs a person's approval)" : ""}`;
     const redeemed = await decideAndRedeem(this.#decision, tool, args, purpose, needsPerson);
     return { tool, ...redeemed };
   }
@@ -555,6 +555,12 @@ export class LinkGuard {
         createdAtMs: this.#now(),
       };
       await this.#ledger.claimUpdate(next, spendRequestId, entry.requestId);
+      try {
+        await this.#checkNoPolicy();
+      } catch (error) {
+        await this.#ledger.mark(d.requestId, "refused").catch(() => undefined);
+        throw error;
+      }
       let view: LinkSpendRequestView;
       try {
         view = await this.#link.updateSpendRequest(spendRequestId, {
@@ -583,6 +589,21 @@ export class LinkGuard {
       }
       const fields = differences(terms, view, spendRequestId);
       if (fields.length > 0) await this.#refuseChanged({ ...next, spendRequestId }, view, fields);
+      if (view.status !== "created") {
+        await this.#ledger.mark(d.requestId, "refused").catch(() => undefined);
+        await this.#cancelQuietly(spendRequestId);
+        throw view.status === "approved"
+          ? refused(
+              "LINK_APPROVAL_POLICY_PRESENT",
+              "Link approved the updated spend request without the person; it was canceled.",
+              undefined,
+              { requestId: d.requestId, spendRequestId },
+            )
+          : refused("WRONG_STATE", `Link updated the spend request to ${view.status}; it was canceled.`, undefined, {
+              requestId: d.requestId,
+              spendRequestId,
+            });
+      }
       await this.#ledger.move(d.requestId, ["acting"], "created", () =>
         refused("WRONG_STATE", "This decision changed state.", undefined, { requestId: d.requestId }),
       );
@@ -761,10 +782,15 @@ export class LinkGuard {
     }
   }
 
-  /** Cancels a spend request this guard created. */
+  /**
+   * Cancels a spend request this guard created. The guard's ledger marks it
+   * canceled first, so the guard does nothing more with it even if Link
+   * does not confirm the cancel.
+   */
   async cancel(spendRequestId: string): Promise<void> {
     return this.#guarded(async () => {
       const entry = await this.#current(spendRequestId);
+      await this.#ledger.mark(entry.requestId, "canceled");
       await this.#call("cancel", () => this.#link.cancelSpendRequest(spendRequestId), { spendRequestId });
       this.#record({ event: "canceled", requestId: entry.requestId, spendRequestId });
     }, spendRequestId);

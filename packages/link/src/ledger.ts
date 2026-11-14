@@ -2,12 +2,15 @@
 // acted on. Kept in a developer-supplied compare-and-set store, so a
 // restart forgets neither which decisions were used nor which cards were
 // read. Never holds card details.
-import type { CanonicalTerms } from "./terms.js";
-import { refused } from "./util.js";
+import { SPEND_ABOVE_CAP_TOOL, SPEND_REQUEST_ID_RE, SPEND_TOOL, SUPPORTED_CURRENCIES } from "./constants.js";
+import { readTerms, type CanonicalTerms } from "./terms.js";
+import { isPlainObject, refused } from "./util.js";
 
 /**
  * A durable key-value store with an atomic compare-and-set, supplied by the
- * developer (a database row with a version column, for example).
+ * developer (a database row with a version column, for example). Only the
+ * guard may be able to write to it: whoever can write it can mark a used
+ * decision unused. The guard refuses a stored entry it cannot read exactly.
  */
 export interface LinkGuardStore {
   /** The current value and its version, or null when the key is absent. */
@@ -29,6 +32,7 @@ export interface LinkGuardStore {
  * - superseded: an approved update replaced these terms
  * - outcome-unknown: a Link call was sent and its outcome is unknown
  * - refused: Link returned something other than the decided terms
+ * - canceled: canceled through the guard
  */
 export type DecisionEntry = {
   requestId: string;
@@ -42,7 +46,8 @@ export type DecisionEntry = {
     | "card-read"
     | "superseded"
     | "outcome-unknown"
-    | "refused";
+    | "refused"
+    | "canceled";
   spendRequestId?: string;
   /** For an update: the decision it replaced. */
   replaces?: string;
@@ -74,6 +79,64 @@ export function processStore(): LinkGuardStore {
 
 const live = (e: DecisionEntry) => e.state !== "superseded";
 
+const STATES: readonly DecisionEntry["state"][] = [
+  "acting",
+  "created",
+  "approval-requested",
+  "card-read",
+  "superseded",
+  "outcome-unknown",
+  "refused",
+  "canceled",
+];
+const ENTRY_KEYS = new Set([
+  "requestId",
+  "tool",
+  "receiptReference",
+  "terms",
+  "state",
+  "spendRequestId",
+  "replaces",
+  "createdAtMs",
+]);
+const RAW_TERMS_KEYS = ["merchantName", "merchantUrl", "amount", "currency", "lineItems", "totals", "context"] as const;
+
+/** JSON with sorted keys, so two readings of the same value compare equal. */
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stable(value[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** True only for an entry the guard itself could have written. */
+function entryOk(e: unknown): e is DecisionEntry {
+  if (!isPlainObject(e)) return false;
+  if (Object.keys(e).some((k) => !ENTRY_KEYS.has(k))) return false;
+  if (typeof e.requestId !== "string" || !e.requestId) return false;
+  if (e.tool !== SPEND_TOOL && e.tool !== SPEND_ABOVE_CAP_TOOL) return false;
+  if (typeof e.receiptReference !== "string") return false;
+  if (!STATES.includes(e.state as DecisionEntry["state"])) return false;
+  if (e.spendRequestId !== undefined && (typeof e.spendRequestId !== "string" || !SPEND_REQUEST_ID_RE.test(e.spendRequestId))) {
+    return false;
+  }
+  if (e.replaces !== undefined && (typeof e.replaces !== "string" || !e.replaces)) return false;
+  if (typeof e.createdAtMs !== "number" || !Number.isFinite(e.createdAtMs)) return false;
+  if (!isPlainObject(e.terms)) return false;
+  // The stored terms must be exactly what reading their own fields gives.
+  const t = e.terms;
+  try {
+    const raw = Object.fromEntries(RAW_TERMS_KEYS.map((k) => [k, t[k]]));
+    return stable(readTerms(raw, SUPPORTED_CURRENCIES)) === stable(t);
+  } catch {
+    return false;
+  }
+}
+
 export class Ledger {
   constructor(private readonly store: LinkGuardStore) {}
 
@@ -86,9 +149,17 @@ export class Ledger {
     }
     if (current === null) return { doc: { decisions: [] }, version: null };
     try {
-      const doc = JSON.parse(current.value) as LedgerDoc;
-      if (!doc || !Array.isArray(doc.decisions)) throw new Error("bad");
-      return { doc, version: current.version };
+      const doc = JSON.parse(current.value) as unknown;
+      if (
+        !isPlainObject(doc) ||
+        Object.keys(doc).some((k) => k !== "decisions") ||
+        !Array.isArray(doc.decisions) ||
+        !doc.decisions.every(entryOk) ||
+        new Set(doc.decisions.map((d) => d.requestId)).size !== doc.decisions.length
+      ) {
+        throw new Error("bad");
+      }
+      return { doc: doc as LedgerDoc, version: current.version };
     } catch {
       throw refused("STORE_UNAVAILABLE", "The guard's store holds data it cannot read.");
     }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SPEND_ABOVE_CAP_TOOL, SPEND_TOOL } from "../src/index.js";
-import { fakeGuardian, fakeLink, makeGuard, ops, orderLog, terms } from "./helpers.js";
+import { fakeGuardian, fakeLink, makeGuard, ops, orderLog, priced, terms } from "./helpers.js";
 
 describe("Guardian decides before the spend request exists", () => {
   it("ALLOW under the cap: one test-mode spend request with exactly the decided terms", async () => {
@@ -69,7 +69,7 @@ describe("Guardian decides before the spend request exists", () => {
   it("above cap: a rule ALLOW is not enough; nothing is created", async () => {
     const { guard, link } = makeGuard();
     await expect(
-      guard.create(terms({ amount: 9_000, totals: [{ type: "total", displayText: "Total", amount: 9_000 }] })),
+      guard.create(priced(9_000)),
     ).rejects.toMatchObject({ code: "PERSON_APPROVAL_REQUIRED" });
     expect(ops(link)).not.toContain("create");
   });
@@ -104,10 +104,10 @@ describe("Guardian decides before the spend request exists", () => {
   it("above the local max or Link's own limit: refused before Guardian is asked", async () => {
     const { guard, guardian, link } = makeGuard();
     await expect(
-      guard.create(terms({ amount: 30_000, totals: [{ type: "total", displayText: "Total", amount: 30_000 }] })),
+      guard.create(priced(30_000)),
     ).rejects.toMatchObject({ code: "ABOVE_MAX" });
     await expect(
-      guard.create(terms({ amount: 50_001, totals: [{ type: "total", displayText: "Total", amount: 50_001 }] })),
+      guard.create(priced(50_001)),
     ).rejects.toMatchObject({ code: "ABOVE_LINK_LIMIT" });
     expect(guardian.calls).toHaveLength(0);
     expect(ops(link)).toEqual([]);

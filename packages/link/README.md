@@ -14,8 +14,9 @@ on those terms, and reads the card once, for that approved request only.
 **DRAFT: Decision-gated, not enforced outside your process.** The guard
 holds the Link login (the CLI's `--auth` file). It governs spend requests
 made through it. It cannot stop code that runs `link-cli` with the same
-login some other way. Run the guard where the agent cannot read that file,
-for example as another user. See [Not governed](#not-governed).
+login some other way, nor an agent that has a Link login of its own. Run
+the guard where the agent cannot read that file, for example as another
+user. See [Not governed](#not-governed).
 
 **DRAFT: Proof status.** Tested with a fake Guardian, a fake Link and a fake
 `link-cli`. **Not yet run against a real Link account**, even in test mode.
@@ -32,15 +33,37 @@ not from a real run.
   and Link Pay Tokens are not covered.
 - **One-time purchases only.** Recurring spend requests are not covered.
 - **Currencies:** USD by default. CAD, EUR and GBP can be enabled. Amounts are
-  integer cents. Link's own limit, 50,000 cents, is enforced before Guardian
-  is asked.
+  integer cents (minor units). Before Guardian is asked, the guard refuses
+  anything above 50,000 minor units in any currency, and above the `max` you
+  set for that currency. Link's own limit is 50,000 US cents or the
+  equivalent in the request's currency, so in CAD, EUR or GBP a request the
+  guard lets through can still be above Link's limit; Link then refuses it.
 - **The merchant is evidence, not a lock.** A Link card works at any merchant.
   Guardian decides on the merchant the agent names, and the approval shows
   it, but Link does not stop the card being used elsewhere. The terms
   Guardian sees say so: `payeeEnforcedByLink: false`. Line items are evidence
   too.
 
-Anything the guard cannot read exactly is refused, not ignored.
+- **Items must add up.** With `items` the sum of quantity times unit amount:
+  `items_base_amount`, if given, equals `items`; `subtotal`, if given, equals
+  `items` less `items_discount`; `total` equals `items` less
+  `items_discount`, `discount` and `store_credit`, plus `tax`, `fulfillment`,
+  `shipping`, `fee`, `gift_wrap` and `tip`; and `total` equals `amount`.
+  Anything else is refused (`TOTAL_MISMATCH`).
+
+**What the guard compares.** Each time it reads the spend request from Link
+(after creating or updating it, before Link's approval push, while waiting,
+and with the card), it requires the merchant name and URL, context, amount,
+currency, credential type `card`, every line item (name, quantity, unit
+amount) and every total to be exactly the decided terms; a missing field
+counts as different. A recurring schedule, metadata, a Shared Payment Token
+or Link Pay Token, any other line item or total field, an expiry more than
+7 days after creation (Link's one-time default), and any field the guard
+does not know are refused. Not compared: Link's own state (status, ids,
+times, approval and activity links, status details) and the person's own
+payment method, which the person chooses in Link (`payment_method`,
+`payment_details`, card brand and last 4). Anything else is canceled and
+refused.
 
 ## DRAFT: How it works
 
@@ -52,22 +75,33 @@ Anything the guard cannot read exactly is refused, not ignored.
    for this request and these exact arguments.
 2. Only then does it create the spend request, once, with `--test`, an
    idempotency key from the Guardian request, and without Link's approval
-   push. It reads back what Link created; anything different is canceled and
-   refused.
+   push. It checks Link's approval policy again first. It reads back what
+   Link created; anything different, or a status other than `created`, is
+   canceled and refused.
 3. `requestApproval(id)` checks the request again and asks Link to send the
    person the approval push. `spend(terms)` does steps 1 to 3.
 4. `waitForLinkApproval(id)` waits for the person to approve in Link.
 5. `withCard(id, use)` checks the request again, reads the card once through
-   `--output-file` into a private folder it deletes, and hands it to `use`.
-   The card prints as `[guardian-link card: redacted]` and cannot be read
-   after `use` returns. A second call is refused.
+   `--output-file` into a private folder, and hands it to `use`. The folder
+   is wiped and deleted when the call ends; folders a crash left behind are
+   wiped the next time the adapter is built. The card object prints as
+   `[guardian-link card: redacted]`, and the card object cannot be read
+   after `use` returns (values `use` copied out are yours to protect). A
+   second call is refused.
 6. `update(id, terms)` changes a request before Link's approval is requested.
-   It is a new decision on the full new terms and always needs a person. The
+   It is a new decision on the full new terms and always needs a person.
+   Like `create`, it checks Link's approval policy again after the decision
+   and refuses unless Link returns the new terms with status `created`. The
    merchant name and context cannot be changed (Link cannot change them).
+7. `cancel(id)` marks the request canceled in the guard's ledger first, then
+   asks Link to cancel it; the guard does nothing more with it either way.
 
 One Guardian decision acts once. A decision seen before is refused
 (`DECISION_ALREADY_USED`), also after a restart when you give the guard a
-durable `store`.
+durable `store`. Only the guard may be able to write to that store: whoever
+can write it can mark a used decision unused. The guard checks every stored
+entry when it reads it and refuses one it cannot read exactly
+(`STORE_UNAVAILABLE`).
 
 ## DRAFT: Setup
 
@@ -75,12 +109,24 @@ durable `store`.
    record-transport catalog entries: `link.spend` and `link.spend.above_cap`.
    `link.spend.above_cap` always needs a person: the guard refuses a rule
    ALLOW for it.
-2. Log in to Link for the guard only, into a file only the guard can read:
+2. Install `@stripe/link-cli` where only the guard's user can change it, and
+   give the adapter the CLI by absolute path, for example
+   `["/usr/bin/node", "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"]`.
+   The adapter refuses a bare name looked up in PATH, npx, npm, pnpm, yarn
+   and bun, a relative script path, and a CLI file others can write to. It
+   runs each command from a new private folder of its own, never from the
+   guard's working folder.
+3. Log in to Link for the guard only, into a file only the guard can read:
    `link-cli auth login --client-name "Guardian guard" --auth /path/guard-link-auth.json`,
-   then `chmod 600` the file. The adapter refuses a file anyone else can read.
-3. Make sure no Link approval policy exists
-   (`link-cli approval-policy retrieve --format json` must fail). While one
-   exists, the guard refuses to act.
+   then `chmod 600` the file. The adapter refuses, before every command, a
+   path that does not end in `.json`, a link, a file with more than one hard
+   link, a file anyone else can read or that belongs to another user, and a
+   folder that belongs to another user or that others can write to.
+4. Make sure no Link approval policy exists:
+   `link-cli approval-policy retrieve --format json` must fail with
+   "No approval policy has been configured". Only that answer counts as no
+   policy; while one exists, or Link answers anything else, the guard
+   refuses to act.
 
 ```ts
 import { createGuardianClient } from "@odingard/guardian-sdk";
@@ -89,7 +135,10 @@ import { createLinkGuard, linkCliAdapter } from "@odingard/guardian-link";
 const guard = createLinkGuard({
   guardian: createGuardianClient({ baseUrl, credential }),
   connectionId: "pcn_…",
-  link: linkCliAdapter({ authPath: "/path/guard-link-auth.json" }),
+  link: linkCliAdapter({
+    authPath: "/path/guard-link-auth.json",
+    command: ["/usr/bin/node", "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"],
+  }),
   limits: [{ currency: "usd", askAbove: 2_000, max: 20_000 }],
   store, // a compare-and-set store, so used decisions survive a restart
 });
@@ -124,6 +173,23 @@ apply to these tools.
 
 - Code that runs `link-cli`, the Link SDK or the Link API with the guard's
   login, outside the guard.
+- An agent with its own, separate Link login: it can make spend requests the
+  guard never sees.
 - What happens with the card after `withCard`: the merchant, the amount
   charged and the items are Link's and the card network's to enforce.
 - Live mode, Shared Payment Tokens, Link Pay Tokens and recurring requests.
+
+## DRAFT: Not verified
+
+- No run against Link yet. The JSON the CLI prints, the fields of a spend
+  request and the "no approval policy" answer are read from the Link CLI
+  source (stripe/link-cli 308a15a).
+- If Link normalises what it stores, for example adding a trailing `/` to
+  the merchant URL, changing the case of the host, trimming item names or
+  filling in item fields, the exact comparison refuses every such request.
+  That fails closed, but would make the guard unusable until the comparison
+  is adjusted to what Link really returns. The same holds for a field Link
+  returns that the guard does not know.
+- Whether Link replaces or appends line items on update. The read-back
+  refuses either way.
+- Whether a `--test` request still sends the person an approval push.
