@@ -514,6 +514,13 @@ export class LinkGuard {
         await this.#ledger.bind(d.requestId, view.id);
       } catch (error) {
         await this.#ledger.mark(d.requestId, "refused").catch(() => undefined);
+        // Any failure after a create cancels what Link made, except when the
+        // id already belongs to another decision: that request is not ours.
+        const reused = error instanceof LinkGuardRefused && error.code === "SPEND_REQUEST_REUSED";
+        if (!reused) await this.#cancelQuietly(view.id);
+        if (error instanceof LinkGuardRefused && error.spendRequestId === undefined) {
+          Object.defineProperty(error, "spendRequestId", { value: view.id, enumerable: true });
+        }
         throw error;
       }
       const fields = differences(terms, view, view.id);

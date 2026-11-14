@@ -137,3 +137,25 @@ describe("a failed second policy check", () => {
     expect(stored(store).map((e) => e.state)).toEqual(["refused"]);
   });
 });
+
+describe("a failed bind after Link create", () => {
+  it("cancels the spend request Link made and names it on the refusal", async () => {
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const create = link.createSpendRequest.bind(link);
+    link.createSpendRequest = async (input) => {
+      const view = await create(input);
+      store.failing = true; // the store goes down right after Link creates
+      return view;
+    };
+    const { guard } = makeGuard({ store, link });
+
+    const error = await guard.create(terms()).then(
+      () => null,
+      (e: unknown) => e as { code?: string; spendRequestId?: string },
+    );
+    expect(error?.code).toBe("STORE_UNAVAILABLE");
+    expect(error?.spendRequestId).toMatch(/^lsrq_/);
+    expect(ops(link)).toContain("cancel");
+  });
+});
