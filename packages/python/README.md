@@ -262,6 +262,11 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
   effort; the example README says what they do not catch.
 - DENY, missing settings, Guardian unreachable, a crash or a timeout: blocked
   (`{"action": "block", "message": ...}`), so the tool never runs.
+- Guardian's answer to the redeem lost (no answer, a 5xx, an unreadable
+  answer): the hook looks the request up in Guardian. Recorded as verified:
+  the tool runs. Aborted: blocked as `EXECUTION_NOT_SENT`. Otherwise blocked
+  as `EXECUTION_OUTCOME_UNKNOWN`, and the agent is told nothing ran, not to
+  retry, and which request to check in the console.
 
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the

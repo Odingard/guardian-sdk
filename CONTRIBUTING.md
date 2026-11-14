@@ -51,6 +51,9 @@ before the call runs and waits for the person within the request's TTL,
 like a payment guard. After a lost redemption answer it looks the request
 up with the same rules as the triad (`executeOutcomeUnknown` and
 `lookUpExecution` in `packages/sdk/src/guard.ts`); change both together.
+The Python Hermes plugin (`packages/python/src/odingard_guardian/hermes.py`)
+works the same way and reuses the Python guard's rules (`_outcome_unknown`
+and `_lookup_answer` in `guard.py`).
 
 ## Development
 
