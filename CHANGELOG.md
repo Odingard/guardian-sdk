@@ -14,6 +14,11 @@ Guardian can now put a dollar limit on a tool you register: name the argument th
 - **Not changed: `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-x402`, `@odingard/guardian-ap2` and the Python SDK (`odingard-guardian`).** They do not send amount declarations, so a tool the owner gave an amount in the console is refused through them, as it is through any earlier version of the packages above. In this repository the SDK version ranges of guardian-hook, guardian-steel, guardian-x402 and guardian-ap2 also accept `^0.6.0` so the workspace installs; their published versions are unchanged.
 - **skill.md 1.0.4.** Pins these versions (hash in `skill/CHANGELOG.md`) and says the MCP package and the wrappers take the SDK as `^0.6.0`.
 
+### Added: `guardian-sdk verify`, a command-line receipt verifier
+
+- **`@odingard/guardian-sdk`**: a `guardian-sdk` command. `npx @odingard/guardian-sdk verify receipt.json` checks a `greceipt.v1` receipt with `verifyReceiptOffline`, against Guardian's published keys or, with `--keys keys.json`, a key set on disk with no network access. Exit code 0 valid, 1 not valid, 2 usage or input error. No account or credential is needed.
+- `docs/spec/greceipt-v1.md` §8 and the SDK README show the command.
+
 ## guardian-openclaw 0.1.1, released 2026-11-12
 
 ### Changed: an OpenShell credential placeholder stays in the Gateway environment
