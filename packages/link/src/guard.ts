@@ -473,7 +473,12 @@ export class LinkGuard {
       };
       // One decision acts once, across restarts when the store is durable.
       await this.#ledger.claim(entry);
-      await this.#checkNoPolicy();
+      try {
+        await this.#checkNoPolicy();
+      } catch (error) {
+        await this.#ledger.mark(d.requestId, "refused").catch(() => undefined);
+        throw error;
+      }
       let view: LinkSpendRequestView;
       try {
         view = await this.#link.createSpendRequest({

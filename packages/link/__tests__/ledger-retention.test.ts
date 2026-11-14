@@ -117,3 +117,23 @@ describe("ledger cap", () => {
     await expect(guard.create(terms())).rejects.toMatchObject({ code: "LEDGER_FULL" });
   });
 });
+
+describe("a failed second policy check", () => {
+  it("marks the claimed decision refused, so it never holds a ledger slot in progress", async () => {
+    const store = testStore();
+    const link = fakeLink({ personInLink: "approve" });
+    const original = link.approvalPolicy.bind(link);
+    let policyCalls = 0;
+    link.approvalPolicy = async () => {
+      policyCalls += 1;
+      if (policyCalls === 2) return { state: "unknown" };
+      return original();
+    };
+    const { guard } = makeGuard({ store, link });
+
+    await expect(guard.create(terms())).rejects.toMatchObject({ code: "LINK_APPROVAL_POLICY_UNKNOWN" });
+    expect(policyCalls).toBe(2);
+    expect(ops(link).filter((op) => op === "create")).toHaveLength(0);
+    expect(stored(store).map((e) => e.state)).toEqual(["refused"]);
+  });
+});
