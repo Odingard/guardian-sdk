@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-x402",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Guardian for x402: Guardian decides x402 payments made through the guarded official x402 clients (ALLOW/ASK/DENY on the exact terms), before the wallet signs.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",

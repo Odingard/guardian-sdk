@@ -51,11 +51,14 @@ except GuardianDenied as denied:             # DENY: your function never ran
 | --------- | ----------------------------------------------------------------------------------------------------------------- |
 | **ALLOW** | Runs once. Then the capability is redeemed and the receipt recorded (`on_receipt=` callback).                     |
 | **ASK**   | Does not run. `GuardianApprovalPending.resume()` runs it after approval; before approval it raises pending again. |
-| **DENY**  | Never runs. `GuardianDenied.reason_code` says why. An unreachable Guardian is a DENY (fail closed).               |
+| **DENY**  | Never runs. `GuardianDenied.reason_code` says why. An unreachable Guardian is refused too (fail closed).          |
 
 An unreachable Guardian, or one that answers with a server error (HTTP 5xx),
 is refused with `reason_code` `SERVICE_UNAVAILABLE`: nothing ran, and it is
-reported as Guardian not answering, not as a denial. An answer whose
+reported as Guardian not answering, not as a denial. With the default
+`on_deny="raise"` it raises `GuardianUnavailable` (a subclass of
+`GuardianDenied`, so `except GuardianDenied` still catches it), whose text
+says Guardian could not be reached and the call did not run. An answer whose
 `decision` is anything other than `ALLOW`, `ASK` or `DENY` is refused with
 `MALFORMED_RESPONSE`.
 
@@ -146,9 +149,19 @@ handed back as data instead of raising `GuardianExecutionFailed`. That covers
 an in-process call whose receipt could not be recorded after your function
 ran, and a `remote` call whose receipt status is not `sent-verified` (or whose
 answer was lost). The result is
-`{"guardian": {"decision": "ALLOW", "outcome": "ran_unrecorded" | "unknown", "message": …}}`,
+`{"guardian": {"decision": "ALLOW", "outcome": "ran_unrecorded" | "ran_unconfirmed" | "unknown", "message": …}}`,
 and the message says the call ran (or may have run) and must not be called
 again, because calling it again is a new request and can repeat the action.
+
+When Guardian's answer to the final redemption is lost (no answer, a 5xx, an
+unreadable answer), the SDK looks the request up (`client.receipts`). A
+verified execution is reported as success, with its receipt (`on_receipt`
+gets it). If the lookup does not settle it, `GuardianExecutionFailed` has
+`reason_code="EXECUTION_OUTCOME_UNKNOWN"`, `outcome_unknown=True` and what was
+observed in `detail` (such as `SERVICE_UNAVAILABLE`); its text says the call
+ran (in-process, `local_effect_ran=True`) or may have run (remote), not to
+retry, and which request to check. In result mode its outcome is
+`ran_unconfirmed` (in-process) or `unknown` (remote).
 Set `on_execution_failed="raise"` or `"result"` to choose this separately
 from `on_deny`, and pass `on_execution_error=callback(error)` to see every
 such `GuardianExecutionFailed` in your app (for example to open an incident),

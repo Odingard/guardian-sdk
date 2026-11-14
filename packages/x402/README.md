@@ -10,8 +10,8 @@ holds the wallet key. The guard governs payments made through the clients it
 builds. It cannot stop code that signs with the key some other way. See
 [Not governed](#not-governed).
 
-**Status.** Works with USDC on Base Sepolia (testnet). Base mainnet is off by
-default and unproven.
+**Status.** Supports USDC on Base Sepolia (testnet); the live proof on Base
+Sepolia is pending. Base mainnet is off by default and unproven.
 
 ## What it covers
 

@@ -80,9 +80,19 @@ class RequestResult:
 
 @dataclass(frozen=True)
 class ExecuteResult:
+    """Outcome of ``execute``.
+
+    ``outcome_unknown=True`` on a failure means the execute was sent but no
+    usable answer came back (no answer, a 5xx, an unreadable answer or an
+    ``ok`` answer whose receipt cannot be read): Guardian may have redeemed
+    the capability. Look the request up (``receipts``) before treating it as
+    a failure, and never retry it as a new request.
+    """
+
     ok: bool
     receipt: Optional[Dict[str, Any]] = None
     reason_code: Optional[str] = None
+    outcome_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,7 +243,12 @@ def _execute_result(status: int, data: Any) -> ExecuteResult:
         or not isinstance(receipt.get("requestId"), str)
     ):
         reason = (data.get("reasonCode") or data.get("code")) if isinstance(data, dict) else None
-        return ExecuteResult(ok=False, reason_code=reason if isinstance(reason, str) else f"HTTP_{status}")
+        if not isinstance(reason, str):
+            reason = f"HTTP_{status}"
+        # Only a readable refusal (a 4xx, or a 2xx ``ok: false``) is
+        # definitive; otherwise Guardian may have redeemed the capability.
+        definitive = 200 <= status < 500 and isinstance(data, dict) and data.get("ok") is False
+        return ExecuteResult(ok=False, reason_code=reason, outcome_unknown=not definitive)
     return ExecuteResult(ok=True, receipt=receipt)
 
 

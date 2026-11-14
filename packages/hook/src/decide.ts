@@ -10,6 +10,11 @@
  * Anything Guardian does not confirm — unreachable service, bad config,
  * timeout, failed redemption — is a deny (fail closed).
  *
+ * A redemption whose answer was lost (no answer, a 5xx, an unreadable
+ * answer) is looked up in Guardian's record of the request: a verified
+ * execution means Guardian redeemed the capability, so the call runs; an
+ * aborted one, or a lookup that does not settle it, is a deny.
+ *
  * Decision-gated: the agent performs the effect after redemption, so the
  * receipt proves Guardian's authorization of that exact call, not the
  * command's own outcome.
@@ -28,7 +33,12 @@ export type HookVerdict = Readonly<{
 }>;
 
 export type DecideOptions = Readonly<{
-  client: Pick<GuardianClient, "request" | "claim" | "execute">;
+  /**
+   * `receipts` settles a redemption whose answer was lost. Without it such
+   * a call is refused (fail closed).
+   */
+  client: Pick<GuardianClient, "request" | "claim" | "execute"> &
+    Partial<Pick<GuardianClient, "receipts">>;
   connectionId: string;
   agentName: string;
   approvalTimeoutMs: number;
@@ -63,7 +73,11 @@ const PLAIN: Record<string, string> = {
     'this tool is not allowed for the agent yet. In the Guardian console: Agents → this agent → the connection\'s card → "Allow a tool by name"',
   SERVICE_UNAVAILABLE: "Guardian could not be reached",
   REQUEST_CONFLICT: "Guardian saw a conflicting request",
+  EXECUTION_NOT_SENT: "Guardian did not complete the redemption",
 };
+
+/** Reason code when a lost redemption answer could not be settled. */
+export const EXECUTION_OUTCOME_UNKNOWN = "EXECUTION_OUTCOME_UNKNOWN";
 
 /**
  * Edit-type tools: the target must still match the pin the approval bound.
@@ -91,13 +105,61 @@ function denied(
   code: string,
   extra: Partial<HookVerdict> = {},
 ): HookVerdict {
+  // The request id lets the developer find Guardian's record of the call.
+  const request = extra.requestId ? ` Request ${extra.requestId}.` : "";
   return {
     decision: "deny",
     reason:
-      `Guardian blocked ${call.toolName} (${code}): ${plain(code)}. ` +
+      `Guardian blocked ${call.toolName} (${code}): ${plain(code)}.${request} ` +
       `Do not retry or work around this; ask the developer to review it in the Guardian console.`,
     ...extra,
   };
+}
+
+/** The execute was sent, but its answer does not say whether it was redeemed. */
+function executeOutcomeUnknown(executed: {
+  reasonCode: string;
+  outcomeUnknown?: boolean;
+}): boolean {
+  return (
+    executed.outcomeUnknown === true ||
+    executed.reasonCode === "SERVICE_UNAVAILABLE" ||
+    /^HTTP_(0|5\d\d)$/.test(executed.reasonCode)
+  );
+}
+
+/**
+ * After a lost execute answer: Guardian's recorded attempts for the
+ * request. Only a verified attempt or a definitive abort settles it;
+ * anything else (none recorded yet, still committing, the lookup failing,
+ * no lookup available) stays unknown.
+ */
+async function lookUpExecution(
+  client: DecideOptions["client"],
+  requestId: string,
+): Promise<"verified" | "not-sent" | "unknown"> {
+  if (typeof client.receipts !== "function") return "unknown";
+  let answer: Awaited<ReturnType<GuardianClient["receipts"]>>;
+  try {
+    answer = await client.receipts(requestId);
+  } catch {
+    return "unknown";
+  }
+  if (answer?.ok !== true || !Array.isArray(answer.receipts)) return "unknown";
+  const records = answer.receipts as readonly { state?: unknown }[];
+  if (records.some((record) => record?.state === "verified")) {
+    return "verified";
+  }
+  if (
+    records.length > 0 &&
+    records.every(
+      (record) =>
+        record?.state === "aborted" || record?.state === "commit-rejected",
+    )
+  ) {
+    return "not-sent";
+  }
+  return "unknown";
 }
 
 /** How long before the window closes the hook makes its final check. */
@@ -132,6 +194,10 @@ export async function decide(
     });
   } catch {
     return denied(call, "SERVICE_UNAVAILABLE");
+  }
+  if (!result.ok && result.reasonCode === "SERVICE_UNAVAILABLE") {
+    // Guardian did not answer: there is no request on its side to quote.
+    return denied(call, "SERVICE_UNAVAILABLE", { guardianDecision: "DENY" });
   }
   // Guardian's window starts when it creates the request, somewhere inside
   // that call. Timing from the reply errs late, never early: a check that
@@ -224,20 +290,49 @@ export async function decide(
       capabilityToken: result.capabilityToken,
     });
   } catch {
-    executed = { ok: false, reasonCode: "SERVICE_UNAVAILABLE" };
+    executed = {
+      ok: false,
+      reasonCode: "SERVICE_UNAVAILABLE",
+      outcomeUnknown: true,
+    };
   }
+  let settledByLookup = false;
   if (!executed.ok) {
-    return denied(call, executed.reasonCode, {
+    const verdict = {
       requestId: result.requestId,
       guardianDecision: approvedByHuman ? "ASK" : "ALLOW",
       approvedByHuman,
-    });
+    } as const;
+    if (!executeOutcomeUnknown(executed)) {
+      return denied(call, executed.reasonCode, verdict);
+    }
+    // The redemption was sent but its answer was lost: Guardian's record
+    // of the request settles it. Only a verified redemption runs the call.
+    const found = await lookUpExecution(options.client, result.requestId);
+    if (found === "not-sent") {
+      return denied(call, "EXECUTION_NOT_SENT", verdict);
+    }
+    if (found === "unknown") {
+      return {
+        decision: "deny",
+        reason:
+          `Guardian blocked ${call.toolName} (${EXECUTION_OUTCOME_UNKNOWN}): Guardian's answer was lost ` +
+          `(${executed.reasonCode}) and it could not be confirmed whether Guardian recorded the call as allowed. ` +
+          `Request ${result.requestId}. Nothing ran. Do not retry; ask the developer to check request ` +
+          `${result.requestId} in the Guardian console.`,
+        ...verdict,
+      };
+    }
+    settledByLookup = true;
   }
+  const lookupNote = settledByLookup
+    ? " Guardian's answer was lost; its record shows the call redeemed."
+    : "";
   return {
     decision: "allow",
     reason: approvedByHuman
-      ? `Approved by a human in Guardian (request ${result.requestId}).`
-      : `Allowed by Guardian policy (request ${result.requestId}).`,
+      ? `Approved by a human in Guardian (request ${result.requestId}).${lookupNote}`
+      : `Allowed by Guardian policy (request ${result.requestId}).${lookupNote}`,
     requestId: result.requestId,
     guardianDecision: approvedByHuman ? "ASK" : "ALLOW",
     approvedByHuman,

@@ -17,10 +17,12 @@ from .client import (
     build_proposal,
 )
 from .guard import (
+    EXECUTION_OUTCOME_UNKNOWN,
     Guard,
     GuardianApprovalPending,
     GuardianDenied,
     GuardianExecutionFailed,
+    GuardianUnavailable,
     ResumeResult,
     denial_hint,
     execution_failed_message,
@@ -66,7 +68,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "CONTENT_CHANGED_SINCE_APPROVAL",
@@ -106,6 +108,8 @@ __all__ = [
     "GuardianDecision",
     "GuardianDenied",
     "GuardianExecutionFailed",
+    "GuardianUnavailable",
+    "EXECUTION_OUTCOME_UNKNOWN",
     "PortableReceiptResult",
     "ReceiptsResult",
     "RequestResult",

@@ -109,10 +109,15 @@ function askMessage(toolName: string, requestId: string): string {
   );
 }
 
+/** ` (requestId req_…)`, so the model and the user can quote the request. */
+function requestRef(requestId: string | undefined): string {
+  return requestId ? ` (requestId ${requestId})` : "";
+}
+
 function denyMessage(err: GuardianDenied): string {
   return (
-    `Guardian denied ${err.toolName} (${err.reasonCode}). It did not run. ` +
-    `Do not retry the same call.`
+    `Guardian denied ${err.toolName} (${err.reasonCode}). ` +
+    `It did not run${requestRef(err.requestId)}. Do not retry the same call.`
   );
 }
 
@@ -141,11 +146,20 @@ function executionFailedMessage(err: GuardianExecutionFailed): string {
       `approval.`
     );
   }
+  if (err.localEffectRan && err.outcomeUnknown) {
+    // Guardian's answer was lost and looking the request up did not settle
+    // it: Guardian may hold the record, so "no receipt" is not known.
+    return (
+      `${err.toolName} ran, but Guardian could not confirm that it recorded it ` +
+      `(${err.reasonCode}). Do not call it again; tell the user it ran and ` +
+      `that the request needs checking${requestRef(err.requestId)}.`
+    );
+  }
   if (err.localEffectRan) {
     return (
       `${err.toolName} ran, but Guardian could not record it ` +
       `(${err.reasonCode}). Do not call it again; tell the user it ran ` +
-      `without a receipt.`
+      `without a receipt${requestRef(err.requestId)}.`
     );
   }
   if (err.outcomeUnknown) {
@@ -157,7 +171,7 @@ function executionFailedMessage(err: GuardianExecutionFailed): string {
   }
   return (
     `Guardian could not complete ${err.toolName} (${err.reasonCode}). ` +
-    `Do not call it again; tell the user so they can check.`
+    `Do not call it again; tell the user so they can check${requestRef(err.requestId)}.`
   );
 }
 
@@ -211,12 +225,16 @@ function remapFileArgs(
     // Compared in the full form, so a short form (a list of names, or true
     // for a mode, both meaning "bytes") agrees with the same explicit modes.
     const writtenSpec = normalizeFileArgsSpec(writtenName, written) ?? {};
-    const builtSpec = normalizeFileArgsSpec(builtName, fileArgs[builtName]) ?? {};
+    const builtSpec =
+      normalizeFileArgsSpec(builtName, fileArgs[builtName]) ?? {};
     // The opt-in preview and its folders are compared too: two entries that
     // differ only in whether the approver sees a preview, or from which
     // folders, still disagree.
     const writtenPreview = normalizeFileArgPreviews(writtenName, written);
-    const builtPreview = normalizeFileArgPreviews(builtName, fileArgs[builtName]);
+    const builtPreview = normalizeFileArgPreviews(
+      builtName,
+      fileArgs[builtName],
+    );
     const rootsKey = (roots: Readonly<Record<string, readonly string[]>>) =>
       JSON.stringify(
         Object.keys(roots)
