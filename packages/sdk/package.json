@@ -5,6 +5,9 @@
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
   "type": "module",
+  "bin": {
+    "guardian-sdk": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist-dts/index.d.ts",
@@ -26,7 +29,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/index.js && esbuild src/contracts-entry.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/contracts.js && cp src/catalog/public-catalog.v1.json dist/ && tsc -p tsconfig.build.json",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/index.js && esbuild src/contracts-entry.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/contracts.js && esbuild src/bin.ts --bundle --platform=node --format=esm --target=node22 --external:zod --outfile=dist/cli.js && cp src/catalog/public-catalog.v1.json dist/ && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "prepublishOnly": "npm run build && npm test"

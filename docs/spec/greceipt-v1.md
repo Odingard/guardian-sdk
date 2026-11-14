@@ -140,6 +140,15 @@ keys = fetch_receipt_verification_keys("https://guardian-api.odingard.com")
 result = verify_receipt_offline(receipt, keys)
 ```
 
+From the command line, with no code and no account:
+
+```bash
+npx @odingard/guardian-sdk verify receipt.json                  # downloads the published keys
+npx @odingard/guardian-sdk verify receipt.json --keys keys.json # fully offline
+```
+
+It exits 0 when the receipt is valid and 1 when it is not, and prints the failure code from §6.
+
 ## 9. Linking to other systems' records
 
 `greceipt.v1` is closed: it has no extension fields. A system that records its own side of an action, such as a resource provider's log of the call it served, links to Guardian by storing:

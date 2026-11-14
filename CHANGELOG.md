@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added: `guardian-sdk verify`, a command-line receipt verifier
+
+- **`@odingard/guardian-sdk`**: a `guardian-sdk` command. `npx @odingard/guardian-sdk verify receipt.json` checks a `greceipt.v1` receipt with `verifyReceiptOffline`, against Guardian's published keys or, with `--keys keys.json`, a key set on disk with no network access. Exit code 0 valid, 1 not valid, 2 usage or input error. No account or credential is needed.
+- `docs/spec/greceipt-v1.md` §8 and the SDK README show the command.
+
 ## guardian-openclaw 0.1.1, released 2026-11-12
 
 ### Changed: an OpenShell credential placeholder stays in the Gateway environment
