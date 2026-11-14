@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@odingard/guardian-ap2": "file:../../packages/ap2",
-    "@odingard/guardian-sdk": "^0.4.1 || ^0.5.0"
+    "@odingard/guardian-sdk": "^0.4.1 || ^0.5.0 || ^0.6.0"
   }
 }

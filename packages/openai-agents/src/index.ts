@@ -23,6 +23,7 @@ import {
   normalizeFileArgPreviews,
   normalizeFileArgsSpec,
 } from "@odingard/guardian-sdk";
+import { canonicalJson } from "@odingard/guardian-sdk/contracts";
 
 import { CallGate, GuardianUnavailable } from "./gate.js";
 
@@ -247,6 +248,36 @@ function remapFileArgs(
   return { ...fileArgs, [builtName]: written };
 }
 
+/**
+ * The same rename for `amountArgs`: an entry keyed by the name the
+ * developer wrote is moved to the built name, so a tool the owner declared
+ * an amount for still sends its declaration. Two entries that disagree are
+ * refused.
+ */
+function remapAmountArgs(
+  amountArgs: GuardianAdapterOptions["amountArgs"],
+  writtenName: string | undefined,
+  builtName: string,
+): GuardianAdapterOptions["amountArgs"] {
+  if (!amountArgs || !writtenName || writtenName === builtName) {
+    return amountArgs;
+  }
+  if (!Object.prototype.hasOwnProperty.call(amountArgs, writtenName)) {
+    return amountArgs;
+  }
+  const written = amountArgs[writtenName]!;
+  if (
+    Object.prototype.hasOwnProperty.call(amountArgs, builtName) &&
+    canonicalJson(amountArgs[builtName]) !== canonicalJson(written)
+  ) {
+    throw new Error(
+      `Guardian amountArgs disagree for tool "${writtenName}" (the Agents ` +
+        `SDK names it "${builtName}"): set one entry`,
+    );
+  }
+  return { ...amountArgs, [builtName]: written };
+}
+
 function buildTool(
   shared: Shared,
   toolOptions: ToolOptions<any, any, any>,
@@ -408,8 +439,12 @@ function buildTool(
   if (fileArgs !== options.fileArgs) {
     coreOptions = { ...coreOptions, ...(fileArgs ? { fileArgs } : {}) };
   }
-  // Wrap time: a bad fileArgs declaration (or fileArgs in remote mode) is a
-  // configuration error here, not on the first call.
+  const amountArgs = remapAmountArgs(options.amountArgs, name, built.name);
+  if (amountArgs !== options.amountArgs) {
+    coreOptions = { ...coreOptions, ...(amountArgs ? { amountArgs } : {}) };
+  }
+  // Wrap time: a bad fileArgs or amountArgs declaration (or fileArgs in
+  // remote mode) is a configuration error here, not on the first call.
   createGuardianContext(coreOptions);
   return built;
 }

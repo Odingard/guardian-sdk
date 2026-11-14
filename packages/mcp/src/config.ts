@@ -2,6 +2,11 @@
  * CLI configuration. Missing settings produce one readable message
  * (never a stack trace) that says exactly what to set.
  */
+import {
+  ToolAmountDeclarationSchema,
+  type ToolAmountDeclaration,
+} from "@odingard/guardian-sdk/contracts";
+
 /**
  * A remote MCP upstream reached over Streamable HTTP or SSE. The
  * URL and header values are already resolved from the environment; they are
@@ -26,6 +31,11 @@ export type CliMode =
        * tool → argument names. Stdio upstreams only.
        */
       pinFiles?: Record<string, string[]>;
+      /**
+       * `--amount-arg <tool>=<declaration>` (repeatable, one per tool): the
+       * owner's amount declarations, tool → declaration.
+       */
+      amountArgs?: Record<string, ToolAmountDeclaration>;
     } & UpstreamTarget)
   | ({ kind: "tools"; json: boolean } & UpstreamTarget);
 
@@ -48,6 +58,13 @@ Usage:
                                              goes into the approved arguments and is checked again
                                              just before the call is forwarded (stdio upstreams
                                              only; the path must be absolute)
+  guardian-mcp proxy --amount-arg <tool>=<argument>:<minor|major> [--amount-arg ...] -- <command> [args...]
+                                             A tool the owner gave a dollar amount in the console: send
+                                             the same declaration with each call (minor = cents,
+                                             major = dollars; US dollars). For a currency argument or
+                                             an allowed-arguments list, give the declaration as JSON:
+                                             --amount-arg 'purchase={"argument":"amount","unit":"minor",
+                                             "currency":"usd","allowedArguments":["amount","sku"]}'
   guardian-mcp proxy --url <https-url> [--transport streamable-http|sse] [--header "Name: value"]...
                                              Govern every tool of a remote MCP server (Streamable
                                              HTTP by default, or SSE). The agent still talks stdio.
@@ -101,7 +118,9 @@ export function parseCli(
     };
   }
   if (argv[0] === "proxy") {
-    const pins = extractPinFiles(argv.slice(1));
+    const amounts = extractAmountArgs(argv.slice(1));
+    if (!amounts.ok) return amounts;
+    const pins = extractPinFiles(amounts.rest);
     if (!pins.ok) return pins;
     const target = parseTarget("proxy", pins.rest, env);
     if (!target.ok) return target;
@@ -119,6 +138,9 @@ export function parseCli(
       kind: "proxy",
       ...target.target,
       ...(declared ? { pinFiles: pins.pinFiles } : {}),
+      ...(Object.keys(amounts.amountArgs).length > 0
+        ? { amountArgs: amounts.amountArgs }
+        : {}),
     };
   } else if (argv.length > 0) {
     return {
@@ -251,6 +273,80 @@ function extractPinFiles(
   }
   rest.push(...argv.slice(i));
   return { ok: true, pinFiles, rest };
+}
+
+/**
+ * Take every `--amount-arg <tool>=<declaration>` (or
+ * `--amount-arg=<tool>=<declaration>`) out of the proxy options before the
+ * upstream command (`--`), which is left untouched. The declaration is
+ * `<argument>:<minor|major>` (currency US dollars) or a JSON object, and is
+ * checked with the same schema Guardian uses. One declaration per tool.
+ */
+function extractAmountArgs(argv: readonly string[]):
+  | {
+      ok: true;
+      amountArgs: Record<string, ToolAmountDeclaration>;
+      rest: string[];
+    }
+  | { ok: false; message: string } {
+  const amountArgs: Record<string, ToolAmountDeclaration> = {};
+  const rest: string[] = [];
+  const fail = (message: string) => ({
+    ok: false as const,
+    message: `guardian-mcp proxy: ${message}\n\n${USAGE}`,
+  });
+  let i = 0;
+  for (; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--") break;
+    let value: string | undefined;
+    if (arg === "--amount-arg") {
+      value = argv[++i];
+    } else if (arg.startsWith("--amount-arg=")) {
+      value = arg.slice("--amount-arg=".length);
+    } else {
+      rest.push(arg);
+      continue;
+    }
+    const equals = value?.indexOf("=") ?? -1;
+    const tool = equals > 0 ? value!.slice(0, equals) : "";
+    const spec = equals > 0 ? value!.slice(equals + 1) : "";
+    if (!tool || !spec) {
+      return fail(
+        '--amount-arg needs "<tool>=<argument>:<minor|major>" or "<tool>=<JSON declaration>".',
+      );
+    }
+    if (Object.hasOwn(amountArgs, tool)) {
+      return fail(`--amount-arg is given twice for "${tool}"; give one.`);
+    }
+    let candidate: unknown;
+    if (spec.startsWith("{")) {
+      try {
+        candidate = JSON.parse(spec);
+      } catch {
+        return fail(`--amount-arg for "${tool}" is not valid JSON.`);
+      }
+    } else {
+      const colon = spec.lastIndexOf(":");
+      candidate = {
+        argument: colon > 0 ? spec.slice(0, colon) : spec,
+        unit: colon > 0 ? spec.slice(colon + 1) : undefined,
+        currency: "usd",
+      };
+    }
+    const parsed = ToolAmountDeclarationSchema.safeParse(candidate);
+    if (!parsed.success) {
+      return fail(
+        `--amount-arg for "${tool}" is not a valid amount declaration. Use ` +
+          `<argument>:minor (cents) or <argument>:major (dollars), naming a ` +
+          `top-level argument, or the JSON form with currency "usd", exactly ` +
+          `as set on the tool in the Guardian console.`,
+      );
+    }
+    amountArgs[tool] = parsed.data;
+  }
+  rest.push(...argv.slice(i));
+  return { ok: true, amountArgs, rest };
 }
 
 type TargetResult =

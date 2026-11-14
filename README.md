@@ -171,6 +171,20 @@ With `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in the
 - The MCP proxy pins declared arguments of a stdio upstream (`--pin-file <tool>:<arg>`, `recheck` only), and the coding-agent hook pins the target of Edit-type tools (not Write, not shell commands); in both a short window remains because the tool opens the file itself. Neither can hand a tool bytes, so neither takes the `bytes` default: you name no mode there, and the mode is always `recheck`. A LangChain tool reachable only through `invoke()` cannot take bytes either, so declaring a file argument without a mode on it is refused when the tool is wrapped (name `"copy"`).
 - Not pinned: URLs, provider file ids, paths on a remote MCP server, files named inside shell commands, and files a tool opens without naming them. The Steel integration, the OpenClaw plugin and the Hermes adapter do not pin the contents of files their tools read. The path is bound; the file's bytes are not.
 
+### Dollar amounts on tools (`amountArgs`, sdk 0.6)
+
+An owner can put a dollar limit on a tool in the Guardian console: name the argument that holds the amount, then allow up to an amount, ask a person above it and block above a maximum. Guardian reads the amount from each call. Send the same declaration from your agent:
+
+```ts
+const guard = createGuard({
+  client: guardian,
+  connectionId: "pcn_…",
+  amountArgs: { purchase: { argument: "amount", unit: "minor", currency: "usd" } },
+});
+```
+
+For a tool Guardian sends itself the limit applies to what reaches the tool; for a tool your own process runs it applies to Guardian's decision, not to what the code runs. The owner states that the named argument sets the charge and, without a currency argument, that the tool charges in US dollars; Guardian can't check either. Every tool on the same connection needs an amount (or none does); put tools that spend money on their own connection. A call whose amount cannot be read is blocked. Supported in the SDK (0.6), the MCP proxy (`--amount-arg`, 0.5), LangChain and Vercel AI (0.6) and the OpenAI Agents SDK wrapper (0.4); through the hook, OpenClaw, x402, AP2 and Python, a tool with an amount set in the console is refused. See the [SDK README](packages/sdk/README.md#dollar-amounts-on-tools--amountargs-06).
+
 ### Govern an MCP server you already use
 
 ```bash

@@ -1,5 +1,11 @@
 // Generated file — do not edit.
-import { canonicalJson, sha256Text } from "./contracts/index.js";
+import {
+  canonicalJson,
+  readToolAmount,
+  sha256Text,
+  ToolAmountDeclarationSchema,
+  type ToolAmountDeclaration,
+} from "./contracts/index.js";
 
 import {
   canonicalFileArgsDeclaration,
@@ -417,6 +423,20 @@ export type GuardianAdapterOptions = Readonly<{
    * argument is refused with `CONTENT_PIN_UNSUPPORTED_PLATFORM`).
    */
   fileArgs?: Readonly<Record<string, FileArgsDeclaration>>;
+  /**
+   * Per tool: which top-level argument holds the amount the tool charges,
+   * exactly as the owner declared it on the tool in the Guardian console,
+   * e.g. `{ purchase: { argument: "amount", unit: "minor", currency: "usd" } }`.
+   * On each call the SDK sends this declaration with the call and the
+   * amount it reads from that argument, and Guardian reads the amount
+   * itself and decides on it (allow up to a limit, ask a person above it,
+   * block above a maximum). A call whose amount cannot be read is blocked.
+   * A tool the owner declared an amount for is blocked unless this matches
+   * the console exactly. For a tool that runs in your own process
+   * (`inProcess`), the limit applies to Guardian's decision, not to what
+   * your code runs.
+   */
+  amountArgs?: Readonly<Record<string, ToolAmountDeclaration>>;
   /** Per pinned file cap in bytes (default 25 MiB). */
   maxPinBytes?: number;
   /** Cap for all pinned files of one call in bytes (default 64 MiB). */
@@ -470,12 +490,14 @@ export function createGuardianContext(
 ): GuardianContext {
   assertFileArgsConfig(options);
   const fileArgs = canonicalFileArgs(options.fileArgs);
+  const amountArgs = canonicalAmountArgs(options.amountArgs);
   return {
     // Auto-install is opt-in: it only works for an entry that does not exist
     // yet, because `installed` does not survive a restart.
     options: {
       ...options,
       ...(fileArgs === undefined ? {} : { fileArgs }),
+      ...(amountArgs === undefined ? {} : { amountArgs }),
       installRecordTransport: options.installRecordTransport ?? false,
     },
     ensured: new Set(),
@@ -604,6 +626,112 @@ function assertFileArgsConfig(
       );
     }
   }
+}
+
+/**
+ * Every tool's amount declaration, checked at wrap time with the
+ * same schema Guardian uses. Throws a configuration error for an invalid
+ * one, so a typo never reaches a call.
+ */
+function canonicalAmountArgs(
+  amountArgs: GuardianAdapterOptions["amountArgs"],
+): Readonly<Record<string, ToolAmountDeclaration>> | undefined {
+  if (amountArgs === undefined) return undefined;
+  if (
+    amountArgs === null ||
+    typeof amountArgs !== "object" ||
+    Array.isArray(amountArgs)
+  ) {
+    throw new TypeError("amountArgs must map tool names to declarations");
+  }
+  const canonical: Record<string, ToolAmountDeclaration> = {};
+  for (const [toolName, declaration] of Object.entries(amountArgs)) {
+    const parsed = ToolAmountDeclarationSchema.safeParse(declaration);
+    if (!parsed.success) {
+      throw new TypeError(
+        `amountArgs for "${toolName}" is not a valid amount declaration: ` +
+          `use { argument, unit: "minor" | "major", currency: "usd" }, ` +
+          `optionally with currencyArgument and allowedArguments, exactly ` +
+          `as set on the tool in the Guardian console.`,
+      );
+    }
+    canonical[toolName] = parsed.data;
+  }
+  return canonical;
+}
+
+function amountArgsFor(
+  options: GuardianAdapterOptions,
+  toolName: string,
+): ToolAmountDeclaration | undefined {
+  return Object.hasOwn(options.amountArgs ?? {}, toolName)
+    ? options.amountArgs?.[toolName]
+    : undefined;
+}
+
+/**
+ * What the call sends for a declared amount: the declaration and,
+ * when the SDK can read the amount, its value in cents. When it cannot,
+ * no amount is sent and Guardian refuses the call (never allowed).
+ */
+export function amountFacts(
+  declaration: ToolAmountDeclaration | undefined,
+  args: Record<string, unknown>,
+): { amountArgument?: ToolAmountDeclaration; valueCents?: number } {
+  if (declaration === undefined) return {};
+  const reading = readToolAmount(declaration, args);
+  return {
+    amountArgument: declaration,
+    ...(reading.kind === "money" ? { valueCents: reading.amountMinor } : {}),
+  };
+}
+
+/**
+ * A plain explanation for a call Guardian refused before any
+ * decision (INVALID_REQUEST, ACTION_PARAMETERS_INVALID) on a tool with an amount
+ * declaration: either the amount could not be read, or this declaration
+ * is not the one the owner set in the console.
+ */
+export function amountRefusalHint(
+  toolName: string,
+  declaration: ToolAmountDeclaration | undefined,
+  args: Record<string, unknown>,
+  reasonCode: string | undefined,
+): string | undefined {
+  // The hosted API answers a request refused before any decision as
+  // INVALID_REQUEST; the gateway itself says ACTION_PARAMETERS_INVALID.
+  if (
+    declaration === undefined ||
+    (reasonCode !== "ACTION_PARAMETERS_INVALID" &&
+      reasonCode !== "INVALID_REQUEST")
+  ) {
+    return undefined;
+  }
+  const reading = readToolAmount(declaration, args);
+  if (reading.kind === "refused") {
+    const form =
+      declaration.unit === "minor"
+        ? "a whole number of cents, like 2000 for $20.00"
+        : 'dollars as text, like "19.99", or as a whole number of dollars';
+    return (
+      `Guardian blocked this call to "${toolName}": the amount in its ` +
+      `"${declaration.argument}" argument could not be read ` +
+      `(${reading.code}). Send the amount as ${form}` +
+      (declaration.allowedArguments === undefined
+        ? ""
+        : `, and only the arguments ${declaration.allowedArguments.join(", ")}`) +
+      `. Nothing was run.`
+    );
+  }
+  return (
+    `Guardian refused this call to "${toolName}" before deciding. This ` +
+    `agent sends the amount declaration ${canonicalJson(declaration)} for ` +
+    `it, and Guardian accepts a call only when that equals the declaration ` +
+    `the owner set on this tool in the Guardian console (Connections → ` +
+    `Dollar amounts). Make amountArgs match the console exactly, and check ` +
+    `that "${toolName}" is registered on this connection and allowed for ` +
+    `this agent. Nothing was run.`
+  );
 }
 
 export function toArgumentsRecord(input: unknown): Record<string, unknown> {
@@ -1668,6 +1796,26 @@ export async function runThroughGuardian<Output>(
     }
     // Definitive: settle remembers it again if it is still held.
     forgetHeldInvocation(ctx, heldKey, heldRequestId);
+    // The owner changed the tool's amount declaration since the
+    // call was proposed (binding refuses the held request).
+    const heldHint = claimed.ok
+      ? undefined
+      : amountRefusalHint(
+          toolName,
+          amountArgsFor(options, toolName),
+          toArgumentsRecord(proposed),
+          claimed.reasonCode,
+        );
+    if (heldHint !== undefined) {
+      return deny(
+        options,
+        toolName,
+        claimed.reasonCode ?? "ACTION_PARAMETERS_INVALID",
+        heldRequestId,
+        "invoke",
+        heldHint,
+      );
+    }
     const answer: GuardianRequestResult = isStillHeld(claimed)
       ? {
           ok: true,
@@ -1680,14 +1828,30 @@ export async function runThroughGuardian<Output>(
         : { ...claimed, requestId: claimed.requestId ?? heldRequestId };
     return settle(ctx, toolName, proposed, answer, runTool);
   }
+  const args = toArgumentsRecord(proposed);
+  const declaration = amountArgsFor(options, toolName);
   const result = await options.client.request({
     action: "tool.invoke",
     connectionId: options.connectionId,
     toolName,
-    arguments: toArgumentsRecord(proposed),
+    arguments: args,
+    ...amountFacts(declaration, args),
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     purpose: resolvePurpose(options, toolName, snapshot),
   });
+  const hint = result.ok
+    ? undefined
+    : amountRefusalHint(toolName, declaration, args, result.reasonCode);
+  if (!result.ok && hint !== undefined) {
+    return deny(
+      options,
+      toolName,
+      result.reasonCode,
+      result.requestId,
+      "invoke",
+      hint,
+    );
+  }
   return settle(ctx, toolName, proposed, result, runTool);
 }
 

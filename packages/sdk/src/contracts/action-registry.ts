@@ -168,6 +168,7 @@ import {
   toolVerificationProjection,
   validateMcpEnableBinding,
   validateMcpInstallBinding,
+  readToolAmount,
   validateToolInvokeBinding,
   type McpEnableParametersV1,
   type McpInstallParametersV1,
@@ -1277,7 +1278,12 @@ const toolInvokeDefinition: ActionDefinition<ToolInvokeParametersV1> = {
     "Invoke a catalog tool enabled for the agent on a leased tool-server connection; renders to a bounded https call inside the connection endpoint allowlist.",
   parametersKind: "tool.invoke.v1",
   requiredParameters: ["connectionId", "toolName", "arguments"],
-  materialParameters: ["connectionId", "toolName", "arguments"],
+  materialParameters: [
+    "connectionId",
+    "toolName",
+    "arguments",
+    "amountArgument",
+  ],
   resourceType: "tool:server",
   providers: ["tool"],
   counterpartyRules:
@@ -1301,13 +1307,30 @@ const toolInvokeDefinition: ActionDefinition<ToolInvokeParametersV1> = {
   status: "active",
   validateParameters(materialParameters) {
     const parsed = ToolInvokeParametersV1Schema.safeParse(materialParameters);
-    return parsed.success ? { ok: true, params: parsed.data } : { ok: false };
+    if (!parsed.success) return { ok: false };
+    // A call to a tool with a declared amount whose amount cannot
+    // be read, or that carries an argument outside allowedArguments, is
+    // refused before any decision (fail closed).
+    if (
+      readToolAmount(parsed.data.amountArgument, parsed.data.arguments).kind ===
+      "refused"
+    ) {
+      return { ok: false };
+    }
+    return { ok: true, params: parsed.data };
   },
   validateBinding({ params, connection }) {
     return validateToolInvokeBinding({ params, connection });
   },
   verificationProjection: (params) => toolVerificationProjection(params),
   envelopeProjection: (params) => toolEnvelopeProjection(params),
+  // The amount is derived from the argument the owner named
+  // (binding requires the echoed declaration to equal the catalog), so a
+  // declared valueCents must equal it. Never a merchant or category.
+  authorityFacts: (params) => {
+    const money = readToolAmount(params.amountArgument, params.arguments);
+    return money.kind === "money" ? { valueCents: money.amountMinor } : {};
+  },
 };
 
 const mcpInstallDefinition: ActionDefinition<McpInstallParametersV1> = {

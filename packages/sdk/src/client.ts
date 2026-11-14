@@ -9,6 +9,7 @@ import {
   McpInstallParametersV1Schema,
   ToolInvokeParametersV1Schema,
   type AgentExecutionReceipt,
+  type ToolAmountDeclaration,
   type McpEnableParametersV1,
   type McpInstallParametersV1,
   type ToolInvokeParametersV1,
@@ -39,6 +40,15 @@ export type GuardianToolInvocation = Readonly<{
   connectionId: string;
   toolName: string;
   arguments: Record<string, unknown>;
+  /**
+   * The owner's amount declaration for this tool, echoed exactly
+   * as set in the Guardian console. Guardian reads the amount from
+   * `arguments[amountArgument.argument]` and refuses the call unless this
+   * equals the owner's declaration.
+   */
+  amountArgument?: ToolAmountDeclaration;
+  /** The amount in cents; must equal what Guardian reads. */
+  valueCents?: number;
   adapterId?: string;
   purpose?: string;
   /** Optional intent/plan provenance bound into the action. */
@@ -244,6 +254,9 @@ function materialParametersFor(
       connectionId: invocation.connectionId,
       toolName: invocation.toolName,
       arguments: invocation.arguments,
+      ...(invocation.amountArgument === undefined
+        ? {}
+        : { amountArgument: invocation.amountArgument }),
     });
     return { ...params };
   }

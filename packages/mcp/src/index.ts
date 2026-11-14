@@ -108,12 +108,14 @@ if (config.mode.kind === "proxy") {
       autoRegister: config.autoRegister,
       upstreamTransport: "remote" in config.mode ? "remote" : "stdio",
       ...(config.mode.pinFiles ? { pinFiles: config.mode.pinFiles } : {}),
+      ...(config.mode.amountArgs ? { amountArgs: config.mode.amountArgs } : {}),
       ...(config.adapterId ? { adapterId: config.adapterId } : {}),
       log: (message) => process.stderr.write(`${message}\n`),
       upstream: clientUpstream(upstreamClient),
     });
   } catch (err) {
-    // A bad --pin-file declaration: one readable line, nothing is served.
+    // A bad --pin-file or --amount-arg declaration: one readable line,
+    // nothing is served.
     process.stderr.write(
       `${err instanceof Error ? err.message : "guardian-mcp proxy: invalid configuration."}\n`,
     );
