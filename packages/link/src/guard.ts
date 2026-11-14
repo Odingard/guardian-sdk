@@ -4,6 +4,8 @@ import {
   type GuardianClient,
 } from "@odingard/guardian-sdk";
 
+import { AdapterIdSchema } from "@odingard/guardian-sdk/contracts";
+
 import type { LinkAdapter, LinkSpendRequestView } from "./adapter.js";
 import { checkAmountDeclaration, type AmountDeclaration } from "./amount.js";
 import { LinkCard } from "./card.js";
@@ -46,6 +48,11 @@ export type LinkGuardConfig = Readonly<{
   guardian: GuardianClient;
   /** The tool connection holding the `link.spend` and `link.spend.above_cap` entries. */
   connectionId: string;
+  /**
+   * Adapter audience for executes (`adp_…`), as `createGuardianContext`
+   * takes it. Default: the SDK's tool adapter.
+   */
+  adapterId?: string;
   /**
    * The Link adapter, holding the Link login (`linkCliAdapter`). Only the
    * guard holds it; give the agent the guard, never the adapter or its
@@ -175,6 +182,9 @@ export class LinkGuard {
     if (typeof config.connectionId !== "string" || !config.connectionId) {
       throw new Error("guardian-link: `connectionId` is required.");
     }
+    if (config.adapterId !== undefined && !AdapterIdSchema.safeParse(config.adapterId).success) {
+      throw new Error("guardian-link: `adapterId` must be an adapter id (adp_…).");
+    }
     const link = config.link;
     const methods = [
       "approvalPolicy",
@@ -238,6 +248,7 @@ export class LinkGuard {
         MAX_GUARDIAN_CALL_TIMEOUT_MS,
       ),
       ...(amountArgument ? { amountArgument } : {}),
+      ...(config.adapterId !== undefined ? { adapterId: config.adapterId } : {}),
       ...(config.receiptVerificationKeys !== undefined
         ? { receiptVerificationKeys: config.receiptVerificationKeys }
         : {}),

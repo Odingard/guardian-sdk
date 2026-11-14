@@ -2,8 +2,16 @@
 // after a person approved, read the receipt to confirm the approval is for
 // this exact request and these exact arguments. Every failure is a refusal;
 // nothing here calls Link.
+//
+// Not built on the SDK's shared runThroughGuardian (see CONTRIBUTING.md,
+// "Payment guards"): it runs the action before redeeming, returns an ASK
+// instead of waiting for the person, and does not send `amountArgument` or
+// `ttlMs`. Like it, this sends `adapterId` when set and refuses the reserved
+// `guardianContentPins` argument.
 import {
   classifyRequestResult,
+  CONTENT_PIN_KEY,
+  CONTENT_PIN_KEY_RESERVED,
   verifyReceiptOffline,
   type GuardianClient,
   type GuardianInvocation,
@@ -19,6 +27,8 @@ export type DecisionConfig = Readonly<{
   pollMs: number;
   callTimeoutMs: number;
   amountArgument?: AmountDeclaration;
+  /** Adapter audience for executes, as in the shared triad. Default: the SDK's tool adapter. */
+  adapterId?: string;
   receiptVerificationKeys?: unknown;
   now: () => number;
 }>;
@@ -80,6 +90,16 @@ async function ask(
   purpose: string,
   needsPerson: boolean,
 ): Promise<{ requestId: string; capabilityToken: string; viaAsk: boolean }> {
+  // The content-pin argument is reserved for the SDK, as in the shared
+  // triad: refused before anything is proposed. (The guard builds these
+  // arguments itself from checked terms, so it never carries it.)
+  if (Object.hasOwn(args, CONTENT_PIN_KEY)) {
+    throw refused(
+      "GUARDIAN_DENIED",
+      `The argument name "${CONTENT_PIN_KEY}" is reserved for content pins. Nothing was proposed.`,
+      CONTENT_PIN_KEY_RESERVED,
+    );
+  }
   // `amountArgument` reaches Guardian only through an SDK that carries it
   // (checked when the guard is built; see amount.ts).
   const invocation = {
@@ -87,6 +107,7 @@ async function ask(
     connectionId: cfg.connectionId,
     toolName: tool,
     arguments: args,
+    ...(cfg.adapterId ? { adapterId: cfg.adapterId } : {}),
     ...(cfg.amountArgument ? { amountArgument: cfg.amountArgument } : {}),
     purpose,
     ttlMs: cfg.requestTtlMs,

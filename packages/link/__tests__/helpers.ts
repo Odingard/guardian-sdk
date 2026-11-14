@@ -1,5 +1,9 @@
 // Test fixtures: a fake Guardian, a fake Link (test mode, in memory) and a
 // test store. Nothing here reaches a network or a real Link account.
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { GuardianClient, GuardianInvocation } from "@odingard/guardian-sdk";
 
 import {
@@ -32,6 +36,24 @@ export function terms(overrides: Partial<Record<keyof LinkSpendTerms, unknown>> 
     context: CONTEXT,
     ...overrides,
   } as LinkSpendTerms;
+}
+
+/**
+ * A Link CLI command made of fixture files the test owns: a stand-in
+ * program (mode 0755) and script (0644) in a private folder (0700). Never
+ * run (the tests use a fake runner); it only has to pass the adapter's
+ * file checks, whatever the permissions of the runner's own node are.
+ */
+export function cliFixture(): { dir: string; command: string[]; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "glink-cli-"));
+  chmodSync(dir, 0o700);
+  const program = join(dir, "node");
+  const script = join(dir, "cli.js");
+  writeFileSync(program, "#!/bin/sh\nexit 2\n");
+  chmodSync(program, 0o755);
+  writeFileSync(script, "// stand-in for @stripe/link-cli/dist/cli.js\n");
+  chmodSync(script, 0o644);
+  return { dir, command: [program, script], cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** Terms for one item at `amount`, with a matching total. */

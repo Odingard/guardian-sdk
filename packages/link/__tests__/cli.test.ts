@@ -7,22 +7,27 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createLinkGuard, linkCliAdapter, type LinkCliRunner } from "../src/index.js";
-import { CONNECTION, fakeGuardian, TEST_CARD_NUMBER, TEST_CVC, terms, testStore } from "./helpers.js";
+import { cliFixture, CONNECTION, fakeGuardian, TEST_CARD_NUMBER, TEST_CVC, terms, testStore } from "./helpers.js";
 
 /** The CLI by absolute path: node and a script (never run: the runner is a fake). */
-const COMMAND = [process.execPath, "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"];
+/** The CLI by absolute path: fixture files in a private folder (never run: the runner is a fake). */
+let COMMAND: string[];
+let fixture: ReturnType<typeof cliFixture>;
 
 let dir: string;
 let auth: string;
 let cardDir: string;
 
 beforeEach(() => {
+  fixture = cliFixture();
+  COMMAND = fixture.command;
   dir = mkdtempSync(join(tmpdir(), "glink-test-"));
   auth = join(dir, "link-auth.json");
   writeFileSync(auth, "{}", { mode: 0o600 });
   cardDir = mkdtempSync(join(tmpdir(), "glink-cards-"));
 });
 afterEach(() => {
+  fixture.cleanup();
   rmSync(dir, { recursive: true, force: true });
   rmSync(cardDir, { recursive: true, force: true });
 });

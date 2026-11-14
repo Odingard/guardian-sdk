@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -163,6 +164,41 @@ function checkAuthFile(path: string): void {
 /** Package runners that would fetch or resolve the CLI by name. */
 const RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx"]);
 
+/**
+ * A file the CLI command names (the program, or a script it runs): an
+ * existing regular file owned by the guard's user or root that no one else
+ * can write to, in a folder no one else can write to. Checked both where
+ * the path points and, for a link, where it resolves.
+ */
+function checkCommandFile(path: string): void {
+  let real: string;
+  let st;
+  try {
+    real = realpathSync(path);
+    st = statSync(real);
+  } catch {
+    throw new Error(`guardian-link: the \`command\` file ${path} does not exist.`);
+  }
+  if (!st.isFile()) throw new Error(`guardian-link: the \`command\` entry ${path} must be a regular file.`);
+  if ((st.mode & 0o022) !== 0) {
+    throw new Error(`guardian-link: no one else may write to the \`command\` file ${path}.`);
+  }
+  if (uid() !== undefined && st.uid !== uid() && st.uid !== 0) {
+    throw new Error(`guardian-link: the \`command\` file ${path} must belong to the guard's user or root.`);
+  }
+  for (const folder of new Set([dirname(path), dirname(real)])) {
+    let fst;
+    try {
+      fst = statSync(folder);
+    } catch {
+      throw new Error(`guardian-link: the folder of the \`command\` file ${path} cannot be read.`);
+    }
+    if ((fst.mode & 0o022) !== 0) {
+      throw new Error(`guardian-link: no one else may write to the folder of the \`command\` file ${path}.`);
+    }
+  }
+}
+
 function checkCommand(command: unknown): string[] {
   if (!Array.isArray(command) || command.length === 0 || !command.every((c) => typeof c === "string" && c)) {
     throw new Error("guardian-link: `command` must list the CLI and its leading arguments.");
@@ -179,14 +215,7 @@ function checkCommand(command: unknown): string[] {
       throw new Error("guardian-link: every `command` entry that is not a flag must be an absolute path.");
     }
   }
-  let st;
-  try {
-    st = statSync(file!);
-  } catch {
-    throw new Error("guardian-link: the `command` file does not exist.");
-  }
-  if (!st.isFile()) throw new Error("guardian-link: the `command` file must be a file.");
-  if ((st.mode & 0o022) !== 0) throw new Error("guardian-link: no one else may write to the `command` file.");
+  for (const entry of [file!, ...lead.filter((a) => !a.startsWith("-"))]) checkCommandFile(entry);
   return command as string[];
 }
 

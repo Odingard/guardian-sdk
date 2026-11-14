@@ -6,6 +6,7 @@
 // stored ledger is checked on read, and update and cancel match create.
 import {
   chmodSync,
+  chownSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -21,19 +22,24 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { linkCliAdapter, type LinkCliRunner, type LinkSpendRequestView } from "../src/index.js";
-import { fakeGuardian, fakeLink, makeGuard, ops, priced, terms, testStore } from "./helpers.js";
+import { cliFixture, fakeGuardian, fakeLink, makeGuard, ops, priced, terms, testStore } from "./helpers.js";
 
-const COMMAND = [process.execPath, "/opt/guard/node_modules/@stripe/link-cli/dist/cli.js"];
+/** The CLI by absolute path: fixture files in a private folder (never run: the runner is a fake). */
+let COMMAND: string[];
+let fixture: ReturnType<typeof cliFixture>;
 const noRun: LinkCliRunner = async () => ({ exitCode: 2, stdout: "", stderr: "" });
 
 let dir: string;
 let auth: string;
 beforeEach(() => {
+  fixture = cliFixture();
+  COMMAND = fixture.command;
   dir = mkdtempSync(join(tmpdir(), "glink-review-"));
   auth = join(dir, "link-auth.json");
   writeFileSync(auth, "{}", { mode: 0o600 });
 });
 afterEach(() => {
+  fixture.cleanup();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -45,7 +51,7 @@ describe("the CLI is run by absolute path, from a private folder", () => {
       [["/usr/bin/npx", "@stripe/link-cli"], /npx/],
       [["/usr/local/bin/pnpm", "dlx", "@stripe/link-cli"], /npx/],
       [["/usr/bin/bunx", "@stripe/link-cli"], /npx/],
-      [[process.execPath, "node_modules/@stripe/link-cli/dist/cli.js"], /absolute path/],
+      [[COMMAND[0]!, "node_modules/@stripe/link-cli/dist/cli.js"], /absolute path/],
       [[join(dir, "missing-cli")], /does not exist/],
       [[], /must list/],
     ];
@@ -61,6 +67,57 @@ describe("the CLI is run by absolute path, from a private folder", () => {
     expect(() => linkCliAdapter({ authPath: auth, command: [cli], run: noRun })).toThrow(/no one else may write/);
     chmodSync(cli, 0o755);
     expect(() => linkCliAdapter({ authPath: auth, command: [cli], run: noRun })).not.toThrow();
+  });
+
+  it("checks every file the command names, and its folder", () => {
+    const [program, script] = COMMAND as [string, string];
+    const make = () => linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun });
+    expect(make).not.toThrow();
+
+    // A script that does not exist.
+    expect(() =>
+      linkCliAdapter({ authPath: auth, command: [program, join(fixture.dir, "missing.js")], run: noRun }),
+    ).toThrow(/does not exist/);
+
+    // A group-writable script.
+    chmodSync(script, 0o664);
+    expect(make).toThrow(/no one else may write to the `command` file .*cli\.js/);
+    chmodSync(script, 0o644);
+
+    // A group-writable program.
+    chmodSync(program, 0o775);
+    expect(make).toThrow(/no one else may write to the `command` file .*node/);
+    chmodSync(program, 0o755);
+
+    // A group-writable folder: someone else could swap the files.
+    chmodSync(fixture.dir, 0o770);
+    expect(make).toThrow(/folder of the `command` file/);
+    chmodSync(fixture.dir, 0o700);
+
+    // A link from a safe folder into a folder others can write.
+    const open = join(dir, "open");
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    const real = join(open, "cli.js");
+    writeFileSync(real, "//\n");
+    chmodSync(real, 0o644);
+    const linked = join(fixture.dir, "linked.js");
+    symlinkSync(real, linked);
+    expect(() => linkCliAdapter({ authPath: auth, command: [program, linked], run: noRun })).toThrow(
+      /folder of the `command` file/,
+    );
+
+    // A flag is not a file and is not checked.
+    expect(() =>
+      linkCliAdapter({ authPath: auth, command: [program, "--no-warnings", script], run: noRun }),
+    ).not.toThrow();
+    expect(make).not.toThrow();
+  });
+
+  it.runIf(process.getuid?.() === 0)("refuses a command file that belongs to another user (needs root to set up)", () => {
+    const [, script] = COMMAND as [string, string];
+    chownSync(script, 12_345, 12_345);
+    expect(() => linkCliAdapter({ authPath: auth, command: COMMAND, run: noRun })).toThrow(/guard's user or root/);
   });
 
   it("runs every command from a fresh private folder that is gone afterwards", async () => {
@@ -356,5 +413,40 @@ describe("update and cancel match create", () => {
     await expect(guard.requestApproval(spendRequestId)).rejects.toMatchObject({ code: "WRONG_STATE" });
     await expect(guard.update(spendRequestId, NEW)).rejects.toMatchObject({ code: "WRONG_STATE" });
     expect(ops(link)).not.toContain("requestApproval");
+  });
+});
+
+describe("shared-triad conventions the guard keeps", () => {
+  it("sends adapterId when set, and refuses one that is not an adapter id", async () => {
+    const { guard, guardian } = makeGuard({ adapterId: "adp_00000042" });
+    await guard.create(terms());
+    expect(guardian.requests[0].adapterId).toBe("adp_00000042");
+    const plain = makeGuard();
+    await plain.guard.create(terms());
+    expect(plain.guardian.requests[0]).not.toHaveProperty("adapterId");
+    expect(() => makeGuard({ adapterId: "not-an-adapter" })).toThrow(/adapterId/);
+  });
+
+  it("refuses the reserved guardianContentPins argument before anything is proposed", async () => {
+    const { decideAndRedeem } = await import("../src/decision.js");
+    const guardian = fakeGuardian();
+    const cfg = {
+      guardian,
+      connectionId: "pcn_0123456789abcdef0123456789abcdef",
+      requestTtlMs: 1_000,
+      pollMs: 1,
+      callTimeoutMs: 1_000,
+      now: Date.now,
+    };
+    await expect(
+      decideAndRedeem(cfg, "link.spend", { amount: 1, guardianContentPins: {} }, "p", false),
+    ).rejects.toMatchObject({ code: "GUARDIAN_DENIED", guardianReasonCode: "CONTENT_PIN_KEY_RESERVED" });
+    expect(guardian.calls).toHaveLength(0);
+    // The agent cannot get it into the terms either: an unknown field.
+    const { guard, guardian: g2 } = makeGuard();
+    await expect(guard.create(terms({ guardianContentPins: {} } as never))).rejects.toMatchObject({
+      code: "INVALID_TERMS",
+    });
+    expect(g2.calls).toHaveLength(0);
   });
 });
