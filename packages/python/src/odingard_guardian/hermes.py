@@ -23,6 +23,11 @@ and in the environment Hermes runs in: ``GUARDIAN_AGENT_CREDENTIAL``,
   up the open request; it is never carried across processes (see
   :class:`PendingStore`).
 * DENY, missing config, Guardian unreachable, a crash, a timeout: blocked.
+* Guardian's answer to the redemption lost (no answer, a 5xx, an unreadable
+  answer): the request is looked up in Guardian. A verified redemption lets
+  the tool run; an aborted one is blocked as ``EXECUTION_NOT_SENT``; anything
+  else is blocked as ``EXECUTION_OUTCOME_UNKNOWN`` with the request id to
+  check. Nothing runs unless the redemption is confirmed.
 * Writes to Hermes' own home (``config.yaml``, ``.env``, ``plugins/``) and to
   this package are routed as ``hermes_config`` (needs approval), so the agent
   cannot switch Guardian off through an everyday edit. The credential is
@@ -49,7 +54,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
-from .client import DEFAULT_BASE_URL, GuardianClient, RequestResult
+from .client import DEFAULT_BASE_URL, ExecuteResult, GuardianClient, RequestResult
+from .guard import EXECUTION_OUTCOME_UNKNOWN, _lookup_answer, _outcome_unknown
 
 _logger = logging.getLogger("odingard_guardian.hermes")
 
@@ -434,6 +440,7 @@ _PLAIN = {
     "the connection's card → \"Allow a tool by name\"",
     "SERVICE_UNAVAILABLE": "Guardian could not be reached",
     "REQUEST_CONFLICT": "Guardian saw a conflicting request",
+    "EXECUTION_NOT_SENT": "Guardian did not complete the redemption",
 }
 
 _HELD = ("APPROVAL_REQUIRED", "APPROVAL_PENDING")
@@ -488,6 +495,22 @@ class PendingStore:
 
 def _proposal_key(connection_id: str, call: GovernedCall) -> str:
     return hashlib.sha256(_json([connection_id, call.tool_name, call.arguments]).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _look_up(client: Any, request_id: str) -> str:
+    """After a lost redemption answer: ``verified``, ``not-sent`` or ``unknown``.
+
+    Guardian's recorded attempts for the request (``client.receipts``), read
+    with the same rules as the SDK's guard (:func:`.guard._lookup_answer`).
+    No lookup available, or a lookup that fails, settles nothing.
+    """
+    receipts = getattr(client, "receipts", None)
+    if not callable(receipts):
+        return "unknown"
+    try:
+        return _lookup_answer(request_id, receipts(request_id))[0]
+    except Exception:  # noqa: BLE001 — a failed lookup settles nothing
+        return "unknown"
 
 
 #: The Python SDK asks Guardian for a 120 s request window (``requestedTtlMs``).
@@ -602,19 +625,43 @@ def decide(
     if not room(1):
         return _denied(call, "HOOK_DEADLINE_PASSED", request_id=result.request_id,
                        guardian_decision="ASK" if approved_by_human else "ALLOW")
+    decided = {
+        "request_id": result.request_id,
+        "guardian_decision": "ASK" if approved_by_human else "ALLOW",
+        "approved_by_human": approved_by_human,
+    }
     try:
         executed = client.execute(request_id=result.request_id, capability_token=result.capability_token)
     except Exception:
-        return _denied(call, "SERVICE_UNAVAILABLE", request_id=result.request_id,
-                       guardian_decision="ASK" if approved_by_human else "ALLOW")
+        # The redemption may have reached Guardian: settle it like a lost answer.
+        executed = ExecuteResult(ok=False, reason_code="SERVICE_UNAVAILABLE", outcome_unknown=True)
+    settled_by_lookup = False
     if not executed.ok:
-        return _denied(call, executed.reason_code or "EXECUTE_FAILED", request_id=result.request_id,
-                       guardian_decision="ASK" if approved_by_human else "ALLOW",
-                       approved_by_human=approved_by_human)
+        if not _outcome_unknown(executed):
+            return _denied(call, executed.reason_code or "EXECUTE_FAILED", **decided)
+        # The redemption was sent but its answer was lost: Guardian's record of
+        # the request settles it. Only a verified redemption lets the tool run.
+        # The lookup is one more call, so it is made only if it finishes before
+        # Hermes gives up on the hook; otherwise the outcome stays unknown.
+        found = _look_up(client, result.request_id) if result.request_id and room(1) else "unknown"
+        if found == "not-sent":
+            return _denied(call, "EXECUTION_NOT_SENT", **decided)
+        if found != "verified":
+            rid = result.request_id
+            return HermesVerdict(
+                allow=False,
+                reason=f"Guardian blocked {call.tool_name} ({EXECUTION_OUTCOME_UNKNOWN}): Guardian's answer was lost "
+                f"({executed.reason_code or 'EXECUTE_FAILED'}) and it could not be confirmed whether Guardian "
+                f"recorded the call as allowed. Request {rid}. Nothing ran. Do not retry; ask the developer to "
+                f"check request {rid} in the Guardian console.",
+                **decided,
+            )
+        settled_by_lookup = True
+    note = " Guardian's answer was lost; its record shows the call redeemed." if settled_by_lookup else ""
     return HermesVerdict(
         allow=True,
-        reason=(f"Approved by a person in Guardian (request {result.request_id})." if approved_by_human
-                else f"Allowed by Guardian policy (request {result.request_id})."),
+        reason=(f"Approved by a person in Guardian (request {result.request_id}).{note}" if approved_by_human
+                else f"Allowed by Guardian policy (request {result.request_id}).{note}"),
         request_id=result.request_id,
         guardian_decision="ASK" if approved_by_human else "ALLOW",
         approved_by_human=approved_by_human,

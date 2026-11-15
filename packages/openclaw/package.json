@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-openclaw",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Guardian for OpenClaw: a native plugin whose before_tool_call hook sends every consequential tool call (exec, file edits, messages, browser, MCP tools such as Composio) to Guardian for a deterministic ALLOW/ASK/DENY decision. Deploys, destructive commands and outbound actions wait for a human approval on your phone; every allowed call carries a verifiable receipt. Fails closed.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
@@ -45,7 +45,7 @@
     }
   },
   "devDependencies": {
-    "@odingard/guardian-sdk": "^0.3.5",
+    "@odingard/guardian-sdk": "^0.3.5 || ^0.4.0 || ^0.5.0 || ^0.6.0",
     "@types/node": "^22",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",

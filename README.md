@@ -9,13 +9,13 @@
 [![Guardian MCP server on mcprush](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Human Authority Infrastructure for Autonomous AI.** The agent proposes; the
-human decides. Every tool call an agent makes gets a deterministic
+**Guardian is the trust layer for agent commerce.** Human Authority
+Infrastructure for Autonomous AI: the agent proposes; the human decides. Every tool call an agent makes gets a deterministic
 `ALLOW` / `ASK` / `DENY` decision before it runs, and every execution produces a
 tamper-evident receipt you can verify without an account. The receipt format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
-tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Business via sales.
+tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Enterprise: talk to us.
 
 ## Set up with your coding agent
 
@@ -45,7 +45,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs. Tested, but not yet proven against a live Guardian and a live model                                               | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                       | [packages/openclaw](packages/openclaw)           |
-| [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. | [packages/x402](packages/x402)                   |
+| [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Supports USDC on Base Sepolia (testnet); live proof pending. Base mainnet is off by default. | [packages/x402](packages/x402)                   |
 | [`@odingard/guardian-ap2`](https://www.npmjs.com/package/@odingard/guardian-ap2)                     | Your agent pays over AP2 v0.2: Guardian decides closed Checkout and Payment Mandates before the agent key signs them (pinned merchant keys, USD). Not yet proven live | [packages/ap2](packages/ap2)                     |
 
 ## Works with
@@ -68,20 +68,26 @@ document, and how far each has been tested.
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian`                                    | Tested against Guardian; production proof pending |
 | Python with CrewAI                              | `odingard-guardian`                                    | Example, not yet tested                           |
 | Claude Agent SDK (Python)                       | `odingard-guardian`                                    | Example, not yet tested                           |
-| Codex CLI                                       | `@odingard/guardian-hook`                              | Example, not yet tested                           |
-| DeepSeek Harness                                | `@odingard/guardian-hook`                              | Example, not yet tested                           |
-| Hermes Agent                                    | `odingard-guardian`                                    | Example, not yet tested                           |
-| ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Example, not yet tested                           |
-| Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Example, not yet tested                           |
+| Codex CLI                                       | `@odingard/guardian-hook`                              | Tested locally against a real Guardian            |
+| DeepSeek Harness                                | `@odingard/guardian-hook`                              | Tested locally against a real Guardian            |
+| Hermes Agent                                    | `odingard-guardian`                                    | Tested locally against a real Guardian            |
+| ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/zeroclaw)) | Tested locally against a real Guardian            |
+| Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/byo))      | Tested locally against a real Guardian            |
 | Steel browser checkout                          | `@odingard/guardian-steel`                             | Not yet available on hosted Guardian              |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                          | Proven on production (shell commands)             |
 | NVIDIA NemoClaw (guide)                         | `@odingard/guardian-openclaw` ([guide](examples/nemoclaw)) | Verified on staging with NemoClaw v0.0.143 (shell commands); not tamper-proof |
-| x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Works with USDC on Base Sepolia (testnet). Base mainnet is off by default. |
+| x402 payments (TypeScript)                      | `@odingard/guardian-x402`                              | Supports USDC on Base Sepolia (testnet); live proof pending. Base mainnet is off by default. |
 | AP2 mandates (TypeScript)                       | `@odingard/guardian-ap2`                               | Live proof pending (no public AP2 sandbox) |
 
 "Tested against Guardian" means the integration ran end to end against the
 real Guardian server code, with real approvals and receipts verified offline,
-but not yet on hosted production.
+but not yet on hosted production. "Tested locally against a real Guardian"
+means a scripted stand-in for the agent (no model) ran the shipped package and
+the example's config file end to end against the real Guardian server code:
+allow, ask then approve or deny, deny, and the fail-closed cases each
+example's status names, with receipts verified offline. The stand-ins and the
+Guardian server code are not in this repository, so these runs cannot be
+repeated from it. The agent itself has not run it against Guardian yet.
 
 ## Quickstart
 
@@ -202,7 +208,8 @@ pip install odingard-guardian   # in Hermes' Python; ships the Hermes plugin "gu
 Hermes calls the plugin before every tool call (terminal, file edits,
 `execute_code`, the browser, MCP tools, …). Guardian decides; a block holds.
 Read-only tools are not routed, and anything outside Hermes' tool dispatch is
-not governed. Example, not yet tested against Guardian. The install step is
+not governed. Tested locally against a real Guardian with a scripted stand-in
+for Hermes; not yet proven on Hermes itself. The install step is
 unverified: `hermes plugins enable guardian` failed with "not installed or
 bundled" in the only real attempt, so check that Hermes loads the plugin. See
 [examples/hermes](examples/hermes/README.md).
@@ -235,7 +242,7 @@ node x402/simulated-payments.mjs  # x402 payments: ALLOW, ASK above a cap, DENY,
 node ap2/simulated-payments.mjs   # AP2 mandates: delegation, ALLOW, ASK above a cap, DENY, before the agent key signs (SIMULATED, no network)
 ```
 
-Recipes (LIVE, examples not yet tested): [ZeroClaw](examples/zeroclaw/README.md) ·
+Recipes (LIVE; tested locally against a real Guardian, not yet proven live): [ZeroClaw](examples/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](examples/byo/README.md).
 
 ## Repository layout

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from odingard_guardian import ExecuteResult, RequestResult
+from odingard_guardian import ExecuteResult, ReceiptsResult, RequestResult
 from odingard_guardian import hermes
 from odingard_guardian.hermes import (
     FINAL_CHECK_LEAD_S,
@@ -52,10 +52,15 @@ class Clock:
 class FakeGuardian:
     """``invoke`` answers request(); ``claims`` (a list or a function of the clock) answers claim()."""
 
-    def __init__(self, invoke=ALLOW, claims=None, execute_ok=True, clock=None, latency=None):
+    def __init__(self, invoke=ALLOW, claims=None, execute_ok=True, clock=None, latency=None, executed=None,
+                 lookup=None):
         self.invoke = invoke
         self.claims = claims if claims is not None else []
         self.execute_ok = execute_ok
+        #: Overrides execute()'s answer: an ExecuteResult, or an exception to raise.
+        self.execute_answer = executed
+        #: Answers receipts(): a ReceiptsResult, or an exception to raise.
+        self.lookup = lookup
         self.clock = clock
         self.latency = latency or {}
         self.calls = []
@@ -88,9 +93,22 @@ class FakeGuardian:
         began = self.clock.t if self.clock is not None else 0.0
         self._take("execute")
         self.executed.append((began, self.clock.t if self.clock is not None else 0.0))
+        if isinstance(self.execute_answer, Exception):
+            raise self.execute_answer
+        if self.execute_answer is not None:
+            return self.execute_answer
         if not self.execute_ok:
             return ExecuteResult(ok=False, reason_code="CAPABILITY_REVOKED")
         return ExecuteResult(ok=True, receipt={"schemaVersion": 1, "requestId": request_id})
+
+    def receipts(self, request_id):
+        self.calls.append(f"receipts:{request_id}")
+        self._take("receipts")
+        if isinstance(self.lookup, Exception):
+            raise self.lookup
+        if self.lookup is None:
+            return ReceiptsResult(ok=False, reason_code="NOT_FOUND")
+        return self.lookup
 
 
 def hook(client, clock=None, env=ENV, store=None, hook_timeout_s=0, logs=None):
@@ -664,3 +682,188 @@ def test_every_terminal_argument_is_part_of_the_proposal():
                          protected=HOSTED)
     assert plain.arguments == {"command": "make"}
     assert more.arguments == {"command": "make", "options": {"force": True, "pty": True, "timeout": 600}}
+
+
+# --- a lost redemption answer -------------------------------------------------
+# The redemption reached Guardian but its answer did not come back. Guardian's
+# record of the request settles it: verified runs the tool; aborted is blocked
+# as EXECUTION_NOT_SENT; anything else is blocked as EXECUTION_OUTCOME_UNKNOWN.
+# Nothing runs unless the redemption is confirmed.
+
+LOST = ExecuteResult(ok=False, reason_code="HTTP_502", outcome_unknown=True)
+
+
+def recorded(*states):
+    return ReceiptsResult(ok=True, request_id="req_1",
+                          receipts=[{"state": state, "attemptId": f"att_{i}"} for i, state in enumerate(states)])
+
+
+@pytest.mark.parametrize(
+    "lost",
+    [
+        LOST,
+        ExecuteResult(ok=False, reason_code="SERVICE_UNAVAILABLE", outcome_unknown=True),
+        # An older answer shape without outcome_unknown: the reason code alone says it was lost.
+        ExecuteResult(ok=False, reason_code="HTTP_503"),
+        ExecuteResult(ok=False, reason_code="HTTP_0"),
+        RuntimeError("connection reset"),
+    ],
+)
+def test_lost_answer_verified_by_lookup_lets_the_tool_run(lost):
+    g = FakeGuardian(ALLOW, executed=lost, lookup=recorded("verified"))
+    assert hook(g)(**terminal("ls")) is None
+    assert g.calls == ["request", "execute:req_1", "receipts:req_1"]
+
+
+def test_lost_answer_verified_by_lookup_reports_the_lookup():
+    g = FakeGuardian(ALLOW, executed=LOST, lookup=recorded("aborted", "verified"))
+    verdict = _decide(g, Clock(), deadline=None)
+    assert verdict.allow and verdict.request_id == "req_1" and verdict.guardian_decision == "ALLOW"
+    assert "its record shows the call redeemed" in verdict.reason
+
+
+def test_lost_answer_after_an_approval_verified_by_lookup_runs():
+    clock = Clock()
+    g = FakeGuardian(HELD, claims=[PENDING, ALLOW], clock=clock, executed=LOST, lookup=recorded("verified"))
+    assert hook(g, clock)(**terminal("terraform apply")) is None
+    assert g.calls[-2:] == ["execute:req_1", "receipts:req_1"]
+
+
+@pytest.mark.parametrize("states", [("aborted",), ("commit-rejected",), ("aborted", "commit-rejected")])
+def test_lost_answer_aborted_blocks_as_not_sent(states):
+    g = FakeGuardian(ALLOW, executed=LOST, lookup=recorded(*states))
+    out = hook(g)(**terminal("ls"))
+    assert out["action"] == "block"
+    assert "(EXECUTION_NOT_SENT)" in out["message"] and "Nothing ran" in out["message"]
+    assert "Do not retry" in out["message"]
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        recorded(),  # nothing recorded yet
+        recorded("committing"),
+        recorded("aborted", "committing"),
+        recorded("unexpected-state"),
+        ReceiptsResult(ok=False, reason_code="SERVICE_UNAVAILABLE"),
+        ReceiptsResult(ok=True, request_id="req_1", receipts="not a list"),  # type: ignore[arg-type]
+        RuntimeError("lookup crashed"),
+        None,  # the lookup answers NOT_FOUND
+    ],
+)
+def test_lost_answer_not_settled_blocks_as_outcome_unknown(lookup):
+    g = FakeGuardian(ALLOW, executed=LOST, lookup=lookup)
+    out = hook(g)(**terminal("ls"))
+    assert out["action"] == "block"
+    message = out["message"]
+    assert "(EXECUTION_OUTCOME_UNKNOWN)" in message and "(HTTP_502)" in message
+    assert "Nothing ran. Do not retry" in message
+    assert "check request req_1 in the Guardian console" in message
+    assert g.calls == ["request", "execute:req_1", "receipts:req_1"]
+
+
+def test_lost_answer_with_no_lookup_available_blocks_as_outcome_unknown():
+    class NoLookup(FakeGuardian):
+        receipts = None
+
+    g = NoLookup(ALLOW, executed=LOST)
+    verdict = _decide(g, Clock(), deadline=None)
+    assert not verdict.allow and "(EXECUTION_OUTCOME_UNKNOWN)" in verdict.reason
+    assert verdict.request_id == "req_1" and verdict.guardian_decision == "ALLOW"
+
+
+def test_a_definitive_refusal_is_not_looked_up():
+    g = FakeGuardian(ALLOW, executed=ExecuteResult(ok=False, reason_code="CAPABILITY_REVOKED"),
+                     lookup=recorded("verified"))
+    out = hook(g)(**terminal("ls"))
+    assert out["action"] == "block" and "(CAPABILITY_REVOKED)" in out["message"]
+    assert g.calls == ["request", "execute:req_1"]
+
+
+def test_no_lookup_that_could_finish_after_hermes_gave_up():
+    # The redeem fits before Hermes' deadline but the lookup after it would not:
+    # the outcome stays unknown and the tool does not run.
+    clock = Clock()
+    g = FakeGuardian(ALLOW, clock=clock, latency={"request": 1, "execute": 7.6}, executed=LOST,
+                     lookup=recorded("verified"))
+    verdict = _decide(g, clock, deadline=16.5)
+    assert not verdict.allow and "(EXECUTION_OUTCOME_UNKNOWN)" in verdict.reason
+    assert g.calls == ["request", "execute:req_1"]
+
+
+def _real_client(execute, receipts):
+    import httpx
+
+    from odingard_guardian import GuardianClient
+
+    calls = []
+
+    def answer(request):
+        calls.append(request.url.path)
+        body = json.loads(request.content or b"null")
+        if request.url.path == "/v1/agent/requests":
+            return httpx.Response(200, json={"ok": True, "decision": "ALLOW", "requestId": body["requestId"],
+                                             "capabilityToken": "gcap1.TOKEN"})
+        if request.url.path == "/v1/agent/execute":
+            return execute(request)
+        if request.url.path.startswith("/v1/agent/receipts/"):
+            return receipts(request)
+        return httpx.Response(404, json={"ok": False, "code": "NOT_FOUND"})
+
+    return GuardianClient(credential=SECRET, base_url="https://guardian.test",
+                          transport=httpx.MockTransport(answer)), calls
+
+
+def _states(*states):
+    import httpx
+
+    def respond(request):
+        return httpx.Response(200, json={"ok": True, "requestId": request.url.path.rsplit("/", 1)[-1],
+                                         "receipts": [{"state": s, "attemptId": f"att_{i}"}
+                                                      for i, s in enumerate(states)]})
+
+    return respond
+
+
+def _bad_gateway(request):
+    import httpx
+
+    return httpx.Response(502, text="bad gateway")
+
+
+def _connection_reset(request):
+    import httpx
+
+    raise httpx.ConnectError("connection reset", request=request)
+
+
+@pytest.mark.parametrize("lost", [_bad_gateway, _connection_reset])
+def test_real_client_lost_answer_verified_by_lookup_runs(lost):
+    client, calls = _real_client(lost, _states("verified"))
+    assert hook(client)(**terminal("ls")) is None
+    assert calls[:2] == ["/v1/agent/requests", "/v1/agent/execute"]
+    assert calls[2].startswith("/v1/agent/receipts/")
+
+
+def test_real_client_lost_answer_aborted_blocks_as_not_sent():
+    client, _ = _real_client(_bad_gateway, _states("aborted"))
+    out = hook(client)(**terminal("ls"))
+    assert out["action"] == "block" and "(EXECUTION_NOT_SENT)" in out["message"]
+
+
+@pytest.mark.parametrize("lookup", [_bad_gateway, _connection_reset, _states()])
+def test_real_client_lost_answer_not_settled_blocks_as_outcome_unknown(lookup):
+    client, _ = _real_client(_connection_reset, lookup)
+    out = hook(client)(**terminal("ls"))
+    assert out["action"] == "block" and "(EXECUTION_OUTCOME_UNKNOWN)" in out["message"]
+    assert "Nothing ran. Do not retry" in out["message"]
+
+
+def test_real_client_definitive_refusal_is_not_looked_up():
+    import httpx
+
+    client, calls = _real_client(
+        lambda r: httpx.Response(403, json={"ok": False, "reasonCode": "CAPABILITY_REVOKED"}), _states("verified"))
+    out = hook(client)(**terminal("ls"))
+    assert out["action"] == "block" and "(CAPABILITY_REVOKED)" in out["message"]
+    assert not any(c.startswith("/v1/agent/receipts/") for c in calls)

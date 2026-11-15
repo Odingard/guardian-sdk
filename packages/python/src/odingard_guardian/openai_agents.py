@@ -72,8 +72,9 @@ def guardian_error_message(error: BaseException) -> Optional[str]:
     if denied is not None:
         if denied.reason_code == "SERVICE_UNAVAILABLE":
             return f"Guardian could not check {denied.tool_name}, so it did not run. Try again later."
+        rid = f" (request_id {denied.request_id})" if denied.request_id else ""
         return (
-            f"Guardian denied {denied.tool_name} ({denied.reason_code}). It did not run. "
+            f"Guardian denied {denied.tool_name} ({denied.reason_code}). It did not run{rid}. "
             "Do not retry the same call."
         )
     return None

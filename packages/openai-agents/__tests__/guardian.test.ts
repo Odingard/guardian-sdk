@@ -463,10 +463,27 @@ describe("guardianTool: DENY", () => {
     });
     const out = await invoke(t, { orderId: "o", amount: 1 });
     expect(out).toBe(
-      "Guardian denied refund_order (POLICY_DENY). It did not run. Do not retry the same call.",
+      "Guardian denied refund_order (POLICY_DENY). It did not run (requestId req_deny). Do not retry the same call.",
     );
     expect(run).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("a refusal without a request id says so without one", async () => {
+    const t = refundTool(vi.fn(), {
+      client: stubClient({
+        request: vi
+          .fn()
+          .mockResolvedValue({
+            ok: false,
+            reasonCode: "ACTION_PARAMETERS_INVALID",
+          }),
+      }),
+      connectionId: "con_1",
+    });
+    expect(await invoke(t, { orderId: "o", amount: 1 })).toBe(
+      "Guardian denied refund_order (ACTION_PARAMETERS_INVALID). It did not run. Do not retry the same call.",
+    );
   });
 
   it("a failed request (ok: false) is a denial", async () => {
@@ -1107,6 +1124,31 @@ describe("review fixes", () => {
     expect(out).not.toMatch(/try again/i);
     expect(out).toMatch(/ran, but Guardian could not record it/);
     expect(out).toMatch(/Do not call it again/);
+    expect(out).toMatch(/\(requestId req_1\)/);
+  });
+
+  it("a lost answer that the lookup cannot settle: ran, not confirmed, request named, never 'without a receipt'", async () => {
+    const run = vi.fn().mockResolvedValue("did work");
+    const t = refundTool(run, {
+      client: stubClient({
+        request: vi.fn().mockResolvedValue(allow()),
+        execute: vi.fn().mockResolvedValue({
+          ok: false,
+          reasonCode: "SERVICE_UNAVAILABLE",
+          outcomeUnknown: true,
+        }),
+        receipts: vi
+          .fn()
+          .mockResolvedValue({ ok: false, reasonCode: "SERVICE_UNAVAILABLE" }),
+      }),
+      connectionId: "con_1",
+    });
+    const out = String(await invoke(t, { orderId: "o", amount: 1 }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(out).toBe(
+      "refund_order ran, but Guardian could not confirm that it recorded it (EXECUTION_OUTCOME_UNKNOWN). " +
+        "Do not call it again; tell the user it ran and that the request needs checking (requestId req_1).",
+    );
   });
 
   it("in a run, a localEffectRan failure tells the model not to retry", async () => {

@@ -93,8 +93,12 @@ def no_retry(message: str) -> None:
 # --- in-process: the function ran, recording failed -------------------------
 
 
+def revoked(request, body):
+    return httpx.Response(409, json={"ok": False, "reasonCode": "CAPABILITY_REVOKED"})
+
+
 def test_recording_failure_after_the_effect_says_it_ran_and_calls_the_hook():
-    server = Server({"/v1/agent/requests": [allow], "/v1/agent/execute": [network_down]})
+    server = Server({"/v1/agent/requests": [allow], "/v1/agent/execute": [revoked]})
     seen = []
     guard = Guard(
         make_client(server),
@@ -108,7 +112,7 @@ def test_recording_failure_after_the_effect_says_it_ran_and_calls_the_hook():
     assert effects == [("INV-1", 48000, "acme")]
     g = out["guardian"]
     assert g["decision"] == "ALLOW" and g["outcome"] == "ran_unrecorded" and g["local_effect_ran"] is True
-    assert g["reason_code"] == "SERVICE_UNAVAILABLE" and g["request_id"].startswith("req_")
+    assert g["reason_code"] == "CAPABILITY_REVOKED" and g["request_id"].startswith("req_")
     assert g["message"].startswith("pay_invoice ran, but Guardian could not record it")
     no_retry(g["message"])
     assert len(seen) == 1 and isinstance(seen[0], GuardianExecutionFailed) and seen[0].local_effect_ran

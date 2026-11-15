@@ -229,6 +229,15 @@ function guardedClient(
     request: async (input) => (check(), client.request(input)),
     claim: async (requestId) => (check(), client.claim(requestId)),
     execute: async (input) => (check(), client.execute(input)),
+    // Settles a redemption whose answer was lost; without it, a block.
+    ...(client.receipts
+      ? {
+          receipts: async (requestId: string) => (
+            check(),
+            client.receipts!(requestId)
+          ),
+        }
+      : {}),
   };
 }
 

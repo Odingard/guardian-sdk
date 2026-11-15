@@ -10,6 +10,20 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.6
+
+- Date: 2026-11-14
+- SHA-256: `93766f4b51833dabed764ace7cc94b86e8512bf80ee4af55b5475e79fdf493b0`
+- Pins: `@odingard/guardian-hook` 0.4.1; `@odingard/guardian-openclaw` 0.1.2; `odingard-guardian` 0.4.0. The other pins are unchanged from 1.0.5.
+- Pins the guardian-hook 0.4.1, guardian-openclaw 0.1.2 and Python 0.4.0 release (refusals name the request; a lost redemption answer is looked up). No other change.
+
+## 1.0.5
+
+- Date: 2026-11-14
+- SHA-256: `809c721d459eee6d281a8a9e30394a97af307220e51985d1dcaff8b6a5362322`
+- Pins: unchanged from 1.0.4.
+- Codex CLI, DeepSeek Harness and Hermes: "tested locally against a real Guardian" in place of "example, not yet tested". Two sentences in 4C shortened. No other change.
+
 ## 1.0.4
 
 - Date: 2026-11-13

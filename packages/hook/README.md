@@ -18,7 +18,7 @@ There is no model in the decision: Guardian decides ALLOW / ASK / DENY determini
 | **ASK**       | The agent waits. You get the request on your phone or in the console. On approval the hook claims and redeems the capability, then the call runs. It is never auto-approved. |
 | **DENY**      | The agent is told no, with the reason. Nothing runs.                                                                                                                         |
 
-**Fail closed.** If Guardian can't be reached, the configuration is wrong, approval times out or redemption fails, the call is denied. Each request stays open for 5 minutes (Guardian's limit), and the hook waits that long for an approval, under Claude Code's 600-second hook timeout, because a hook that times out does not block. An ASK not approved within 5 minutes expires; the call is denied and the agent can ask again.
+**Fail closed.** If Guardian can't be reached, the configuration is wrong, approval times out or redemption fails, the call is denied. Each request stays open for 5 minutes (Guardian's limit), and the hook waits that long for an approval, under Claude Code's 600-second hook timeout, because a hook that times out does not block. An ASK not approved within 5 minutes expires; the call is denied and the agent can ask again. A denial tells the agent Guardian's request id (`Request req_…`), so the developer can find the request in the console. If Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer), the hook looks the request up in Guardian: when Guardian recorded the redemption as verified, the call runs; otherwise it is denied with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT` when Guardian aborted it), nothing runs, and the agent is told not to retry and to have the request checked.
 
 ## Tools the hook proposes
 
@@ -82,7 +82,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @odingard/guardian-hook@0.4.0",
+            "command": "npx -y @odingard/guardian-hook@0.4.1",
             "timeout": 600
           }
         ]

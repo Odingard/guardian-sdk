@@ -408,7 +408,7 @@ current maturity.
 
 The free tier needs no card. Over a limit, the API returns
 `403 PLAN_LIMIT_EXCEEDED` naming your plan, the limit and current usage.
-Plans: Free ($0), Developer ($99/month, 25,000 billable executions included, then $0.001 each, $500 default overage cap) and Business (contact sales). Details: [odingard.com/guardian](https://odingard.com/guardian#gd-pricing).
+Plans: Free ($0), Developer ($99/month, 25,000 billable executions included, then $0.001 each, $500 default overage cap) and Enterprise (talk to us). Details: [odingard.com/guardian](https://odingard.com/guardian#gd-pricing).
 Reading receipts and verifying them is never metered.
 
 ## Related packages
