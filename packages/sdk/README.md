@@ -301,6 +301,21 @@ the receipt's evidence chain. It needs no credential, plan or Guardian service
 once you hold the keys, and is never billed. Guardian publishes its newest keys. For a receipt signed by an older key, fetch with `fetchReceiptVerificationKeys(base, { forReceipt: receipt })`. `verifyReceiptOnline` asks a
 Guardian deployment to do the same over the public `POST /v1/receipts/verify`.
 
+### From the command line
+
+```bash
+npx @odingard/guardian-sdk verify receipt.json                  # keys from guardian-api.odingard.com
+npx @odingard/guardian-sdk verify receipt.json --keys keys.json # no network at all
+```
+
+`verify` prints `VALID` with the decision, effect, request and agent, or
+`NOT VALID: <reasonCode>`; `--json` prints the result object. It exits 0 for
+a valid receipt, 1 for one that is not valid, and 2 for a usage or input
+error (including keys that could not be downloaded). The file may hold the
+receipt or an API answer `{ "receipt": … }`. `--base-url <https-url>` fetches
+the keys from another Guardian deployment. No account or credential is
+needed.
+
 ## Verify before acting — for whoever receives the request (0.3.6)
 
 An allowlist trusts the sender. If an agent asks your service to move money
