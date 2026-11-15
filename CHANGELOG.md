@@ -1,6 +1,13 @@
 # Changelog
 
-## guardian-hook 0.4.1 / guardian-openclaw 0.1.2 / guardian-steel 0.1.2 / guardian-x402 0.1.1 / Python 0.4.0 (unreleased)
+## sdk 0.6.1 (unreleased)
+
+### Added: `guardian-sdk verify`, a command-line receipt verifier
+
+- **`@odingard/guardian-sdk`**: a `guardian-sdk` command. `npx @odingard/guardian-sdk verify receipt.json` checks a `greceipt.v1` receipt with `verifyReceiptOffline`, against Guardian's published keys or, with `--keys keys.json`, a key set on disk with no network access. Exit code 0 valid, 1 not valid, 2 usage or input error. No account or credential is needed.
+- `docs/spec/greceipt-v1.md` §8 and the SDK README show the command.
+
+## guardian-hook 0.4.1 / guardian-openclaw 0.1.2 / guardian-steel 0.1.2 / guardian-x402 0.1.1 / Python 0.4.0, released 2026-11-14
 
 ### Fixed: refusals name the request; a lost redemption answer is looked up
 
@@ -17,12 +24,12 @@
   - **Hermes plugin (`odingard_guardian.hermes`).** When Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer, or the call raising), the hook looks the request up (`client.receipts`), with the same rules as the SDK. If Guardian recorded the redemption as verified, Hermes runs the tool; if Guardian aborted it, the call is blocked as `EXECUTION_NOT_SENT`; otherwise it is blocked as `EXECUTION_OUTCOME_UNKNOWN`, and the agent is told nothing ran, not to retry, and which request to check in the Guardian console. Before, such a call was blocked as `SERVICE_UNAVAILABLE` without a lookup and without the request id, although Guardian may have recorded it as allowed. The lookup is made only when it can finish inside Hermes' hook timeout; a client without `receipts`, or a lookup that fails, is blocked as `EXECUTION_OUTCOME_UNKNOWN`. A definitive refusal of the redemption is not looked up.
 - **skill.md 1.0.6.** Pins these versions (hash in `skill/CHANGELOG.md`).
 
-## Docs: agent integrations tested locally against a real Guardian (unreleased)
+## Docs: agent integrations tested locally against a real Guardian, released 2026-11-14
 
 - Codex CLI, DeepSeek Harness, Hermes Agent, ZeroClaw and bring-your-own containers: status "Tested locally against a real Guardian" in place of "Example, not yet tested". A scripted stand-in for each agent (no model) ran the shipped package and the example's config file end to end against the real Guardian server code: allow, ask then approve or deny, deny and the fail-closed cases each example names, receipts verified offline. None has run on the real agent against Guardian yet. No code change.
 - **skill.md 1.0.5.** The new status words for Codex CLI, DeepSeek Harness and Hermes (hash in `skill/CHANGELOG.md`).
 
-## sdk 0.6.0 / guardian-mcp 0.5.0 / guardian-langchain 0.6.0 / guardian-vercel-ai 0.6.0 / guardian-openai-agents 0.4.0 (unreleased)
+## sdk 0.6.0 / guardian-mcp 0.5.0 / guardian-langchain 0.6.0 / guardian-vercel-ai 0.6.0 / guardian-openai-agents 0.4.0, released 2026-11-14
 
 ### Added: dollar amounts on tools (`amountArgs`, `--amount-arg`)
 
@@ -36,11 +43,6 @@ Guardian can now put a dollar limit on a tool you register: name the argument th
 - **`@odingard/guardian-openai-agents` 0.4.0, also changed:** a refusal the model is told now names the request (`Guardian denied <tool> (<code>). It did not run (requestId req_…). Do not retry the same call.`), and so do the "ran, but Guardian could not record it" and "could not complete" messages. When the tool ran and Guardian's answer was lost and the SDK's lookup did not settle it, the model is told the tool ran and that Guardian could not confirm it recorded it, not that it ran without a receipt.
 - **Not changed: `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-x402`, `@odingard/guardian-ap2` and the Python SDK (`odingard-guardian`).** They do not send amount declarations, so a tool the owner gave an amount in the console is refused through them, as it is through any earlier version of the packages above. In this repository the SDK version ranges of guardian-hook, guardian-steel, guardian-x402 and guardian-ap2 also accept `^0.6.0` so the workspace installs; their published versions are unchanged.
 - **skill.md 1.0.4.** Pins these versions (hash in `skill/CHANGELOG.md`) and says the MCP package and the wrappers take the SDK as `^0.6.0`.
-
-### Added: `guardian-sdk verify`, a command-line receipt verifier
-
-- **`@odingard/guardian-sdk`**: a `guardian-sdk` command. `npx @odingard/guardian-sdk verify receipt.json` checks a `greceipt.v1` receipt with `verifyReceiptOffline`, against Guardian's published keys or, with `--keys keys.json`, a key set on disk with no network access. Exit code 0 valid, 1 not valid, 2 usage or input error. No account or credential is needed.
-- `docs/spec/greceipt-v1.md` §8 and the SDK README show the command.
 
 ## guardian-openclaw 0.1.1, released 2026-11-12
 
