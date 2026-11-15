@@ -2,27 +2,29 @@
 
 # @odingard/guardian-hook
 
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
 **Guardian for coding agents.** A [Claude Code](https://code.claude.com/docs/en/hooks) `PreToolUse` hook that sends every consequential tool call (shell commands, file writes, web fetches, MCP tools) to Guardian before it runs. The same hook runs under [OpenAI Codex CLI](#openai-codex-cli) (`guardian-hook codex`) and [DeepSeek Harness](#deepseek-harness-dsh) (`guardian-hook dsh`).
 
 - `npm test` runs under **Allow**.
-- `terraform apply` waits until **you approve it on your phone**.
+- `terraform apply` waits until **you approve it**.
 - `rm -rf` is **denied** if that is the mode you set.
 
-There is no model in the decision: Guardian decides ALLOW / ASK / DENY deterministically from the permissions you set, and every allowed call carries a signed receipt you can verify offline.
+There is no model in the decision: Guardian decides ALLOW / ASK / DENY deterministically from the permissions you set, and every allowed call carries a signed decision record you can verify offline.
 
 ## How it works
 
 | Guardian says | What happens                                                                                                                                                                 |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ALLOW**     | The hook redeems the single-use capability (revocation and expiry are checked now, and the receipt is recorded), then tells the agent to run the call.                       |
-| **ASK**       | The agent waits. You get the request on your phone or in the console. On approval the hook claims and redeems the capability, then the call runs. It is never auto-approved. |
+| **ALLOW**     | The hook redeems the single-use capability (revocation and expiry are checked now, and the decision is recorded), then tells the agent to run the call.                      |
+| **ASK**       | The agent waits. You get the request in the Guardian console. On approval the hook claims and redeems the capability, then the call runs. It is never auto-approved.         |
 | **DENY**      | The agent is told no, with the reason. Nothing runs.                                                                                                                         |
 
 **Fail closed.** If Guardian can't be reached, the configuration is wrong, approval times out or redemption fails, the call is denied. Each request stays open for 5 minutes (Guardian's limit), and the hook waits that long for an approval, under Claude Code's 600-second hook timeout, because a hook that times out does not block. An ASK not approved within 5 minutes expires; the call is denied and the agent can ask again. A denial tells the agent Guardian's request id (`Request req_…`), so the developer can find the request in the console. If Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer), the hook looks the request up in Guardian: when Guardian recorded the redemption as verified, the call runs; otherwise it is denied with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT` when Guardian aborted it), nothing runs, and the agent is told not to retry and to have the request checked.
 
 ## Tools the hook proposes
 
-Shell commands are routed by consequence. That routing is what lets you put deploys behind your phone while ordinary commands flow freely.
+Shell commands are routed by consequence. That routing is what lets you put deploys behind your approval while ordinary commands flow freely.
 
 **How a command is routed.** The hook parses the command line and routes it by the riskiest command inside it. It removes quotes and escapes, splits on `;`, `&&`, `||`, `|`, newlines and subshells, and looks inside `$( )`, backticks, `<( )`, `sh -c` / `bash -c` strings, `eval`, `su -c`, `env -S` and `find -exec`. It looks past wrappers (`sudo`, `doas`, `env`, `xargs`, `nice`, `nohup`, `time`, `timeout`, `stdbuf`, `exec`, `command`, `watch`, `npx`), git global options (`-C`, `-c`, `--git-dir`, `--work-tree`) and git aliases set with `-c alias.*`. So `find . | xargs rm -rf`, `git -C repo push -f`, `"git" push --force` and `r\m -rf ~` are all `shell_destructive`. When the hook cannot follow a command, it sends it to the Ask tier: an unterminated quote, a command name known only at run time (`$CMD -rf x`), `eval` or `sh -c` of run-time text (`sh -c "$(echo … | base64 -d)"`, `eval "$(tool init)"`), or a `case` statement.
 
@@ -52,7 +54,7 @@ Read-only tools (Read, Grep, Glob, LS, WebSearch) are not routed through Guardia
 
 ## Setup
 
-Guardian sets modes **per connection**, not per tool. So the hook uses two record-only tool servers, one per risk tier. That lets `ls` run straight away while `terraform apply` waits for your phone.
+Guardian sets modes **per connection**, not per tool. So the hook uses two record-only tool servers, one per risk tier. That lets `ls` run straight away while `terraform apply` waits for your approval.
 
 1. In the Guardian console, go to **Connections → Register a tool server → record-only** and create two:
    - **"Coding agent — everyday"** with `shell`, `file_write` and `web_fetch`.
@@ -264,11 +266,11 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - The mode is always `recheck`, and there is nothing to declare. Elsewhere in the SDK `bytes` is the default when no mode is named; the hook cannot hand the agent's own Edit tool bytes, so it does not use that default.
 - Shell commands are not pinned. The command text is bound; files it names (`bash deploy.sh`, `curl -F file=@x`, globs, `$VAR`) are not.
 - Pinning is supported on Linux and macOS. On Windows an Edit-type call is denied (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.
+- **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.
 
 ## Limits (read these)
 
-- **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The receipt proves Guardian's authorization of that exact call, not the command's own outcome.
+- **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The signed decision record proves Guardian's authorization of that exact call, not the command's own outcome.
 - **Routing is local and evadable.** The parser and patterns run on your machine. They do not see inside scripts, other interpreters' code, shell functions or configured git aliases (see [Tools the hook proposes](#tools-the-hook-proposes)).
 - **The agent can still edit the hook's own config in ways the hook does not recognise.** Writes to the known config files (`.codex/hooks.json`, `guardian-hooks.json`, `cordis.patch.yml`, `.claude/settings.json` and the others listed above) go to the Ask tier, but a script, an interpreter (`python script.py`) or a path built at run time can still rewrite them and remove the hook. On one-shot dsh runs the harness restarts on every message, so the edit takes effect on the next one. Deliver the hook as a managed hook (Codex `requirements.toml` with `allow_managed_hooks_only`, Claude Code managed settings), or mount the config read-only (owned by another user) where that matters.
 - **Starting the hook.** It answers only when run as `guardian-hook` (or `…/hook/dist/index.js`). Installed under another file name it exits 0 with no output, which every agent treats as "no objection". Use the documented commands.

@@ -34,7 +34,7 @@ checked against the AP2 Python SDK's verifier. AP2 has no public sandbox.
 - **Delegation** (`delegate`): Guardian decides, always with a person,
   before your Trusted Surface is asked to sign open mandates for the agent
   key.
-- **Receipts** (`recordReceipt`): Checkout and Payment Receipts, verified
+- **Merchant and processor results** (`recordReceipt`): AP2 Checkout and Payment Receipts, verified
   against keys you pin for each role (merchant for Checkout Receipts,
   processor for Payment Receipts), update the guard's ledger.
 - Known constraint types only: `checkout.allowed_merchants`,
@@ -126,8 +126,8 @@ signature, for example one backed by a KMS or HSM.
    (RFC 8785). On ASK the guard polls `claim` until a person decides or the
    request expires (default 120 s, at most 300 s). On ALLOW it calls
    `execute`, where Guardian checks single use, expiry and revocation, before
-   any signature exists. For `ap2.pay.above_cap` it then reads the receipt
-   and continues only if it shows a person approved this exact request.
+   any signature exists. For `ap2.pay.above_cap` it then reads Guardian's
+   signed decision record and continues only if it shows a person approved this exact request.
 5. **Inputs unchanged, still valid.** If anything you passed changed while
    a person decided, the guard refuses (`TERMS_CHANGED`). It checks again
    that neither open mandate's `exp` nor the checkout's `expires_at` has
@@ -213,9 +213,9 @@ shipping or cancellation terms: the guard shows a merchant link whose type
 names refunds or returns, or says the merchant did not state them. It shows
 these; it cannot gate them.
 
-### What a receipt means
+### What Guardian's decision record means
 
-A Guardian receipt says Guardian authorized and redeemed one decision on
+Guardian's signed decision record says Guardian authorized and redeemed one decision on
 these exact terms. It does not say a mandate was signed, presented or paid.
 If signing fails after `execute`, the decision is spent and the guard
 records "redeemed, not signed"; a retry needs a new decision. If `execute`
@@ -262,7 +262,7 @@ interface Ap2GuardStore {
   reads it only as major units with at most two decimals, and only for a
   currency whose exponent is 2; anything else is refused
   (`BUDGET_UNIT_AMBIGUOUS`).
-- **Receipts by role.** `receiptIssuerKeys.checkout` pins the merchant's
+- **Issuer keys by role.** `receiptIssuerKeys.checkout` pins the merchant's
   receipt keys, `receiptIssuerKeys.payment` the processor's. A receipt is
   accepted only for the side its issuer is pinned for: a merchant key cannot
   sign a Payment Receipt, nor a processor key a Checkout Receipt.
@@ -274,7 +274,7 @@ interface Ap2GuardStore {
   payment side can release it. A timeout or a missing receipt keeps it.
   `unresolved_constraint` is treated as an error; `recordReceipt` returns
   `returnToHumanPresent: true`, and any new pair needs a new decision.
-- **Conflicting receipts.** A verified Success Payment Receipt for a pair
+- **Conflicting outcomes.** A verified Success Payment Receipt for a pair
   that was released counts the pair again (money moved) and is flagged:
   `recordReceipt` returns `conflict: true` and the ledger entry is marked.
   An Error after a Success never releases. Look at flagged pairs by hand;

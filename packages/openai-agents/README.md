@@ -2,9 +2,11 @@
 
 # @odingard/guardian-openai-agents
 
-OpenAI Agents SDK adapter for Guardian — every tool call goes through a
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+OpenAI Agents SDK adapter for Guardian: every tool call goes through a
 deterministic `ALLOW` / `ASK` / `DENY` authority decision before the tool
-runs. The agent proposes; the human decides.
+runs.
 
 **Tested, but not yet proven against a live Guardian and a live model.** The
 tests run the real Agents SDK runner with a scripted model and a stubbed
@@ -65,8 +67,8 @@ try {
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
     try {
-      const { output, receipt } = await pending.resume();
-      console.log("approved", output, receipt);
+      const { output } = await pending.resume();
+      console.log("approved", output);
       break;
     } catch (again) {
       if (findApprovalPending(again)) continue;
@@ -88,9 +90,9 @@ the agent.
 
 - `ALLOW` — Guardian issues a single-use capability. Your `execute` runs
   once with the call's arguments, then the capability is redeemed and a
-  receipt recorded (`onReceipt` gets it). A failed redemption raises
+  signed decision record kept (`onReceipt` gets it). A failed redemption raises
   `GuardianExecutionFailed` with `localEffectRan: true`. Without your own
-  `errorFunction`, the model is told the tool ran without a receipt and not
+  `errorFunction`, the model is told the tool ran without a confirmed record and not
   to call it again, with the requestId. When Guardian's answer was lost and
   looking the request up did not settle it, the model is told the tool ran,
   that Guardian could not confirm it recorded it, and not to call it again. If the SDK's own `timeoutMs` has already fired, the SDK
@@ -118,7 +120,7 @@ the agent.
   cancellation stop the wait too, but only while Guardian is still deciding.
   Once Guardian has allowed the call and your `execute` has started, neither
   stops it: the SDK may tell the model the tool timed out while your
-  `execute` and the receipt still finish. Keep your own `execute` within the
+  `execute` and its record still finish. Keep your own `execute` within the
   SDK timeout, and make side effects idempotent.
 
 The arguments Guardian checks are the ones the Agents SDK parsed from the
@@ -136,12 +138,12 @@ even with `onAsk: "result"`.
 | Mode                  | What happens on `ALLOW`                                                                                                                                         |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inProcess` (default) | Your `execute` runs, then `client.execute` redeems the capability and records the evidence. Needs a record-only catalog entry for the tool on the connection    |
-| `remote`              | The tool name is a registered catalog entry Guardian calls itself. `client.execute` performs the call; your `execute` **never runs**; the result is the receipt |
+| `remote`              | The tool name is a registered catalog entry Guardian calls itself. `client.execute` performs the call; your `execute` **never runs**; the result is the record  |
 
 In-process mode is decision-gated: `execute` runs after `ALLOW` and before
 the capability is redeemed, so a revocation at redemption lands after the
 effect. Use `mode: "remote"` where Guardian itself must hold the effect.
-In remote mode, a call Guardian performed whose receipt status is not
+In remote mode, a call Guardian performed whose recorded status is not
 `sent-verified` (for example the upstream answered with an error) is a
 `GuardianExecutionFailed`, and the model is told it did not complete; it is
 never reported as an `ALLOW` result.
@@ -193,7 +195,7 @@ The Agents SDK renames tools whose names contain characters other than letters a
 - **Opt-in preview for the approver (sdk 0.5):** `{ attachmentPath: { mode: "bytes", preview: true } }` also puts the file's type, size and, for a text file, its first 20 lines (at most 2,048 bytes) in the pin, so the approval shows them next to the file name. The preview text leaves your machine and is stored with the approval like any other argument, also on deny; the short forms never send one. The agent picks the path, so add `previewRoots: ["/srv/reports"]` to preview only files in those folders (others get a size-only `withheld` preview). Details in the [SDK README](../sdk/README.md#show-the-approver-the-first-lines-of-the-file--preview-05-opt-in).
 - With a renamed tool, two `fileArgs` entries that differ only in `preview` or `previewRoots` also disagree and are refused when the tool is built.
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
 

@@ -2,11 +2,12 @@
 
 # odingard-guardian: Guardian SDK for Python
 
-**Human Authority Infrastructure for Autonomous AI.** The agent proposes and the
-human decides. Every action your agent wants to take gets a deterministic
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+Every action your agent wants to take gets a deterministic
 `ALLOW` / `ASK` / `DENY` decision from Guardian **before it runs**. `ASK`
-waits for a human, and every execution produces a tamper-evident receipt you
-can verify offline.
+waits for a human, and every execution produces a signed, tamper-evident
+decision record you can verify offline.
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com). The
 free tier needs no card.
@@ -42,14 +43,14 @@ try:
 except GuardianApprovalPending as held:      # ASK: nothing ran
     notify_approver(held.request_id)
     ...                                      # after the human approves:
-    result = held.resume()                   # runs your function, records the receipt
+    result = held.resume()                   # runs your function, records the decision
 except GuardianDenied as denied:             # DENY: your function never ran
     log.warning("blocked: %s", denied.reason_code)
 ```
 
 | Decision  | What happens to your function                                                                                     |
 | --------- | ----------------------------------------------------------------------------------------------------------------- |
-| **ALLOW** | Runs once. Then the capability is redeemed and the receipt recorded (`on_receipt=` callback).                     |
+| **ALLOW** | Runs once. Then the capability is redeemed and the signed record kept (`on_receipt=` callback).                   |
 | **ASK**   | Does not run. `GuardianApprovalPending.resume()` runs it after approval; before approval it raises pending again. |
 | **DENY**  | Never runs. `GuardianDenied.reason_code` says why. An unreachable Guardian is refused too (fail closed).          |
 
@@ -64,7 +65,7 @@ says Guardian could not be reached and the call did not run. An answer whose
 
 The proposal carries the tool name plus the call's bound arguments
 (`{"invoice_id": …, "amount_cents": …, "payee_id": …}`). The arguments are
-bound into the action and the receipt, so an approval does not carry over to
+bound into the action and its signed record, so an approval does not carry over to
 changed arguments. Hosted Guardian decides Allow or Ask **per tool** today.
 Amount thresholds and payee rules on argument values are not evaluated yet;
 the invoice example shows them only under the local demo policy.
@@ -96,7 +97,7 @@ guard.run("send_report", {"attachment_path": p}, lambda: send(p), file_args={"at
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `file_args` needs in-process mode; with `mode="remote"` Guardian runs the tool and cannot read your files, so it is refused when the function is decorated (`CONTENT_PIN_REMOTE_MODE`).
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - `GuardianApprovalPending.arguments` is your call without pins; `proposed_arguments` is what was proposed. For a `file_args` tool both are copies: changing them does not change what is checked or what your function receives.
 - The OpenAI Agents helper works with `@guard(file_args=...)` tools unchanged, and tells the model a refused call did not run.
@@ -114,7 +115,7 @@ def send_report(to: str, attachment_path: PinnedFile) -> str: ...
 - **Opt-in, per argument.** Only the dict form with `"preview": True` sends a preview; the short forms (`["attachment_path"]`, `{"attachment_path": True}`, a mode string) never do. A `preview` that is not `True` or `False`, a `"mode"` that is not a mode (`None` included; leave the key out for `"bytes"`), any key other than `"mode"`, `"preview"` and `"previewRoots"`, or bad `"previewRoots"` is refused when the function is decorated (`CONTENT_PIN_INVALID_ARGUMENT`). `Guard.run` takes it with `"mode": "recheck"` only, as for any declaration there.
 - **What is sent,** computed from the same bytes that are hashed: for a text file (valid UTF-8, no NUL byte, not a known binary type) `{"kind": "text", "mediaType", "size", "text", "truncated"}` with the **first 20 lines, at most 2,048 bytes**, cut on a character boundary, control, bidi and zero-width characters replaced with U+FFFD and CRLF read as LF; for any other file `{"kind": "binary", "mediaType", "size"}` and no content; for a file outside the `"previewRoots"` folders `{"kind": "withheld", "size"}`. The same preview as the TypeScript SDK, byte for byte.
 - **The agent picks the file, not you.** Without `"previewRoots"`, **any file the agent process can read may be previewed** if the agent names it in that argument (for example `~/.aws/credentials` or a `.env` file after a prompt injection). Set `"previewRoots"` to the folders the tool is meant to send from (1 to 16 absolute paths; symbolic links resolved, and on Linux the file's path is taken from the descriptor that was read); any other file keeps its pin but its preview is `withheld`.
-- **Privacy: the preview text leaves your machine.** It is sent inside the proposed arguments, shown to the approver and stored with the approval and in receipts like any other argument, also when the approver denies the call. Without it only the name, size and digest leave your machine.
+- **Privacy: the preview text leaves your machine.** It is sent inside the proposed arguments, shown to the approver and stored with the approval and in the decision record like any other argument, also when the approver denies the call. Without it only the name, size and digest leave your machine.
 - **Display only.** The check before the function runs compares the size and SHA-256, as before. Previews count toward the 16 KB arguments limit; over it the call is refused (`CONTENT_PIN_TOO_MANY`).
 - `content_preview(name, data)` returns the preview for bytes you hold; `normalize_file_arg_preview_roots(tool_name, file_args)` returns the folders per argument. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
 
@@ -146,8 +147,8 @@ guard = Guard(client, connection_id=..., on_ask="result", on_deny="result")
 
 With `on_deny="result"` a call that ran but could not be confirmed is also
 handed back as data instead of raising `GuardianExecutionFailed`. That covers
-an in-process call whose receipt could not be recorded after your function
-ran, and a `remote` call whose receipt status is not `sent-verified` (or whose
+an in-process call whose execution could not be recorded after your function
+ran, and a `remote` call whose recorded status is not `sent-verified` (or whose
 answer was lost). The result is
 `{"guardian": {"decision": "ALLOW", "outcome": "ran_unrecorded" | "ran_unconfirmed" | "unknown", "message": …}}`,
 and the message says the call ran (or may have run) and must not be called
@@ -155,7 +156,7 @@ again, because calling it again is a new request and can repeat the action.
 
 When Guardian's answer to the final redemption is lost (no answer, a 5xx, an
 unreadable answer), the SDK looks the request up (`client.receipts`). A
-verified execution is reported as success, with its receipt (`on_receipt`
+verified execution is reported as success, with its signed record (`on_receipt`
 gets it). If the lookup does not settle it, `GuardianExecutionFailed` has
 `reason_code="EXECUTION_OUTCOME_UNKNOWN"`, `outcome_unknown=True` and what was
 observed in `detail` (such as `SERVICE_UNAVAILABLE`); its text says the call
@@ -304,7 +305,7 @@ The request goes to `client.request`, `client.claim`, `client.execute`,
 `client.receipts` and `client.portable_receipt`. It is sent as the same
 canonical action proposal the TypeScript SDK sends.
 
-## Verify a receipt offline
+## Verify a decision offline
 
 No account, credential or Guardian service is needed once you have the
 published keys:
@@ -313,8 +314,8 @@ published keys:
 from odingard_guardian import fetch_receipt_verification_keys, verify_receipt_offline
 
 keys = fetch_receipt_verification_keys("https://guardian-api.odingard.com")["keys"]
-receipt = client.portable_receipt(request_id).receipt   # client: your GuardianClient
-verify_receipt_offline(receipt, keys)
+record = client.portable_receipt(request_id).receipt    # client: your GuardianClient
+verify_receipt_offline(record, keys)
 # {"valid": True, "decision": "ALLOW", "effect": "verified", "subject": {...}}
 # or {"valid": False, "reasonCode": "SIGNATURE_INVALID" | "EVIDENCE_CHAIN_INVALID" | ...}
 ```
@@ -324,7 +325,7 @@ body, then re-derives every evidence record's hash and link, the authority
 lifecycle order, and every embedded object (decision, approval, capability,
 execution, effect). Its results and reason codes match the TypeScript SDK on
 the golden fixtures in `tests/fixtures/` (generated by
-`scripts/gen-fixtures.ts`). The receipt envelope is schema-checked at the top
+`scripts/gen-fixtures.ts`). The record's envelope is schema-checked at the top
 level. Nested records are covered by the signature and digest re-derivation
 rather than a field-by-field schema.
 
@@ -339,7 +340,7 @@ from odingard_guardian import fetch_receipt_status, verify_before_acting
 
 base = "https://guardian-api.odingard.com"
 verdict = verify_before_acting(
-    receipt,
+    record,                                 # the signed decision record the agent sent you
     keys,                                   # fetch_receipt_verification_keys(base)
     {
         "action": "api.request",
@@ -357,7 +358,7 @@ if not verdict["ok"]:
 
 It returns OK only if **all** of these hold:
 
-- the receipt is valid offline;
+- the record is valid offline;
 - the request you received equals the authorized action field for field;
 - Guardian allowed it, or a person approved it;
 - a capability was issued, and it is not revoked, expired or used;

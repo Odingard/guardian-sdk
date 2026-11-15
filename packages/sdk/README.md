@@ -10,10 +10,11 @@
 [![Guardian MCP server on mcprush](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Odingard/guardian-sdk/blob/main/LICENSE)
 
-**Human Authority Infrastructure for Autonomous AI.** The agent proposes; the human
-decides. This SDK lets an AI agent request governed capabilities and execute
-consequential actions under human authority. Every decision is deterministic (`ALLOW` / `ASK` / `DENY`) and every
-execution produces a tamper-evident receipt.
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+This SDK lets an AI agent request governed capabilities and execute
+consequential actions under human authority. Every decision is deterministic (`ALLOW` / `ASK` / `DENY`), and every
+execution produces a signed, tamper-evident decision record you can verify without an account.
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free tier for developers
 (2 connections, 1 agent, 500 protected actions a month), no card required.
@@ -24,7 +25,7 @@ Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
 npm install @odingard/guardian-sdk
 ```
 
-Requires Node.js >= 22 (receipt verification uses `node:crypto` Ed25519; browser runtimes are not supported).
+Requires Node.js >= 22 (offline verification uses `node:crypto` Ed25519; browser runtimes are not supported).
 
 ## Quickstart
 
@@ -71,7 +72,7 @@ if (d.decision === "ALLOW") {
 Guardian does not need to ship a connector for your provider. Wrap the
 function that performs the action (your Stripe call, WhatsApp send, production
 deploy, database write). Guardian decides whether it may run, and records
-the receipt when it does. This works from any agent framework: OpenAI Agents
+the signed decision when it does. This works from any agent framework: OpenAI Agents
 SDK, Claude Agent SDK, Mastra, or plain code.
 
 ```ts
@@ -109,7 +110,7 @@ try {
 } catch (err) {
   if (err instanceof GuardianApprovalPending) {
     notifyApprover(err.requestId); // ASK: nothing ran
-    const { output } = await err.resume(); // after approval: runs your code, records the receipt
+    const { output } = await err.resume(); // after approval: runs your code, records the decision
   } else if (err instanceof GuardianDenied) {
     console.warn("blocked:", err.reasonCode); // DENY: your code never ran
   } else throw err;
@@ -118,7 +119,7 @@ try {
 
 | Decision  | Your function                                                                             |
 | --------- | ----------------------------------------------------------------------------------------- |
-| **ALLOW** | Runs once, then the capability is redeemed and the receipt recorded (`onReceipt`).        |
+| **ALLOW** | Runs once, then the capability is redeemed and the signed record kept (`onReceipt`).      |
 | **ASK**   | Does not run. `resume()` runs it after approval; before approval it throws pending again. |
 | **DENY**  | Never runs. An unreachable Guardian is a DENY (fail closed).                              |
 
@@ -186,7 +187,7 @@ A declared argument is a top-level argument holding one absolute path or an arra
 - File paths must be absolute. The SDK does not resolve relative paths or `~`.
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
 
@@ -212,7 +213,7 @@ fileArgs: {
   - any other file: `{ kind: "binary", mediaType, size }`, no content.
   - a file outside the `previewRoots` folders: `{ kind: "withheld", size }`, no content and no type.
 - **The agent picks the file, not you.** `preview: true` is set per argument, but the path in that argument comes from the agent. Without `previewRoots`, **any file the agent process can read may be previewed** if the agent names it there, for example `~/.aws/credentials` or a `.env` file after a prompt injection: a file that is valid UTF-8 and has no known binary extension is sent as text. Set `previewRoots` to the folders your tool is meant to send from (1 to 16 absolute paths; symbolic links are resolved for the folders and the file, and on Linux the file's path is taken from the descriptor that was read). Any other file still gets its pin (name, size, digest) and the call goes ahead for the approver to decide, but its preview is `withheld`.
-- **Privacy: the preview text leaves your machine.** It travels to Guardian inside the proposed arguments, is shown to the approver, and is stored with the approval and in receipts like any other argument, **also when the approver denies the call**. Without `preview: true` only the name, size and digest leave your machine. Use `previewRoots` so that only files from folders you chose can be previewed.
+- **Privacy: the preview text leaves your machine.** It travels to Guardian inside the proposed arguments, is shown to the approver, and is stored with the approval and in the decision record like any other argument, **also when the approver denies the call**. Without `preview: true` only the name, size and digest leave your machine. Use `previewRoots` so that only files from folders you chose can be previewed.
 - **Display only.** The approval binds the preview because it is part of the arguments, but nothing decides on it: the check just before the tool runs compares the size and SHA-256, as before. The console shows the text as plain text, never as HTML or Markdown.
 - Previews count toward the 16 KB tool-arguments limit; a call whose previews push it over is refused (`CONTENT_PIN_TOO_MANY`, "preview fewer files"), never cut silently.
 - `contentPreview(name, bytes)` returns the preview for bytes you hold; `normalizeFileArgPreviews(toolName, declaration)` lists the arguments that ask for one and `normalizeFileArgPreviewRoots(toolName, declaration)` their folders. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
@@ -240,7 +241,7 @@ const purchase = guard("purchase", async ({ sku, amount }) =>
 await purchase({ sku: "mug-1", amount: 2000 }); // $20.00
 ```
 
-- **What the limit binds.** For a tool Guardian sends itself (registered with a web address, `remote` mode), Guardian's tool adapter sends the call with the arguments Guardian decided on, so the limit applies to what reaches the tool. For a tool your own code runs (`inProcess`, a tool registered as your own code), the limit applies to Guardian's decision and the receipt, not to what your code runs.
+- **What the limit binds.** For a tool Guardian sends itself (registered with a web address, `remote` mode), Guardian's tool adapter sends the call with the arguments Guardian decided on, so the limit applies to what reaches the tool. For a tool your own code runs (`inProcess`, a tool registered as your own code), the limit applies to Guardian's decision and its record, not to what your code runs.
 - **You state that the argument sets the charge.** Guardian reads one top-level argument. When the owner sets it, they state that this argument sets how much the tool charges; if other arguments (a quantity, a tip, a second amount) change the charge, Guardian can't see that. `allowedArguments: ["amount", "sku"]` blocks calls that carry any other argument; it does not show how the tool computes its charge. Content pins from `fileArgs` count as allowed. Without a `currencyArgument`, the owner also states that the tool charges in US dollars; Guardian can't check that.
 - **Units.** `unit: "minor"` is cents: a whole number, `2000` or `"2000"`. `unit: "major"` is dollars: a whole number (`20`) or text with up to two decimals (`"19.99"`). A JSON number with cents (`19.99`), a sign, `$`, commas, spaces, leading zeros or an exponent are refused. Currency: US dollars (`currency: "usd"`). With `currencyArgument: "currency"` each call must carry `"usd"` (any letter case) in that argument.
 - **A call whose amount cannot be read is blocked.** The SDK sends it without an amount and Guardian refuses it before any decision; the `GuardianDenied` hint says which argument could not be read. Nothing runs.
@@ -278,7 +279,7 @@ governed pass-through actions `api.request`, `protected_data.derive|transform|ex
 `purpose`, `intentId`, `planId`, `parentActionId`, `sourceEffectId`. The wire
 schemas are exported from `@odingard/guardian-sdk/contracts`.
 
-## Portable receipts — verify without an account
+## Verify a decision without an account
 
 ```ts
 import {
@@ -297,22 +298,22 @@ verifyReceiptOffline(receipt, keys.keys);
 
 Offline verification checks the Ed25519 signature over the
 `guardian-canonical-json.v1` body and re-derives every embedded record against
-the receipt's evidence chain. It needs no credential, plan or Guardian service
-once you hold the keys, and is never billed. Guardian publishes its newest keys. For a receipt signed by an older key, fetch with `fetchReceiptVerificationKeys(base, { forReceipt: receipt })`. `verifyReceiptOnline` asks a
+the record's evidence chain. It needs no credential, plan or Guardian service
+once you hold the keys, and is never billed. Guardian publishes its newest keys. For a record signed by an older key, fetch with `fetchReceiptVerificationKeys(base, { forReceipt: receipt })`. `verifyReceiptOnline` asks a
 Guardian deployment to do the same over the public `POST /v1/receipts/verify`.
 
 ### From the command line
 
 ```bash
-npx @odingard/guardian-sdk verify receipt.json                  # keys from guardian-api.odingard.com
-npx @odingard/guardian-sdk verify receipt.json --keys keys.json # no network at all
+npx @odingard/guardian-sdk verify record.json                  # keys from guardian-api.odingard.com
+npx @odingard/guardian-sdk verify record.json --keys keys.json # no network at all
 ```
 
 `verify` prints `VALID` with the decision, effect, request and agent, or
 `NOT VALID: <reasonCode>`; `--json` prints the result object. It exits 0 for
-a valid receipt, 1 for one that is not valid, and 2 for a usage or input
+a valid record, 1 for one that is not valid, and 2 for a usage or input
 error (including keys that could not be downloaded). The file may hold the
-receipt or an API answer `{ "receipt": … }`. `--base-url <https-url>` fetches
+record itself or an API answer `{ "receipt": … }`. `--base-url <https-url>` fetches
 the keys from another Guardian deployment. No account or credential is
 needed.
 
@@ -332,7 +333,7 @@ import {
 const base = "https://guardian-api.odingard.com";
 const keys = await fetchReceiptVerificationKeys(base); // cache it
 const verdict = await verifyBeforeActing(
-  receipt,
+  record, // the signed decision record the agent sent you
   keys,
   {
     action: "api.request",
@@ -351,7 +352,7 @@ if (!verdict.ok) refuse(verdict.reasonCode, verdict.detail);
 
 It returns OK only if **all** of these hold:
 
-- the receipt is a genuine `greceipt.v1`, valid offline;
+- the record is a genuine `greceipt.v1`, valid offline;
 - the request you received equals the authorized action field for field;
 - Guardian allowed it, or a person approved it;
 - it is not revoked, expired or already used;
@@ -361,7 +362,7 @@ It returns OK only if **all** of these hold:
 
 Anything else refuses with a reason code such as `REQUEST_MISMATCH` or `AMOUNT_MISMATCH`.
 
-`fetchReceiptStatus` calls the public `POST /v1/receipts/status`. The receipt itself is the credential, and the reply is only a status (`active`, `pending`, `revoked`, `expired`, `used`, `paused` or `unknown`), never identities.
+`fetchReceiptStatus` calls the public `POST /v1/receipts/status`. The signed record itself is the credential, and the reply is only a status (`active`, `pending`, `revoked`, `expired`, `used`, `paused` or `unknown`), never identities.
 
 ## Embedded approvals — humans only
 
@@ -399,7 +400,7 @@ current maturity.
 | Path                                                                                     | Status                                                                                            |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Decision + capability + execute for `api.request`, Gmail, Calendar, tool/MCP connections | LIVE on hosted Guardian                                                                           |
-| Portable receipt retrieval + offline/online verification                                 | LIVE (staging and production publish keys)                                                        |
+| Signed decision record retrieval + offline/online verification                           | LIVE (staging and production publish keys)                                                        |
 | Embedded human approvals                                                                 | LIVE routes; needs a human session from your Guardian sign-in                                     |
 | Steel checkout                                                                           | agent side published; protected executor proven in-process, not yet injected into hosted Guardian |
 | Framework `inProcess` mode                                                               | decision-gated only — see below                                                                   |
@@ -409,7 +410,7 @@ current maturity.
 The free tier needs no card. Over a limit, the API returns
 `403 PLAN_LIMIT_EXCEEDED` naming your plan, the limit and current usage.
 Plans: Free ($0), Developer ($99/month, 25,000 billable executions included, then $0.001 each, $500 default overage cap) and Enterprise (talk to us). Details: [odingard.com/guardian](https://odingard.com/guardian#gd-pricing).
-Reading receipts and verifying them is never metered.
+Reading signed decision records and verifying them is never metered.
 
 ## Related packages
 

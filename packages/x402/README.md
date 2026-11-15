@@ -1,5 +1,7 @@
 # @odingard/guardian-x402
 
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
 Guardian for [x402](https://github.com/x402-foundation/x402) payments. Before
 the agent's wallet signs an x402 payment, Guardian decides ALLOW, ASK or DENY
 on the exact payment terms. The wallet signs only after an ALLOW or a person's
@@ -103,8 +105,8 @@ wrapped signer. For each payment:
    or 5xx) keeps the request held: the guard keeps waiting for the person
    until the request expires, and signs nothing meanwhile. On ALLOW it calls
    `execute`, where Guardian checks single use, expiry and revocation. For an
-   above-cap payment it then reads the receipt and continues only if it is
-   the receipt for this request and shows an ASK that a person approved
+   above-cap payment it then reads Guardian's signed decision record and continues only if it is
+   the record for this request and shows an ASK that a person approved
    (approval state `approved`, or `consumed` once `execute` redeemed it).
 5. It stores a single-use signing token for this payment (valid 30 s by
    default, `signingWindowMs`, at most 120 s).
@@ -144,17 +146,17 @@ payments never share an approval.
 }
 ```
 
-The receipt for each decision records these terms. Amounts are atomic units
+Guardian's signed record of each decision holds these terms. Amounts are atomic units
 of the asset; the display amount uses the guard's own pinned decimals. USDC is
 never shown or treated as USD.
 
-### What a receipt means
+### What Guardian's decision record means
 
-A receipt says Guardian authorized and redeemed one payment on these exact
+Guardian's signed decision record says Guardian authorized and redeemed one payment on these exact
 terms. It does not say a payment was signed or settled. If signing fails after
 `execute`, the decision is spent and the guard records "redeemed, not
 signed"; a retry needs a new decision. If `execute` was sent but its outcome
-is unknown (no answer, a 5xx, an unreadable receipt; sdk 0.4.0
+is unknown (no answer, a 5xx, an unreadable answer; sdk 0.4.0
 `outcomeUnknown`), nothing is signed. The refusal (`EXECUTE_FAILED`) says the
 outcome is unknown and names the request id; its record, and the
 `X402GuardRefused` the guard's own client throws, carry `outcomeUnknown: true`.

@@ -9,10 +9,11 @@
 [![Guardian MCP server on mcprush](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Guardian is the trust layer for agent commerce.** Human Authority
-Infrastructure for Autonomous AI: the agent proposes; the human decides. Every tool call an agent makes gets a deterministic
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+Every tool call an agent makes gets a deterministic
 `ALLOW` / `ASK` / `DENY` decision before it runs, and every execution produces a
-tamper-evident receipt you can verify without an account. The receipt format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
+signed, tamper-evident decision record you can verify without an account. The record format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
 tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Enterprise: talk to us.
@@ -36,7 +37,7 @@ create the account, the agent or the credential for you. Versions are listed in
 
 | Package                                                                                              | Use it when                                                                                                                                                                                                                       | Docs                                             |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)                     | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, receipts and approvals                                                                                                  | [packages/sdk](packages/sdk)                     |
+| [`@odingard/guardian-sdk`](https://www.npmjs.com/package/@odingard/guardian-sdk)                     | You call Guardian from your own agent code: `createGuard` for your own action code, plus the core client, signed decision records and approvals                                                                                   | [packages/sdk](packages/sdk)                     |
 | [`odingard-guardian`](packages/python) (PyPI)                                                        | You build in Python (LangChain, CrewAI, OpenAI Agents, Claude Agent SDK, plain code), sync or async                                                                                                                               | [packages/python](packages/python)               |
 | [`@odingard/guardian-mcp`](https://www.npmjs.com/package/@odingard/guardian-mcp)                     | Your agent speaks MCP (Claude, Cursor, …), with no code needed. `guardian-mcp proxy` governs an existing MCP server: local (stdio) is proven on production; remote (`--url`) is tested against Guardian, production proof pending | [packages/mcp](packages/mcp)                     |
 | [`@odingard/guardian-langchain`](https://www.npmjs.com/package/@odingard/guardian-langchain)         | You build with LangChain.js / LangGraph                                                                                                                                                                                           | [packages/langchain](packages/langchain)         |
@@ -80,12 +81,12 @@ document, and how far each has been tested.
 | AP2 mandates (TypeScript)                       | `@odingard/guardian-ap2`                               | Live proof pending (no public AP2 sandbox) |
 
 "Tested against Guardian" means the integration ran end to end against the
-real Guardian server code, with real approvals and receipts verified offline,
+real Guardian server code, with real approvals and signed decision records verified offline,
 but not yet on hosted production. "Tested locally against a real Guardian"
 means a scripted stand-in for the agent (no model) ran the shipped package and
 the example's config file end to end against the real Guardian server code:
 allow, ask then approve or deny, deny, and the fail-closed cases each
-example's status names, with receipts verified offline. The stand-ins and the
+example's status names, with signed decision records verified offline. The stand-ins and the
 Guardian server code are not in this repository, so these runs cannot be
 repeated from it. The agent itself has not run it against Guardian yet.
 
@@ -138,7 +139,7 @@ await payInvoice({
   amountCents: 1_240_000,
   payeeId: "acme",
 });
-// ALLOW → your code runs + receipt. ASK → GuardianApprovalPending (resume() after approval). DENY → never runs.
+// ALLOW → your code runs + signed record. ASK → GuardianApprovalPending (resume() after approval). DENY → never runs.
 ```
 
 ```python
@@ -171,7 +172,7 @@ With `fileArgs`, the SDK on your machine reads the file, puts its SHA-256 in the
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
 - **Opt-in preview (sdk 0.5, Python 0.3):** `{ attachmentPath: { mode: "bytes", preview: true } }` (Python: `{"attachment_path": {"mode": "bytes", "preview": True}}`) also shows the approver the file's type, size and, for a text file, its first 20 lines (at most 2,048 bytes). That text leaves your machine and is stored with the approval like any other argument (also on deny); the agent picks the path, so add `previewRoots` to preview only files in your folders (others get a size-only `withheld` preview). Nothing decides on it, the check before the run is still the SHA-256. See the [SDK README](packages/sdk/README.md#show-the-approver-the-first-lines-of-the-file--preview-05-opt-in).
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Python: the same short form, `@guard("send_report", file_args=["attachment_path"])` (or `{"attachment_path": True}`), means `bytes`. `Guard.run` supports `recheck` only; use the `@guard` decorator for `bytes` and `copy`. A file argument declared on `Guard.run` without a mode means `bytes`, so it is refused there rather than checked in a weaker mode; name `"recheck"`. The OpenAI Agents helper works with `@guard(file_args=...)` tools unchanged.
 - The MCP proxy pins declared arguments of a stdio upstream (`--pin-file <tool>:<arg>`, `recheck` only), and the coding-agent hook pins the target of Edit-type tools (not Write, not shell commands); in both a short window remains because the tool opens the file itself. Neither can hand a tool bytes, so neither takes the `bytes` default: you name no mode there, and the mode is always `recheck`. A LangChain tool reachable only through `invoke()` cannot take bytes either, so declaring a file argument without a mode on it is refused when the tool is wrapped (name `"copy"`).
@@ -225,10 +226,10 @@ demo policy) or `LIVE` (real hosted Guardian or real published keys).
 ```bash
 npm install && npm run build
 cd examples
-node verify-receipt.mjs         # LIVE, no account: verify a real receipt offline, then tamper
+node verify-receipt.mjs         # LIVE, no account: verify a real signed decision record offline, then tamper
 node demo-classes.mjs           # the 7 demo classes
 node steel-checkout.mjs         # Steel checkout → ASK → resume
-node shopping-agent.mjs         # purchase → ASK, human approves, receipt
+node shopping-agent.mjs         # purchase → ASK, human approves, signed record
 node prompt-injection-deny.mjs  # injected "export contacts" → DENY
 node coding-agent-ask.mjs       # consequential command → ASK
 node invoice-agent.mjs          # B2B invoices: ALLOW under $5k, ASK above, DENY unknown payee (createGuard)
@@ -263,7 +264,7 @@ examples/               runnable demos
 ```
 
 `packages/sdk/src/contracts`, `packages/sdk/src/evidence`, the SDK client,
-guard, lifecycle and receipts sources, and the Steel adapter sources are generated
+guard, lifecycle and `receipts.ts` sources, and the Steel adapter sources are generated
 — don't edit them here. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License

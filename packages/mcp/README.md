@@ -4,7 +4,9 @@
 
 [![Guardian MCP server](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
 
-MCP server that routes an agent's tool calls through [Guardian](https://github.com/Odingard/guardian-sdk) — Human Authority Infrastructure for Autonomous AI. Every tool call gets a deterministic **ALLOW / ASK / DENY** decision before anything executes; DENY means the action never runs, and ASK holds it until a human approves.
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+This MCP server routes an agent's tool calls through [Guardian](https://github.com/Odingard/guardian-sdk). Every tool call gets a deterministic **ALLOW / ASK / DENY** decision before anything executes; DENY means the action never runs, and ASK holds it until a human approves.
 
 ## Install
 
@@ -35,20 +37,20 @@ npm i -g @odingard/guardian-mcp
 
 | Tool                   | What it does                                                                                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `guardian_invoke_tool` | Propose a tool call. ALLOW executes and returns the receipt; ASK returns a `requestId` held for human approval; DENY refuses with a reason code. |
-| `guardian_claim`       | Claim an approved ASK by `requestId`, execute, return the receipt.                                                                               |
-| `guardian_receipt`     | Fetch the machine-readable evidence receipts for a request.                                                                                      |
+| `guardian_invoke_tool` | Propose a tool call. ALLOW executes and returns the record; ASK returns a `requestId` held for human approval; DENY refuses with a reason code.  |
+| `guardian_claim`       | Claim an approved ASK by `requestId`, execute, return the signed record.                                                                         |
+| `guardian_receipt`     | Fetch the machine-readable evidence records for a request.                                                                                       |
 
 Nothing executes without a Guardian capability — the model's output is a proposal, never an action.
 
-Only a call whose receipt status is `sent-verified` is returned as a plain
+Only a call whose recorded status is `sent-verified` is returned as a plain
 result. Every other outcome is an MCP tool error (`isError: true`) that says
 what happened:
 
 - DENY, or Guardian could not be reached: nothing was done. A denial says not
   to retry the same call; an outage says to try again later.
-- Receipt status `not-sent`: `outcome: "not-done"`, the call was not done.
-- Receipt status `outcome-pending` or `outcome-unconfirmed`, or an execute
+- Status `not-sent`: `outcome: "not-done"`, the call was not done.
+- Status `outcome-pending` or `outcome-unconfirmed`, or an execute
   answer that was refused or lost: `outcome: "unknown"`. The call may have
   been done, so check (`guardian_receipt`, or the target system) before
   retrying.
@@ -78,7 +80,7 @@ upstream server's tools unchanged, and every call is decided first:
 
 | Decision                 | What happens                                                                                                                                                                                                                                                                                           |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **ALLOW**                | The call is forwarded to the upstream server, then the capability is redeemed and the receipt recorded. The upstream result is returned unchanged, with Guardian's `requestId` under `_meta["com.odingard/guardian"]`, so the client can fetch the receipt with `guardian_receipt`.                    |
+| **ALLOW**                | The call is forwarded to the upstream server, then the capability is redeemed and the signed record kept. The upstream result is returned unchanged, with Guardian's `requestId` under `_meta["com.odingard/guardian"]`, so the client can fetch the record with `guardian_receipt`.                   |
 | **ASK**                  | Nothing is forwarded. The exact call is held under a `requestId`; after a human approves, `guardian_claim` forwards exactly that call, once.                                                                                                                                                           |
 | **DENY**                 | Nothing is forwarded, ever. The result is an MCP tool error (`isError: true`) with the reason code and, when Guardian made a record of it, the `requestId`.                                                                                                                                            |
 | **Guardian unreachable** | Nothing is forwarded. The result is a tool error (`isError: true`) whose JSON keeps `decision: "DENY"` with `reasonCode: "SERVICE_UNAVAILABLE"`, and its message says Guardian could not be reached and the call can be tried again later. A held call stays held, so `guardian_claim` can be retried. |
@@ -136,7 +138,7 @@ For each declared `<tool>:<argument>` the proxy (the SDK on your machine) reads 
 - Stdio upstreams only. With `--url` (HTTP or SSE) the path names a file on another machine, so `--pin-file` is refused at start (`CONTENT_PIN_REMOTE_UPSTREAM`). Paths on a remote MCP server are not pinned.
 - File paths must be absolute. The proxy does not resolve relative paths or `~`.
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the proxy, and files a tool opens without naming them in a declared argument are not pinned.
 
 ### Dollar amounts on tools: `--amount-arg` (0.5)
@@ -245,7 +247,7 @@ MCP connector), and anything the agent does without MCP. Also not covered:
 - **Lost results after ALLOW.** If the remote times out (the MCP SDK's
   default request timeout is 60 seconds) or drops the session after
   Guardian allowed a call, the call may have run, but the capability is not
-  redeemed and no receipt is written. Receipts can then understate what
+  redeemed and no execution record is written. Guardian's records can then understate what
   happened; check the remote system itself.
 - **Keys in the same process tree.** guardian-mcp keeps the upstream key out
   of the agent's MCP view. It cannot stop other code that runs as the same
