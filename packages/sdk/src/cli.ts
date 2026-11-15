@@ -14,6 +14,8 @@
  */
 import { readFileSync } from "node:fs";
 
+import { ReceiptVerificationKeySetSchema } from "./contracts/receipt.js";
+
 import {
   fetchReceiptVerificationKeys,
   verifyReceiptOffline,
@@ -191,6 +193,14 @@ export async function runCli(
     const read = readJson(io, args.keysPath);
     if (!read.ok) {
       io.err(`could not read JSON from ${args.keysPath}`);
+      return 2;
+    }
+    // A file that is not a key set is an input error (exit 2), never a
+    // verdict on the receipt: the verifier would call it MALFORMED_RECEIPT.
+    if (!ReceiptVerificationKeySetSchema.safeParse(read.value).success) {
+      io.err(
+        `${args.keysPath} is not a verification key set ({ "keys": [ ... ] })`,
+      );
       return 2;
     }
     keys = read.value;

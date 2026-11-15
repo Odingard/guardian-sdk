@@ -82,7 +82,18 @@ describe("guardian-sdk verify", () => {
   it("refuses a receipt signed by a key that is not in the set", async () => {
     const run = io({
       "r.json": receiptText,
-      "k.json": JSON.stringify({ keys: [] }),
+      "k.json": JSON.stringify({
+        keys: [
+          {
+            kty: "OKP",
+            crv: "Ed25519",
+            kid: "rkey_0000000000000000",
+            use: "sig",
+            alg: "EdDSA",
+            x: "A".repeat(43),
+          },
+        ],
+      }),
     });
     expect(await runCli(["verify", "r.json", "--keys", "k.json"], run.io)).toBe(
       1,
@@ -163,6 +174,20 @@ describe("guardian-sdk verify", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(signal?.aborted).toBe(true);
     expect(run.err[0]).toContain("could not fetch the verification keys");
+  });
+
+  it("refuses a --keys file that is not a key set as an input error, not a verdict", async () => {
+    const run = io({ "r.json": receiptText, "k.json": receiptText });
+    expect(await runCli(["verify", "r.json", "--keys", "k.json"], run.io)).toBe(
+      2,
+    );
+    expect(run.out).toEqual([]);
+    expect(run.err[0]).toContain("is not a verification key set");
+    const wrapped = io({ "r.json": receiptText, "k.json": '{"keys":{}}' });
+    expect(
+      await runCli(["verify", "r.json", "--keys", "k.json"], wrapped.io),
+    ).toBe(2);
+    expect(wrapped.out).toEqual([]);
   });
 
   it("explains its usage and rejects bad input", async () => {
