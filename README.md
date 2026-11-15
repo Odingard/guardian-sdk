@@ -9,13 +9,13 @@
 [![Guardian MCP server on mcprush](https://mcprush.com/badge/odingard-guardian-mcp/card.svg)](https://mcprush.com/to/odingard-guardian-mcp?ref=badge)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Human Authority Infrastructure for Autonomous AI.** The agent proposes; the
-human decides. Every tool call an agent makes gets a deterministic
+**Guardian is the trust layer for agent commerce.** Human Authority
+Infrastructure for Autonomous AI: the agent proposes; the human decides. Every tool call an agent makes gets a deterministic
 `ALLOW` / `ASK` / `DENY` decision before it runs, and every execution produces a
 tamper-evident receipt you can verify without an account. The receipt format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
 
 Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
-tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Business via sales.
+tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Enterprise: talk to us.
 
 ## Set up with your coding agent
 
