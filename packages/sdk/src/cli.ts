@@ -45,27 +45,47 @@ export type CliIo = Readonly<{
 }>;
 
 /**
- * Wraps a fetch so it gives up after `ms`: the request is aborted, and the
- * call rejects even if the underlying fetch ignores the abort signal.
+ * Wraps a fetch so it gives up after `ms`, counting the whole answer: the
+ * body is read inside the deadline and handed back buffered, so a server
+ * that sends headers and then stalls cannot hang the command either. The
+ * request is aborted on timeout, and the call rejects even if the
+ * underlying fetch ignores the abort signal.
  */
 function withDeadline(base: FetchLike, ms: number): FetchLike {
   return (url, init) =>
     new Promise<Response>((resolve, reject) => {
       const controller = new AbortController();
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         controller.abort();
-        reject(new Error(`no answer within ${ms} ms`));
+        reject(new Error(`no complete answer within ${ms} ms`));
       }, ms);
-      base(url, { ...init, signal: controller.signal }).then(
-        (response) => {
-          clearTimeout(timer);
-          resolve(response);
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      );
+      base(url, { ...init, signal: controller.signal })
+        .then(async (response) => {
+          const nullBody = [101, 204, 205, 304].includes(response.status);
+          const body = nullBody ? null : await response.arrayBuffer();
+          return new Response(body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        })
+        .then(
+          (response) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(response);
+          },
+          (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
     });
 }
 

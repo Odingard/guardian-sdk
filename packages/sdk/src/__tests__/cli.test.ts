@@ -141,6 +141,30 @@ describe("guardian-sdk verify", () => {
     expect(run.err[0]).toContain("could not fetch the verification keys");
   });
 
+  it("gives up on a key download whose body never finishes (exit 2, no hang)", async () => {
+    let signal: AbortSignal | undefined;
+    const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      const stalled = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"keys":['));
+          // never closes
+        },
+      });
+      return new Response(stalled, { status: 200 });
+    }) as typeof globalThis.fetch;
+    const run = io({ "r.json": receiptText }, fetch);
+    const started = Date.now();
+    const code = await runCli(["verify", "r.json"], {
+      ...run.io,
+      fetchTimeoutMs: 50,
+    });
+    expect(code).toBe(2);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(signal?.aborted).toBe(true);
+    expect(run.err[0]).toContain("could not fetch the verification keys");
+  });
+
   it("explains its usage and rejects bad input", async () => {
     const cases: [string[], string][] = [
       [[], USAGE],
