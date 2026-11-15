@@ -4,7 +4,7 @@
 
 ### Fixed: `guardian-sdk verify --help`
 
-- **`@odingard/guardian-sdk`**: `--help`, `-h` or `help` now prints the usage and exits 0. In 0.6.1 the command printed the usage but called `--help` an unknown option and exited 2.
+- **`@odingard/guardian-sdk`**: `guardian-sdk --help` (or `-h`, or `help`) prints the usage and exits 0. `guardian-sdk verify --help` prints the usage on stdout without calling `--help` an unknown option, and still exits 2: `verify` exits 0 only for a receipt that verifies, so a script like `guardian-sdk verify "$f" && accept "$f"` can never accept a file named `--help`.
 
 ## sdk 0.6.1, released 2026-11-15
 
