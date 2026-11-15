@@ -2,9 +2,11 @@
 
 # @odingard/guardian-langchain
 
-LangChain.js adapter for Guardian — route a tool's `func` through a
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
+LangChain.js adapter for Guardian: route a tool's `func` through a
 deterministic `ALLOW` / `ASK` / `DENY` authority decision before anything
-runs. The agent proposes; the human decides.
+runs.
 
 ## Install
 
@@ -93,7 +95,7 @@ try {
 } catch (err) {
   if (err instanceof GuardianApprovalPending) {
     // err.requestId — surface to a human approver, then:
-    const { output, receipt } = await err.resume();
+    const { output } = await err.resume();
   } else if (err instanceof GuardianDenied) {
     // err.reasonCode — refused before execution
   }
@@ -122,7 +124,7 @@ const tools = guardianTools([sendReport], {
 - `fileArgs` needs `inProcess` mode. The LangChain and Vercel AI wrappers default to `remote`, where Guardian runs the tool and cannot read your files.
 - **Opt-in preview for the approver (sdk 0.5):** `{ attachmentPath: { mode: "bytes", preview: true } }` also puts the file's type, size and, for a text file, its first 20 lines (at most 2,048 bytes) in the pin, so the approval shows them next to the file name. The preview text leaves your machine and is stored with the approval like any other argument, also on deny; the short forms never send one. The agent picks the path, so add `previewRoots: ["/srv/reports"]` to preview only files in those folders (others get a size-only `withheld` preview). Details in the [SDK README](../sdk/README.md#show-the-approver-the-first-lines-of-the-file--preview-05-opt-in).
 - Content pinning is supported on Linux and macOS. On Windows a declared file argument is refused (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
-- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in receipts. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
+- **Digest privacy:** the SHA-256 of each pinned file is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file (a token, a PIN, a short config value), anyone who sees the digest can guess the contents offline by hashing candidates. Do not pin files like that, or treat the digest as sensitive as the file.
 - This stops a changed file from running under an approval given for different contents. It does not protect against code that bypasses the SDK.
 - Not pinned: URLs, provider file ids, and files a tool opens without naming them in a declared argument.
 
@@ -133,7 +135,7 @@ If the owner set a dollar amount on a tool in the Guardian console, pass the sam
 ## What the triad means here
 
 - `ALLOW` — Guardian mints a single-use capability. Remote: `client.execute`
-  performs the catalog call and returns the receipt. In-process: the impl
+  performs the catalog call and returns the signed record. In-process: the impl
   runs, then `client.execute` redeems + records it. A failed redemption
   throws `GuardianExecutionFailed` — and the impl's own error propagates
   before the record call.
@@ -176,8 +178,8 @@ code and the approval is lost. Use one of:
 - your own tool node that catches `GuardianApprovalPending`.
 
 A remote-mode call that Guardian performed but the upstream did not accept
-(any receipt status other than `sent-verified`) throws
-`GuardianExecutionFailed` with the `requestId`, the receipt and a
+(any recorded status other than `sent-verified`) throws
+`GuardianExecutionFailed` with the `requestId`, the signed record and a
 `reasonCode` such as `EXECUTION_OUTCOME_PENDING`; it is never returned as an
 `ALLOW` result.
 

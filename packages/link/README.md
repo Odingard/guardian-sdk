@@ -71,7 +71,7 @@ refused.
    exists, and proposes `tool.invoke` on `link.spend` (or
    `link.spend.above_cap`) with the full terms. On ASK it waits for a
    person; then it redeems the decision with `execute`. After a person
-   approved, it reads the Guardian receipt and refuses unless the approval is
+   approved, it reads Guardian's signed decision record and refuses unless the approval is
    for this request and these exact arguments.
 2. Only then does it create the spend request, once, with `--test`, an
    idempotency key from the Guardian request, and without Link's approval

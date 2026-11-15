@@ -2,10 +2,12 @@
 
 # @odingard/guardian-steel
 
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
 Guardian for [Steel](https://steel.dev) browser agents. The agent can only
 **propose** `steel.checkout.submit` to Guardian; Guardian decides
 ALLOW / ASK / DENY before the order exists, and the protected executor places
-the exact approved order and returns a receipt.
+the exact approved order and returns a signed decision record.
 
 ```ts
 import { createGuardianClient } from "@odingard/guardian-sdk";
@@ -43,12 +45,12 @@ an unreachable Guardian both refuse.
   today), the call is recorded but no order is placed. The dispatcher reports
   that as `{ status: "not-executed", reasonCode: "NO_PROTECTED_EXECUTOR" }`,
   never as `executed`.
-- `outcome-unknown` means the order may have been placed: Guardian's receipt
+- `outcome-unknown` means the order may have been placed: Guardian's recorded status
   is `outcome-pending` or `outcome-unconfirmed` (for example the
   confirmation page timed out after the buy button was clicked), or the signed
-  receipt could not be fetched (`reasonCode: "RECEIPT_UNVERIFIED"`). Do not
-  retry the order; check the merchant or the Guardian receipt first.
-  `not-executed` without a reason code means Guardian's receipt is
+  record could not be fetched (`reasonCode: "RECEIPT_UNVERIFIED"`). Do not
+  retry the order before checking the merchant or Guardian's record.
+  `not-executed` without a reason code means Guardian's recorded status is
   `not-sent`: no order was placed.
 - Once the execute call has been sent, a lost, 5xx or unreadable answer is
   also `outcome-unknown`, with `reasonCode: "EXECUTE_RESPONSE_LOST"` and what

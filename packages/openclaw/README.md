@@ -2,6 +2,8 @@
 
 # @odingard/guardian-openclaw
 
+**Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
+
 Guardian for [OpenClaw](https://openclaw.ai) agents. A native OpenClaw plugin
 sends every consequential tool call to Guardian for a deterministic
 `ALLOW` / `ASK` / `DENY` decision before it runs:
@@ -10,14 +12,14 @@ sends every consequential tool call to Guardian for a deterministic
 - deploys, destructive commands, pushes, outbound messages, browser actions,
   sub-agents, cron and gateway changes, and MCP tools (Composio's
   `composio__GMAIL_SEND_EMAIL` and the like) wait until a person approves that
-  exact call in Guardian, on their phone or in the console;
-- anything Guardian denies, or that nobody approves in time, does not run;
-- every allowed call leaves a receipt you can verify offline.
+  exact call in the Guardian console;
+- anything Guardian denies, or that no person approves in time, does not run;
+- every allowed call leaves a signed decision record you can verify offline.
 
 **Status: proven live on hosted Guardian for shell commands.** Run on
 OpenClaw 2026.7.1 with a protected install, through the Gateway agent's real
 `before_tool_call` hook. On staging and production: an everyday command was
-allowed and ran, and its receipt verified offline; a deploy command waited for
+allowed and ran, and its signed decision record verified offline; a deploy command waited for
 approval in the console and, once approved, ran once with the approved
 parameters. On staging also: a denied approval, a tool set to off, and an
 unreachable Guardian each blocked the call, and nothing ran. Outbound
@@ -42,7 +44,7 @@ tool OpenClaw runs, including MCP tools and tools added by other plugins.
 
 | Guardian says | The plugin returns                      | Result                                                                                                                 |
 | ------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `ALLOW`       | `{ params }` after redeeming            | The single-use capability is redeemed (receipt recorded), then the tool runs with exactly the parameters Guardian saw. |
+| `ALLOW`       | `{ params }` after redeeming            | The single-use capability is redeemed and recorded, then the tool runs with exactly the parameters Guardian saw.       |
 | `ASK`         | waits, then `{ params }` or `{ block }` | The handler waits while a person decides in Guardian. Approved: redeemed, then runs. Declined or expired: blocked.     |
 | `DENY`        | `{ block: true, blockReason }`          | Nothing runs. The agent is told why and not to work around it.                                                         |
 | Anything else | `{ block: true, blockReason }`          | Missing config, unreachable Guardian, crash, timeout, cancelled call, failed redemption: nothing runs (fail closed).   |
@@ -51,7 +53,7 @@ A block reason from Guardian names its request (`Request req_…`). If Guardian'
 
 **Guardian is the authority for ASK.** The plugin does not return OpenClaw's
 `requireApproval`: an OpenClaw `/approve` would let the call run with no
-Guardian decision and no receipt. The person approves in Guardian; OpenClaw's
+Guardian decision and no signed record. The person approves in Guardian; OpenClaw's
 log shows `held for approval (request req_…)` while it waits.
 
 If the handler throws or OpenClaw's hook timeout expires first, OpenClaw
@@ -674,7 +676,7 @@ workspace, `/sandbox/.openclaw/workspace` (`ls -la /sandbox` goes to Ask;
 (`is held for approval (request req_…)`) and an approved one
 (`Approved by a human in Guardian (request req_…)`). Plugin 0.1.0 writes no
 line when Guardian denies a call or a connection is Off; the console's
-Activity page and the receipt are the record.
+Activity page and Guardian's signed decision record are the record.
 
 ## What is not governed
 
@@ -762,11 +764,11 @@ sh`, a variable holding the path), a link the plugin does not recognise
 - **Read-only tools are not sent to Guardian** (`read`, `web_search`, and the
   others in the table). They can still read secrets on disk; prompt-injected
   content they return is not checked.
-- **Decision-gated, not effect-verified.** The receipt proves Guardian
+- **Decision-gated, not effect-verified.** The signed decision record proves Guardian
   authorized that exact call; the tool runs after redemption. If OpenClaw
   later refuses the call anyway (its own tool policy, exec approvals, a
   sandbox rule, another plugin's block or `requireApproval` that is then
-  declined), the receipt exists for a call that did not run.
+  declined), the record exists for a call that did not run.
 - **Other plugins that change tool parameters.** The plugin registers at
   priority -10000 and returns the parameters Guardian saw. OpenClaw runs
   higher priorities first and keeps the last parameters returned, so a
