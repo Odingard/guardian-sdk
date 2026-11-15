@@ -10,7 +10,7 @@
  * from `--keys` (a JSON key set; then nothing touches the network) or are
  * downloaded once from the public key endpoint of `--base-url`.
  *
- * Exit codes: 0 valid, 1 not valid, 2 usage or input error.
+ * Exit codes: 0 valid (or --help), 1 not valid, 2 usage or input error.
  */
 import { readFileSync } from "node:fs";
 
@@ -33,6 +33,7 @@ export const USAGE = [
   "  --keys <file>      verify against this key set; no network access",
   `  --base-url <url>   fetch the published keys from <url>/v1/receipts/verification-keys (default ${DEFAULT_BASE_URL})`,
   "  --json             print the verification result as JSON",
+  "  --help, -h         print this help",
 ].join("\n");
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -175,6 +176,11 @@ export async function runCli(
   argv: readonly string[],
   io: CliIo,
 ): Promise<number> {
+  // `--help`, `-h` or `help` anywhere prints the usage on stdout and exits 0.
+  if (argv[0] === "help" || argv.some((a) => a === "--help" || a === "-h")) {
+    io.out(USAGE);
+    return 0;
+  }
   const args = parseArgs(argv);
   if (!args.ok) {
     io.err(args.message);

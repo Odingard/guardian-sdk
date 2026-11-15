@@ -1,6 +1,12 @@
 # Changelog
 
-## sdk 0.6.1 (unreleased)
+## sdk 0.6.2 (unreleased)
+
+### Fixed: `guardian-sdk verify --help`
+
+- **`@odingard/guardian-sdk`**: `--help`, `-h` or `help` now prints the usage and exits 0. In 0.6.1 the command printed the usage but called `--help` an unknown option and exited 2.
+
+## sdk 0.6.1, released 2026-11-15
 
 ### Added: `guardian-sdk verify`, a command-line receipt verifier
 

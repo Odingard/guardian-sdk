@@ -204,6 +204,21 @@ describe("guardian-sdk verify", () => {
     }
   });
 
+  it("prints the usage on stdout and exits 0 for --help, -h and help", async () => {
+    for (const argv of [
+      ["--help"],
+      ["-h"],
+      ["help"],
+      ["verify", "--help"],
+      ["verify", "r.json", "-h"],
+    ]) {
+      const run = io({ "r.json": receiptText });
+      expect(await runCli(argv, run.io)).toBe(0);
+      expect(run.out).toEqual([USAGE]);
+      expect(run.err).toEqual([]);
+    }
+  });
+
   it("explains its usage and rejects bad input", async () => {
     const cases: [string[], string][] = [
       [[], USAGE],

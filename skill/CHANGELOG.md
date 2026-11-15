@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.8
+
+- Date: 2026-11-15
+- SHA-256: `56d75531507922603b6c4d1b2bf6a9d57fbebe3bd11d588f732063cee36f1c8f`
+- Pins: `@odingard/guardian-sdk` 0.6.2. The other pins are unchanged from 1.0.7.
+- Pins the sdk 0.6.2 release (`guardian-sdk verify --help` exits 0). No other change.
+
 ## 1.0.7
 
 - Date: 2026-11-15
