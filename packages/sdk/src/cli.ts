@@ -219,6 +219,14 @@ export async function runCli(
       );
       return 2;
     }
+    // The same shape check as --keys: a key set the verifier would reject is
+    // a failed download (exit 2), never a verdict on the receipt.
+    if (!ReceiptVerificationKeySetSchema.safeParse(fetched.keys).success) {
+      io.err(
+        `could not fetch the verification keys from ${args.baseUrl} (the answer is not a verification key set)`,
+      );
+      return 2;
+    }
     keys = fetched.keys;
     keySource = `${args.baseUrl.replace(/\/+$/, "")}/v1/receipts/verification-keys`;
   }

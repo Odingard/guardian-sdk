@@ -190,6 +190,20 @@ describe("guardian-sdk verify", () => {
     expect(wrapped.out).toEqual([]);
   });
 
+  it("treats a downloaded answer that is not a key set as a failed download", async () => {
+    for (const body of [
+      '{"keys":[]}',
+      JSON.stringify({ ...JSON.parse(keysText), updatedAt: "x" }),
+    ]) {
+      const fetch = (async () =>
+        new Response(body, { status: 200 })) as typeof globalThis.fetch;
+      const run = io({ "r.json": receiptText }, fetch);
+      expect(await runCli(["verify", "r.json"], run.io)).toBe(2);
+      expect(run.out).toEqual([]);
+      expect(run.err[0]).toContain("could not fetch the verification keys");
+    }
+  });
+
   it("explains its usage and rejects bad input", async () => {
     const cases: [string[], string][] = [
       [[], USAGE],
