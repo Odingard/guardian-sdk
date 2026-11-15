@@ -21,6 +21,9 @@ import {
 
 export const DEFAULT_BASE_URL = "https://guardian-api.odingard.com";
 
+/** How long the key download may take before the command gives up (exit 2). */
+export const KEY_FETCH_TIMEOUT_MS = 15_000;
+
 export const USAGE = [
   "Usage: guardian-sdk verify <receipt.json> [--keys <keys.json>] [--base-url <url>] [--json]",
   "",
@@ -37,7 +40,34 @@ export type CliIo = Readonly<{
   err: (text: string) => void;
   readFile?: (path: string) => string;
   fetch?: FetchLike;
+  /** Deadline for the key download, in milliseconds (default 15 s). */
+  fetchTimeoutMs?: number;
 }>;
+
+/**
+ * Wraps a fetch so it gives up after `ms`: the request is aborted, and the
+ * call rejects even if the underlying fetch ignores the abort signal.
+ */
+function withDeadline(base: FetchLike, ms: number): FetchLike {
+  return (url, init) =>
+    new Promise<Response>((resolve, reject) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`no answer within ${ms} ms`));
+      }, ms);
+      base(url, { ...init, signal: controller.signal }).then(
+        (response) => {
+          clearTimeout(timer);
+          resolve(response);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+}
 
 type Parsed =
   | {
@@ -148,7 +178,10 @@ export async function runCli(
   } else {
     const fetched = await fetchReceiptVerificationKeys(args.baseUrl, {
       forReceipt: receipt,
-      ...(io.fetch ? { fetch: io.fetch } : {}),
+      fetch: withDeadline(
+        io.fetch ?? ((url, init) => fetch(url, init)),
+        io.fetchTimeoutMs ?? KEY_FETCH_TIMEOUT_MS,
+      ),
     });
     if (!fetched.ok) {
       io.err(
