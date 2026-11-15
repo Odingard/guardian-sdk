@@ -10,7 +10,8 @@
  * from `--keys` (a JSON key set; then nothing touches the network) or are
  * downloaded once from the public key endpoint of `--base-url`.
  *
- * Exit codes: 0 valid, 1 not valid, 2 usage or input error.
+ * Exit codes: 0 valid, 1 not valid, 2 usage or input error. `guardian-sdk --help`
+ * exits 0; `verify` exits 0 only for a receipt that verifies.
  */
 import { readFileSync } from "node:fs";
 
@@ -33,6 +34,7 @@ export const USAGE = [
   "  --keys <file>      verify against this key set; no network access",
   `  --base-url <url>   fetch the published keys from <url>/v1/receipts/verification-keys (default ${DEFAULT_BASE_URL})`,
   "  --json             print the verification result as JSON",
+  "  guardian-sdk --help   print this help (exit 0)",
 ].join("\n");
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -175,6 +177,19 @@ export async function runCli(
   argv: readonly string[],
   io: CliIo,
 ): Promise<number> {
+  // `guardian-sdk --help`, `-h` or `help` prints the usage and exits 0.
+  // `verify` never exits 0 unless a receipt verified: `verify --help` prints
+  // the usage on stdout but exits 2, so a script such as
+  // `guardian-sdk verify "$f" && accept "$f"` cannot accept a file named
+  // `--help`. `-h` after `verify` is a file name, as before.
+  if (argv.length === 1 && ["help", "--help", "-h"].includes(argv[0]!)) {
+    io.out(USAGE);
+    return 0;
+  }
+  if (argv.length === 2 && argv[0] === "verify" && argv[1] === "--help") {
+    io.out(USAGE);
+    return 2;
+  }
   const args = parseArgs(argv);
   if (!args.ok) {
     io.err(args.message);

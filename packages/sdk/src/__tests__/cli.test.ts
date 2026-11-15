@@ -204,6 +204,38 @@ describe("guardian-sdk verify", () => {
     }
   });
 
+  it("prints the usage and exits 0 for guardian-sdk --help, -h and help", async () => {
+    for (const argv of [["--help"], ["-h"], ["help"]]) {
+      const run = io({});
+      expect(await runCli(argv, run.io)).toBe(0);
+      expect(run.out).toEqual([USAGE]);
+      expect(run.err).toEqual([]);
+    }
+  });
+
+  it("never exits 0 from verify unless a receipt verified", async () => {
+    // verify --help prints the usage on stdout but exits 2.
+    const help = io({});
+    expect(await runCli(["verify", "--help"], help.io)).toBe(2);
+    expect(help.out).toEqual([USAGE]);
+    // A help word in any other place is an option or a file name, not help.
+    for (const argv of [
+      ["verify", "r.json", "--help"],
+      ["verify", "r.json", "-h"],
+      ["verify", "r.json", "--keys", "-h"],
+      ["verify", "--help", "r.json"],
+    ]) {
+      const run = io({ "r.json": receiptText });
+      expect(await runCli(argv, run.io)).toBe(2);
+    }
+  });
+
+  it("reads a receipt path of -h as a file", async () => {
+    const run = io({ "-h": receiptText, "k.json": keysText });
+    expect(await runCli(["verify", "-h", "--keys", "k.json"], run.io)).toBe(0);
+    expect(run.out[0]).toContain("VALID");
+  });
+
   it("explains its usage and rejects bad input", async () => {
     const cases: [string[], string][] = [
       [[], USAGE],
