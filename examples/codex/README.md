@@ -73,7 +73,8 @@ credential as a secret). Check that hooks fire under
   it unseen. Turn unified exec off with `unified_exec = false` under
   `[features]` in the managed [`requirements.toml`](requirements.toml); then
   `exec_command` is one-shot and `write_stdin` is not offered (per Codex's
-  source).
+  source). Check that `write_stdin` is no longer offered before you rely on
+  it.
 - `apply_patch` deletes are `file_write` (Allow tier) under the suggested
   modes.
 - A missing, untrusted or unparseable `hooks.json` governs nothing: check
