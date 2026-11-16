@@ -148,7 +148,7 @@ open mandate that was not approved by a person through this guard's
 is not a reason to ask: it is a refusal (below).
 
 A request outside Guardian's request limits (nesting deeper than 8 levels,
-more than 16,384 bytes of arguments, or anything the Guardian SDK refuses
+arguments longer than 16,384 characters as canonical JSON, or anything the Guardian SDK refuses
 before sending) is refused locally with the reason (`REQUEST_INVALID`);
 nothing is sent. `GUARDIAN_UNREACHABLE` means Guardian could not be reached.
 

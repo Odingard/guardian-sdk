@@ -89,8 +89,10 @@ export const MAX_ITEM_CONSTRAINT_ENTRIES = 64;
 export const REQUEST_LIMITS = Object.freeze({
   /** Nesting of the request's material parameters; `arguments` is level 1. */
   maxDepth: 8,
-  /** Canonical JSON bytes of `arguments`. */
-  maxArgumentsBytes: 16_384,
+  /** Length of `arguments` as canonical JSON, in UTF-16 code units (JavaScript string length), as the SDK and Guardian count it. */
+  maxArgumentsLength: 16_384,
+  /** UTF-8 bytes of `arguments` as canonical JSON; the material parameters may hold 32,768, and the rest of them is small. */
+  maxArgumentsUtf8Bytes: 32_000,
   /** JSON values in the material parameters (a few go to the envelope). */
   maxNodes: 4_000,
   maxArrayLength: 256,

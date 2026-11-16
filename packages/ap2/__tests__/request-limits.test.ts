@@ -313,6 +313,36 @@ describe("limits fail closed with a clear code", () => {
     expect(w.signed).toHaveLength(0);
   });
 
+  it("argument size is counted as the SDK counts it: non-Latin titles within 16,384 characters are sent", async () => {
+    const w = world();
+    const guardian = sdkCheckedGuardian({ decide: () => "ASK" });
+    const { guard } = makeGuard(w, { guardian });
+    // About 7,000 characters of CJK text: under 16,384 characters, over 16,384 UTF-8 bytes.
+    const cjk = "咖啡杯".repeat(1_000);
+    const items = [
+      {
+        id: "line_1",
+        acceptable_items: [{ id: "sku_mug", title: cjk }],
+        quantity: 2,
+      },
+      {
+        id: "line_2",
+        acceptable_items: [{ id: "sku_cup", title: cjk.slice(0, 1_500) }],
+        quantity: 1,
+      },
+    ];
+    const input = payInput(w, {
+      open: { checkoutConstraints: [{ type: "checkout.line_items", items }] },
+    });
+    await guard.pay(input);
+    const args = guardian.bodies[0].materialParameters.arguments;
+    const text = jcs(args);
+    expect(text.length).toBeLessThanOrEqual(16_384);
+    expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(16_384);
+    expect(requestLimitBreach(args)).toBeNull();
+    expect(w.signed).toHaveLength(2);
+  });
+
   it("an SDK validation error is reported as REQUEST_INVALID with the SDK's reason", async () => {
     const w = world();
     const guardian = sdkCheckedGuardian({ decide: () => "ASK" });

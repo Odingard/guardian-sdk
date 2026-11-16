@@ -112,13 +112,17 @@ export function requestLimitBreach(args: Record<string, unknown>): string | null
   };
   const why = walk(args, 1, "arguments");
   if (why) return why;
-  let bytes: number;
+  let text: string;
   try {
-    bytes = Buffer.byteLength(jcs(args), "utf8");
+    text = jcs(args);
   } catch {
     return "arguments: not plain JSON";
   }
-  return bytes > L.maxArgumentsBytes ? `arguments: ${bytes} bytes of canonical JSON, more than ${L.maxArgumentsBytes}` : null;
+  if (text.length > L.maxArgumentsLength) {
+    return `arguments: ${text.length} characters of canonical JSON, more than ${L.maxArgumentsLength}`;
+  }
+  const bytes = Buffer.byteLength(text, "utf8");
+  return bytes > L.maxArgumentsUtf8Bytes ? `arguments: ${bytes} UTF-8 bytes of canonical JSON, more than ${L.maxArgumentsUtf8Bytes}` : null;
 }
 
 /** An error the Guardian SDK throws before sending: its input checks, not the network. */
