@@ -1,5 +1,14 @@
 # Changelog
 
+## guardian-ap2 0.1.1 (unreleased)
+
+### Fixed: item constraints from open mandates fit request limits
+
+- **`@odingard/guardian-ap2` 0.1.1**: item constraints from open mandates are summarised and bound by digest so they fit request limits; local validation errors are reported as such.
+  - An open checkout mandate's `checkout.line_items` constraint is shown to Guardian flat (`acceptableItems`: requirement id, quantity, item id and title for each acceptable item; `anyItem` for a requirement that accepts any item), with `constraintDigest`, SHA-256 of the constraint's JCS form. Before, the constraint was copied as is, which nests 9 levels deep, and the request was refused locally. Found while testing against the AP2 reference roles.
+  - Before signing, the guard reads the open checkout mandate again and refuses (`TERMS_CHANGED`) if a `constraintDigest` or the mandate differs from what was approved. More than 64 acceptable items in all is refused (`TOO_MANY_ITEMS`).
+  - A request outside Guardian's request limits, or one the Guardian SDK refuses before sending, is refused as `REQUEST_INVALID` with the reason. Before, it was reported as `GUARDIAN_UNREACHABLE`, which now means only that Guardian could not be reached.
+
 ## Messages (unreleased)
 
 - **`@odingard/guardian-hook`**, **`@odingard/guardian-openclaw`** (which uses the hook's decision code) and the **Python Hermes plugin**: a held call now logs `… is held for approval (request req_…). Approve it in the Guardian console.`

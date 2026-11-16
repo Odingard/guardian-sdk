@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-ap2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Guardian for AP2 (Agent Payments Protocol v0.2): Guardian decides closed Checkout and Payment Mandates (ALLOW/ASK/DENY on the exact terms) before the agent key signs them.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",

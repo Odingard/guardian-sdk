@@ -69,6 +69,8 @@ import {
   checkoutConstraintsView,
   checkoutView,
   isoFromEpoch,
+  lineItemsDigestsOf,
+  lineItemsDigestsOfView,
   openCheckoutView,
   openPaymentView,
   paymentConstraintsView,
@@ -533,6 +535,28 @@ export class Ap2Guard {
     return 4 * this.decision.callTimeoutMs + this.decision.requestTtlMs + this.decision.pollMs + this.signingWindowMs + 60_000;
   }
 
+  /**
+   * Reads the open checkout mandate again and refuses unless its
+   * `checkout.line_items` constraints have the digests in the approved terms
+   * and it is the approved mandate (same `sd_hash`).
+   */
+  private checkItemConstraintsUnchanged(raw: unknown, approvedSdHash: string, approvedView: unknown): void {
+    let again: ReturnType<typeof readOpenMandate<OpenCheckoutContent>>;
+    try {
+      again = readOpenMandate<OpenCheckoutContent>(raw, "checkout", this.tsKeys, this.agentThumbprint, this.nowSec());
+    } catch (e) {
+      if (e instanceof Ap2GuardRefused && e.code === "OPEN_MANDATE_EXPIRED") throw e;
+      throw refused("TERMS_CHANGED", "The open checkout mandate changed after the decision.");
+    }
+    const approved = lineItemsDigestsOfView(approvedView);
+    if (approved.length === 0 || !sameData(lineItemsDigestsOf(again.content.constraints), approved)) {
+      throw refused("TERMS_CHANGED", "The open checkout mandate's item constraints changed after the decision.");
+    }
+    if (again.token.sdHash !== approvedSdHash) {
+      throw refused("TERMS_CHANGED", "The open checkout mandate changed after the decision.");
+    }
+  }
+
   /** Re-checks expiry after a decision, right before anything is signed. */
   private checkStillValid(openExps: readonly number[], checkoutExpiresAt: string | undefined): void {
     const nowSec = this.nowSec();
@@ -728,6 +752,13 @@ export class Ap2Guard {
         onOutcomeUnknown: (id) => (outcomeUnknown = id),
       });
 
+      // The item constraints a person approved are bound by digest: read the
+      // open checkout mandate again and compare before anything is signed.
+      this.checkItemConstraintsUnchanged(
+        input.openCheckoutMandate,
+        openCheckout.token.sdHash,
+        terms.openMandates?.checkout.constraints,
+      );
       // Nothing the caller passed may have changed while a person decided.
       if (!sameData(JSON.parse(snapshot), input)) {
         throw refused("TERMS_CHANGED", "The payment input changed after the decision.");
@@ -1306,6 +1337,9 @@ export class Ap2Guard {
         return m;
       };
       const checkoutToSign = frozenCopy(checkoutContent);
+      if (!sameData(lineItemsDigestsOf(checkoutToSign.constraints), lineItemsDigestsOfView(terms.openCheckout.constraints))) {
+        throw refused("TERMS_CHANGED", "The open checkout mandate's item constraints changed after the decision.");
+      }
       const signedCheckout = await flowStorage.exit(() => trustedSurface.signOpenCheckout(checkoutToSign));
       const openCheckout = verifyReturned(signedCheckout, "checkout", checkoutToSign);
       const paymentToSign: OpenPaymentContent = frozenCopy({

@@ -7,7 +7,8 @@ import {
   type GuardianClient,
 } from "@odingard/guardian-sdk";
 
-import { isPlainObject, refused, sameData, sleep, withTimeout } from "./util.js";
+import { REQUEST_LIMITS } from "./constants.js";
+import { isPlainObject, jcs, refused, sameData, sleep, withTimeout } from "./util.js";
 
 export type DecisionConfig = Readonly<{
   guardian: GuardianClient;
@@ -59,12 +60,105 @@ function wellFormed(value: unknown): value is
   return value.ok === false && typeof value.reasonCode === "string";
 }
 
-async function guardianCall<T>(cfg: DecisionConfig, fn: () => Promise<T>): Promise<T> {
+/**
+ * Where `args` breaks a limit the Guardian SDK and Guardian put on request
+ * arguments, as "<path>: <reason>", or null. Paths and reasons only, never
+ * values.
+ */
+export function requestLimitBreach(args: Record<string, unknown>): string | null {
+  const L = REQUEST_LIMITS;
+  let nodes = 0;
+  const walk = (v: unknown, depth: number, path: string): string | null => {
+    nodes += 1;
+    if (nodes > L.maxNodes) return `${path}: more than ${L.maxNodes} values`;
+    if (depth > L.maxDepth) return `${path}: nested deeper than ${L.maxDepth} levels`;
+    if (v === null || typeof v === "boolean") return null;
+    if (typeof v === "string") {
+      if (v.length > L.maxStringLength) return `${path}: a string longer than ${L.maxStringLength} characters`;
+      if (v.normalize("NFC") !== v) return `${path}: a string that is not NFC-normalized`;
+      return null;
+    }
+    if (typeof v === "number") {
+      return Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER && !Object.is(v, -0)
+        ? null
+        : `${path}: a number that is not canonical`;
+    }
+    if (Array.isArray(v)) {
+      if (v.length > L.maxArrayLength) return `${path}: a list longer than ${L.maxArrayLength}`;
+      for (let i = 0; i < v.length; i += 1) {
+        const why = walk(v[i], depth + 1, `${path}[${i}]`);
+        if (why) return why;
+      }
+      return null;
+    }
+    if (!isPlainObject(v)) return `${path}: not plain JSON`;
+    const keys = Object.keys(v);
+    if (keys.length > L.maxObjectKeys) return `${path}: more than ${L.maxObjectKeys} fields`;
+    for (const k of keys) {
+      if (
+        k.length === 0 ||
+        k.length > L.maxKeyLength ||
+        k.normalize("NFC") !== k ||
+        k === "__proto__" ||
+        k === "constructor" ||
+        k === "prototype"
+      ) {
+        return `${path}: a field name Guardian does not accept`;
+      }
+      const why = walk(v[k], depth + 1, `${path}.${k}`);
+      if (why) return why;
+    }
+    return null;
+  };
+  const why = walk(args, 1, "arguments");
+  if (why) return why;
+  let text: string;
+  try {
+    text = jcs(args);
+  } catch {
+    return "arguments: not plain JSON";
+  }
+  if (text.length > L.maxArgumentsLength) {
+    return `arguments: ${text.length} characters of canonical JSON, more than ${L.maxArgumentsLength}`;
+  }
+  const bytes = Buffer.byteLength(text, "utf8");
+  return bytes > L.maxArgumentsUtf8Bytes ? `arguments: ${bytes} UTF-8 bytes of canonical JSON, more than ${L.maxArgumentsUtf8Bytes}` : null;
+}
+
+/** An error the Guardian SDK throws before sending: its input checks, not the network. */
+function localValidationReason(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  if (error.name === "ZodError") {
+    const issues = (error as { issues?: unknown }).issues;
+    if (Array.isArray(issues) && issues.length > 0) {
+      return issues
+        .slice(0, 3)
+        .map((i) => {
+          const issue = isPlainObject(i) ? i : {};
+          const path = Array.isArray(issue.path) && issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+          return `${path}${typeof issue.message === "string" ? issue.message : "invalid"}`;
+        })
+        .join("; ");
+    }
+    return "invalid request";
+  }
+  if (error instanceof RangeError) return error.message;
+  return null;
+}
+
+async function guardianCall<T>(
+  cfg: DecisionConfig,
+  fn: () => Promise<T>,
+  opts: { localChecks?: boolean } = {},
+): Promise<T> {
   const r = await withTimeout(Promise.resolve().then(fn), cfg.callTimeoutMs);
   if (!r.ok) {
-    throw r.timedOut
-      ? refused("GUARDIAN_TIMEOUT", "Guardian did not answer in time.")
-      : refused("GUARDIAN_UNREACHABLE", "Guardian could not be reached.");
+    if (r.timedOut) throw refused("GUARDIAN_TIMEOUT", "Guardian did not answer in time.");
+    const local = opts.localChecks ? localValidationReason(r.error) : null;
+    if (local !== null) {
+      throw refused("REQUEST_INVALID", `The Guardian SDK refused the request before sending it (${local}); nothing was sent.`);
+    }
+    throw refused("GUARDIAN_UNREACHABLE", "Guardian could not be reached.");
   }
   return r.value;
 }
@@ -76,15 +170,22 @@ async function ask(
   purpose: string,
   needsPerson: boolean,
 ): Promise<{ requestId: string; capabilityToken: string; viaAsk: boolean }> {
-  const answer = await guardianCall(cfg, () =>
-    cfg.guardian.request({
-      action: "tool.invoke",
-      connectionId: cfg.connectionId,
-      toolName: tool,
-      arguments: args,
-      purpose,
-      ttlMs: cfg.requestTtlMs,
-    }),
+  const breach = requestLimitBreach(args);
+  if (breach !== null) {
+    throw refused("REQUEST_INVALID", `The Guardian request is outside the request limits (${breach}); nothing was sent.`);
+  }
+  const answer = await guardianCall(
+    cfg,
+    () =>
+      cfg.guardian.request({
+        action: "tool.invoke",
+        connectionId: cfg.connectionId,
+        toolName: tool,
+        arguments: args,
+        purpose,
+        ttlMs: cfg.requestTtlMs,
+      }),
+    { localChecks: true },
   );
   const startedAt = cfg.now();
   if (!wellFormed(answer)) throw refused("GUARDIAN_UNREACHABLE", "Guardian's answer was malformed.");

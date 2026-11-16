@@ -74,3 +74,29 @@ export const CLOCK_SKEW_SECONDS = 60;
 export const MAX_TOKEN_LENGTH = 256 * 1024;
 export const MAX_LINE_ITEMS = 200;
 export const MAX_CONSTRAINTS = 64;
+/**
+ * Most acceptable items, summed over an open checkout mandate's
+ * `checkout.line_items` constraints, that the guard puts in a Guardian
+ * request. More is refused (`TOO_MANY_ITEMS`), not shortened.
+ */
+export const MAX_ITEM_CONSTRAINT_ENTRIES = 64;
+
+/**
+ * Limits the Guardian SDK and Guardian put on a `tool.invoke` request. The
+ * guard checks them before sending, so a request outside them is refused
+ * locally with the reason (`REQUEST_INVALID`).
+ */
+export const REQUEST_LIMITS = Object.freeze({
+  /** Nesting of the request's material parameters; `arguments` is level 1. */
+  maxDepth: 8,
+  /** Length of `arguments` as canonical JSON, in UTF-16 code units (JavaScript string length), as the SDK and Guardian count it. */
+  maxArgumentsLength: 16_384,
+  /** UTF-8 bytes of `arguments` as canonical JSON; the material parameters may hold 32,768, and the rest of them is small. */
+  maxArgumentsUtf8Bytes: 32_000,
+  /** JSON values in the material parameters (a few go to the envelope). */
+  maxNodes: 4_000,
+  maxArrayLength: 256,
+  maxObjectKeys: 128,
+  maxKeyLength: 128,
+  maxStringLength: 8_192,
+});
