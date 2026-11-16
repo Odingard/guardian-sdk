@@ -90,6 +90,16 @@ const FORBIDDEN = [
     what: "--dangerously-bypass-hook-trust",
   },
   { re: /--break-system-packages/, what: "--break-system-packages" },
+  // The credential is checked only with the provided test -n check: a
+  // ${VAR:-…} or ${VAR:+…} form, or echo/printf/cat of it, prints it.
+  {
+    re: /\$\{GUARDIAN_AGENT_CREDENTIAL:?[-+=?]/,
+    what: "a ${GUARDIAN_AGENT_CREDENTIAL:-…} form (it prints the credential)",
+  },
+  {
+    re: /\b(echo|printf|cat)\b[^\n;|&]*\$\{?GUARDIAN_AGENT_CREDENTIAL\b/,
+    what: "a command that prints the credential",
+  },
   // dash (Debian/Ubuntu /bin/sh) prints nothing when the first of several
   // names is missing, so detection must ask one name at a time.
   {

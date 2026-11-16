@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.10
+
+- Date: 2026-11-16
+- SHA-256: `7d5ee83c9fd1503585e4c6cc80bde2d4d870da86219de2fb5f23db0f1cb5996d`
+- Pins: unchanged from 1.0.9.
+- Credential check: use only the provided check; never print the credential. Section 3.1 gives one check, `test -n "$GUARDIAN_AGENT_CREDENTIAL" && echo set || echo missing`, and rule 6 forbids printing, echoing or interpolating the credential and the `${VAR:-…}` and `${VAR:+…}` forms. No other change.
+
 ## 1.0.9
 
 - Date: 2026-11-16
