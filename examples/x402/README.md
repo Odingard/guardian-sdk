@@ -1,8 +1,8 @@
 # x402 payments, decided by Guardian
 
-| What                     | Label         | Needs                                         |
-| ------------------------ | ------------- | --------------------------------------------- |
-| `simulated-payments.mjs` | **SIMULATED** | Node 22 and a build of this repo. No network. |
+| What                     | Needs                                                                 |
+| ------------------------ | --------------------------------------------------------------------- |
+| `simulated-payments.mjs` | Node 22 and a build of this repo. No network; Guardian is a stand-in. |
 
 ```bash
 npm install && npm run build     # from the repo root
@@ -20,7 +20,7 @@ It makes three payments:
 1. `/weather`, 0.01 USDC: a rule allows `x402.pay`; Guardian redeems it, then
    the wallet signs.
 2. `/report`, 0.25 USDC: above `askAbove`, so it goes to `x402.pay.above_cap`
-   and waits for a (simulated) person.
+   and waits for a (stand-in) person.
 3. `/scam`: Guardian denies it; nothing is signed.
 
 Expected output (request ids and nonces differ):

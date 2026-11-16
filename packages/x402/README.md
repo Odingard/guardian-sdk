@@ -12,8 +12,8 @@ holds the wallet key. The guard governs payments made through the clients it
 builds. It cannot stop code that signs with the key some other way. See
 [Not governed](#not-governed).
 
-**Status.** Supports USDC on Base Sepolia (testnet); the live proof on Base
-Sepolia is pending. Base mainnet is off by default and unproven.
+**Networks.** Supports USDC on Base Sepolia (testnet). Base mainnet is off by
+default.
 
 ## What it covers
 
@@ -264,8 +264,8 @@ reason follows the code, for example `GUARDIAN_DENIED:TOOL_NOT_GRANTED`.
 
 ## Example
 
-[`examples/x402/simulated-payments.mjs`](../../examples/x402) (SIMULATED:
-stand-in Guardian, in-memory server, throwaway key, no network).
+[`examples/x402/simulated-payments.mjs`](../../examples/x402) (stand-in
+Guardian, in-memory server, throwaway key, no network).
 
 ## License
 

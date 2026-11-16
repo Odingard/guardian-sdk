@@ -1,5 +1,5 @@
 /**
- * SIMULATED: Guardian's OpenClaw plugin inside OpenClaw's real tool-hook
+ * Stand-in Guardian: Guardian's OpenClaw plugin inside OpenClaw's real tool-hook
  * runtime, with a stand-in Guardian.
  *
  * What is real: OpenClaw 2026.7.1,
@@ -29,7 +29,7 @@ import {
   PLUGIN_ID,
 } from "@odingard/guardian-openclaw";
 
-// --- Stand-in Guardian (SIMULATED) -----------------------------------------
+// --- Stand-in Guardian -----------------------------------------------------
 // Everyday tools are allowed; Ask-tier tools wait for a "person", who approves
 // terraform and nothing else; Composio email sends are denied.
 const requests = new Map();

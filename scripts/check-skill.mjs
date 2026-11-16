@@ -9,7 +9,8 @@
  *
  * Two groups of checks:
  *   - drift: package pins, forbidden install patterns, environment variables,
- *     hook subcommands and tool names, the hook matchers, status words,
+ *     hook subcommands and tool names, the hook matchers, wording that
+ *     belongs in internal tracking (in skill.md and the root README),
  *     canonical and check-copy URLs, size, and the changelog hash;
  *   - code blocks: sh blocks pass `sh -n`, json blocks parse, ts/js blocks
  *     type-check against the workspace packages, python blocks compile and
@@ -60,52 +61,19 @@ export const HOOK_TOOL_NAMES = [
 ];
 
 /**
- * Status words per integration section. Each entry: the row label in the
- * root README "Works with" table and the status words, which must be the
- * row's status cell and must appear (any case) in that section of the file.
- * `source` overrides where the words must be found verbatim.
+ * Wording that belongs in internal tracking, not in public text: test and
+ * proof status, staging, work-order ids. skill.md and the root README must
+ * not use any of it.
  */
-export const STATUS = {
-  "4A": [{ row: "Claude Code", status: "Proven on production" }],
-  "4B": [
-    { row: "Claude Agent SDK (TypeScript)", status: "Proven on production" },
-  ],
-  "4C": [{ row: "Codex CLI", status: "Tested locally against a real Guardian" }],
-  "4D": [{ row: "DeepSeek Harness", status: "Tested locally against a real Guardian" }],
-  "4E": [
-    { row: "Any MCP server, local (stdio)", status: "Proven on production" },
-    {
-      row: "Any MCP server, remote (`--url`)",
-      status: "Tested against Guardian; production proof pending",
-    },
-  ],
-  "4F": [
-    {
-      row: "LangChain.js / LangGraph",
-      status: "Tested against Guardian; production proof pending",
-    },
-    {
-      row: "Vercel AI SDK",
-      status: "Tested against Guardian; production proof pending",
-    },
-    {
-      row: "OpenAI Agents SDK (TypeScript)",
-      status:
-        "Tested, but not yet proven against a live Guardian and a live model",
-      source: "packages/openai-agents/README.md",
-    },
-  ],
-  "4G": [
-    {
-      row: "Python with LangChain / OpenAI Agents SDK",
-      status: "Tested against Guardian; production proof pending",
-    },
-    { row: "Python with CrewAI", status: "Example, not yet tested" },
-    { row: "Claude Agent SDK (Python)", status: "Example, not yet tested" },
-    { row: "Hermes Agent", status: "Tested locally against a real Guardian" },
-  ],
-  "4H": [{ row: "OpenClaw", status: "Proven on production (shell commands)" }],
-};
+export const INTERNAL_WORDING = [
+  { re: /proof pending|production proof|live proof/i, what: "a proof status" },
+  { re: /\b(un)?proven\b/i, what: "a proof status" },
+  { re: /tested locally|not yet tested|tested against Guardian/i, what: "a test status" },
+  { re: /not yet available on hosted/i, what: "an availability status" },
+  { re: /\bSIMULATED\b/, what: "a SIMULATED label" },
+  { re: /\bstaging\b/i, what: "staging" },
+  { re: /\bWO-\d/, what: "a work-order id" },
+];
 
 /** Patterns an agent must never be told to run. */
 const FORBIDDEN = [
@@ -183,15 +151,6 @@ export function sections(body) {
     out[key] = (out[key] ?? "") + line + "\n";
   }
   return out;
-}
-
-/** Status cell of a row in the README's "Works with" table. */
-export function readmeStatus(readme, row) {
-  for (const line of readme.split("\n")) {
-    const cells = line.split("|").map((cell) => cell.trim());
-    if (cells.length >= 5 && cells[1] === row) return cells[3];
-  }
-  return undefined;
 }
 
 function proseLines(text) {
@@ -376,26 +335,14 @@ export function checkDrift(text, root) {
     fail(`Codex matcher ${codexMatcher} differs from packages/hook/README.md`);
   }
 
-  // Status words.
+  // Internal wording.
   const rootReadme = read("README.md");
-  for (const [key, rows] of Object.entries(STATUS)) {
-    const section = (bySection[key] ?? "").toLowerCase();
-    if (!section) {
-      fail(`section ${key} is missing`);
-      continue;
-    }
-    for (const { row, status, source } of rows) {
-      const cell = readmeStatus(rootReadme, row);
-      if (source && !read(source).includes(status)) {
-        fail(`"${status}" is not in ${source}`);
+  for (const [name, source] of [["skill.md", text], ["README.md", rootReadme]]) {
+    source.split("\n").forEach((line, index) => {
+      for (const { re, what } of INTERNAL_WORDING) {
+        if (re.test(line)) fail(`${name} line ${index + 1}: ${what} belongs in internal tracking, not here`);
       }
-      if (cell !== status) {
-        fail(`README status for ${row} is "${cell}"; the file uses "${status}"`);
-      }
-      if (!section.includes(status.toLowerCase())) {
-        fail(`section ${key} does not state "${status}" for ${row}`);
-      }
-    }
+    });
   }
 
   // Changelog entry with this file's hash.

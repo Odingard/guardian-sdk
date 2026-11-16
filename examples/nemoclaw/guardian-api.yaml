@@ -9,10 +9,6 @@
 #
 # Using a different Guardian host? Change `host` here and in
 # guardian-api-profile.yaml, and set `baseUrl` in the plugin config.
-#
-# Verified with Guardian staging: this file with host
-# guardian-api-staging.odingard.com. The production host below was not part
-# of that run.
 preset:
   name: guardian-api
   description: "Guardian decision API for @odingard/guardian-openclaw"

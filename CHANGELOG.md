@@ -1,5 +1,9 @@
 # Changelog
 
+## Docs (unreleased)
+
+- **skill.md 1.0.9.** Text only; no pin change (hash in `skill/CHANGELOG.md`).
+
 ## sdk 0.6.2 (unreleased)
 
 ### Fixed: `guardian-sdk verify --help`
@@ -20,7 +24,7 @@
 - **`@odingard/guardian-hook` 0.4.1.** A refusal now tells the agent Guardian's request id (`Guardian blocked <tool> (<code>): …. Request req_…. Do not retry …`), for a denial, a declined or expired approval and a failed redemption, so the developer can find the request in the console. An unreachable Guardian names no request (Guardian never received one). When Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer), the hook looks the request up (`client.receipts`) instead of reporting "Guardian could not be reached": if Guardian recorded the redemption as verified, the call runs; if Guardian aborted it, the call is denied with `EXECUTION_NOT_SENT`; otherwise it is denied with `EXECUTION_OUTCOME_UNKNOWN`, the agent is told nothing ran, not to retry, and which request to check. Before, the call was denied as `SERVICE_UNAVAILABLE` with no request id, although Guardian may have recorded it as allowed. A client passed in without `receipts` gets the deny. A definitive refusal of the redemption is not looked up.
 - **`@odingard/guardian-openclaw` 0.1.2.** The same two changes in the plugin's block reason (it shares the hook's decision code). The SDK version range the plugin is built with also accepts `^0.4.0 || ^0.5.0 || ^0.6.0`; the bundled SDK is unchanged.
 - **`@odingard/guardian-steel` 0.1.2.** Version range only: the peer `@odingard/guardian-sdk` is `^0.3.9 || ^0.4.0 || ^0.5.0 || ^0.6.0`, so it installs next to the current SDK without turning peer checks off. No code change.
-- **`@odingard/guardian-x402` 0.1.1.** README only: the status now says it supports USDC on Base Sepolia (testnet) and that the live proof on Base Sepolia is pending. No code change.
+- **`@odingard/guardian-x402` 0.1.1.** README only: it names the supported network, USDC on Base Sepolia (testnet). No code change.
 - **Python `odingard-guardian` 0.4.0.**
   - When Guardian's answer to the final redemption is lost (no answer, a 5xx, an unreadable answer), the SDK looks the request up (`client.receipts`), as the TypeScript SDK does. A verified execution is reported as success with its receipt (in `remote` mode, the `ALLOW` result; in-process, your function's output, and `on_receipt` is called). An attempt Guardian aborted is a plain execution failure (`EXECUTION_NOT_SENT` in `remote` mode; in-process, the observed code with `local_effect_ran=True`). Otherwise `GuardianExecutionFailed` has `reason_code` `EXECUTION_OUTCOME_UNKNOWN`, the new `outcome_unknown=True` and `detail` (what was observed, such as `SERVICE_UNAVAILABLE`); `execute` results carry `outcome_unknown` too. Before, such a call raised `GuardianExecutionFailed(SERVICE_UNAVAILABLE, local_effect_ran=True)` without a lookup. A definitive refusal is not looked up.
   - `GuardianExecutionFailed`'s text now says what happened: `"<tool>" ran, but Guardian could not confirm that it recorded it; do not retry; check request_id …` (in-process, outcome unknown), `Guardian execution of "<tool>" may have happened; do not retry; check request_id …` (remote, outcome unknown), `"<tool>" ran, but Guardian could not record it; do not retry (…)` (in-process, refused). `execution_failed_message()` and the OpenAI Agents `failure_error_function` say the call ran and that Guardian could not confirm it recorded it, not that it has no receipt; with `on_execution_failed="result"` its outcome is `ran_unconfirmed`.
@@ -30,10 +34,9 @@
   - **Hermes plugin (`odingard_guardian.hermes`).** When Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer, or the call raising), the hook looks the request up (`client.receipts`), with the same rules as the SDK. If Guardian recorded the redemption as verified, Hermes runs the tool; if Guardian aborted it, the call is blocked as `EXECUTION_NOT_SENT`; otherwise it is blocked as `EXECUTION_OUTCOME_UNKNOWN`, and the agent is told nothing ran, not to retry, and which request to check in the Guardian console. Before, such a call was blocked as `SERVICE_UNAVAILABLE` without a lookup and without the request id, although Guardian may have recorded it as allowed. The lookup is made only when it can finish inside Hermes' hook timeout; a client without `receipts`, or a lookup that fails, is blocked as `EXECUTION_OUTCOME_UNKNOWN`. A definitive refusal of the redemption is not looked up.
 - **skill.md 1.0.6.** Pins these versions (hash in `skill/CHANGELOG.md`).
 
-## Docs: agent integrations tested locally against a real Guardian, released 2026-11-14
+## Docs, released 2026-11-14
 
-- Codex CLI, DeepSeek Harness, Hermes Agent, ZeroClaw and bring-your-own containers: status "Tested locally against a real Guardian" in place of "Example, not yet tested". A scripted stand-in for each agent (no model) ran the shipped package and the example's config file end to end against the real Guardian server code: allow, ask then approve or deny, deny and the fail-closed cases each example names, receipts verified offline. None has run on the real agent against Guardian yet. No code change.
-- **skill.md 1.0.5.** The new status words for Codex CLI, DeepSeek Harness and Hermes (hash in `skill/CHANGELOG.md`).
+- **skill.md 1.0.5.** Wording for Codex CLI, DeepSeek Harness and Hermes (hash in `skill/CHANGELOG.md`). No code change.
 
 ## sdk 0.6.0 / guardian-mcp 0.5.0 / guardian-langchain 0.6.0 / guardian-vercel-ai 0.6.0 / guardian-openai-agents 0.4.0, released 2026-11-14
 
@@ -57,25 +60,25 @@ Guardian can now put a dollar limit on a tool you register: name the argument th
 - **`@odingard/guardian-openclaw` 0.1.1**: keep an OpenShell credential placeholder in the Gateway environment so NVIDIA NemoClaw in-place Gateway restarts keep Guardian configured. Raw credentials are still removed.
   - Kept only when `GUARDIAN_AGENT_CREDENTIAL` is exactly the placeholder OpenShell issues for that variable (`OPENSHELL_PLACEHOLDER_RE`: `openshell:resolve:env:` then `v<N>_` or `s<64 hex>_`, then `GUARDIAN_AGENT_CREDENTIAL`). The canonical form with no revision, another key's placeholder and anything with extra text are treated as raw and removed. A key named in `<cwd>/.env` is still ignored and removed, whatever its value.
   - The plugin logs once at registration that it kept an OpenShell placeholder; it never logs the value.
-  - Every process the Gateway starts, `exec` commands included, now inherits the placeholder. OpenShell resolves it only on the provider profile's endpoints, and the network policy's binary allowlist decides which programs can reach them; the README's new "NVIDIA NemoClaw (OpenShell)" section says what that allows, and that NemoClaw needs the opt-out mode, which is not tamper-proof.
+  - Every process the Gateway starts, `exec` commands included, now inherits the placeholder. OpenShell resolves it only on the provider profile's endpoints, and the network policy's binary allowlist decides which programs can reach them; the README's new "NVIDIA NemoClaw (OpenShell)" section says what that allows, and that NemoClaw needs the opt-out mode, in which the agent can switch Guardian off.
 - **skill.md 1.0.3** pins `@odingard/guardian-openclaw` 0.1.1 (hash in `skill/CHANGELOG.md`).
 
 ### Docs: Guardian with NVIDIA NemoClaw (guide)
 
-- **`examples/nemoclaw/`** (new): how to add `@odingard/guardian-openclaw` to an OpenClaw agent running in an NVIDIA NemoClaw sandbox, verified end to end on Guardian staging with NemoClaw `v0.0.143`, OpenShell `0.0.116`, OpenClaw `2026.10.5` and plugin 0.1.0: an allowed `shell` call ran, a destructive one waited for a person and ran once after approval, and one on a connection set to Off was refused with no prompt. Each left a receipt that verifies. The guide's files name the production host, which was not part of that run.
+- **`examples/nemoclaw/`** (new): how to add `@odingard/guardian-openclaw` to an OpenClaw agent running in an NVIDIA NemoClaw sandbox, for NemoClaw `v0.0.143`, OpenShell `0.0.116`, OpenClaw `2026.10.5` and plugin 0.1.0.
   - The Guardian agent credential is registered with `nemoclaw credentials add` and stays outside the sandbox; the Gateway sees only OpenShell's placeholder.
   - One egress rule (`guardian-api.yaml`, a NemoClaw custom policy preset): the Guardian API host on 443, the four agent API paths, binary `/usr/local/bin/node` (what OpenShell sees the Gateway as). The guide says what that allows: any Node.js process in the sandbox can reach those paths and propose actions as the agent, but cannot approve them.
-  - The plugin runs in its opt-out mode (`GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`), because NemoClaw keeps the OpenClaw config writable by the Gateway's user. In this mode the agent can switch Guardian off; the guide says plainly that this setup is not tamper-proof and that a protected install is not possible in NemoClaw today.
+  - The plugin runs in its opt-out mode (`GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`), because NemoClaw keeps the OpenClaw config writable by the Gateway's user. In this mode the agent can switch Guardian off; the guide says so plainly, and that a protected install is not possible in NemoClaw today.
   - Covers the plugin install inside `nemoclaw <sandbox> connect` (no `--force`), the device scope approval by request id, restarts (0.1.0: stop then start), what a user sees for each outcome, the messages that can be ignored, and what is not governed.
-- `packages/openclaw/README.md`, "NVIDIA NemoClaw (OpenShell)": updated with what the verified setup showed (the Gateway calls Guardian as `/usr/local/bin/node`; the state directory's `.env` route, the stop/start route on 0.1.0 and the `nemoclaw credentials add` route are confirmed; paths under `/sandbox` go to Ask).
+- `packages/openclaw/README.md`, "NVIDIA NemoClaw (OpenShell)": updated for NemoClaw (the Gateway calls Guardian as `/usr/local/bin/node`; the state directory's `.env` route, the stop/start route on 0.1.0 and the `nemoclaw credentials add` route; paths under `/sandbox` go to Ask).
 - Root README: "NVIDIA NemoClaw (guide)" row.
-- 2026-11-13: the setup was repeated by a second person on a fresh machine, and plugin 0.1.1 was verified on the same setup, including an in-place Gateway restart. The guide and the plugin README now say so.
+- 2026-11-13: the guide and the plugin README cover plugin 0.1.1, including an in-place Gateway restart.
 
 ## guardian-ap2 0.1.0
 
 ### Added: AP2 (Agent Payments Protocol v0.2) mandates
 
-- **`@odingard/guardian-ap2` 0.1.0** (new; tested, not yet proven live): Guardian decides AP2 v0.2 closed Checkout and Payment Mandates before the agent key signs them, through the guard, with pinned merchant keys. Tested in USD.
+- **`@odingard/guardian-ap2` 0.1.0** (new): Guardian decides AP2 v0.2 closed Checkout and Payment Mandates before the agent key signs them, through the guard, with pinned merchant keys, in USD.
   - Human not present (`pay`): reads and verifies the open mandates (pinned Trusted Surface keys, exact `vct`, known constraints only, `cnf` = the agent key, not expired) and the merchant-signed `checkout_jwt` (pinned merchant keys). The closed pair is built from verified data: payee = the checkout merchant, amount = the checkout total, `transaction_id` = SHA-256 of `checkout_jwt`.
   - Each pair is proposed as `tool.invoke` on `ap2.pay` (or `ap2.pay.above_cap`) with the full canonical terms and their JCS digest. ASK waits for a person; ALLOW is redeemed with `execute` before anything is signed. The guard builds each `kb+sd-jwt` hop itself and signs only bytes that decode to the approved hop, each hop once, within 30 s; each chain is presented once.
   - A person must approve above `askAbove`, for a currency with no cap, and for the first payment under an open mandate not approved through `delegate()`; a rule ALLOW is refused there. Above `max`: refused locally. Open-mandate `exp` and checkout `expires_at` are checked again after the decision, before signing.
@@ -84,7 +87,7 @@ Guardian can now put a dollar limit on a tool you register: name the argument th
   - `delegate()` gates the request to the Trusted Surface for open mandates (`ap2.delegate`, `ap2.delegate.recurring`; always a person) and checks what the Trusted Surface returns. `payHumanPresent()` checks that what the user signed is what was approved. `recordReceipt()` verifies Checkout and Payment Receipts against pinned keys.
   - Refused, not ignored: AP2 v0.1 shapes, other `vct` versions, unknown constraints and fields, float or out-of-range amounts, unknown currencies, delegation chains deeper than Trusted Surface to agent.
   - Not the AP2 Trusted Surface and no substitute for it. Never holds or signs with a key. Decision-gated, not enforced outside the agent's process: signing with the agent key directly is not governed. Console USD caps and budgets do not apply to AP2.
-- `examples/ap2/simulated-payments.mjs` (SIMULATED: stand-in Guardian, Trusted Surface, merchant and processor, throwaway keys, no network).
+- `examples/ap2/simulated-payments.mjs` (stand-in Guardian, Trusted Surface, merchant and processor, throwaway keys, no network).
 
 ## guardian-x402 0.1.0
 
@@ -94,10 +97,10 @@ Guardian can now put a dollar limit on a tool you register: name the argument th
   - Each payment is proposed as `tool.invoke` on `x402.pay` (or `x402.pay.above_cap`) with the exact terms: network, asset, amount in atomic units and as "0.01 USDC", `payTo`, `maxTimeoutSeconds`, EIP-712 domain, resource URL and the original request. ASK waits for a person inside the payment; ALLOW is redeemed with `execute` before anything is signed.
   - A wrapped signer signs only EIP-3009 `TransferWithAuthorization` typed data that matches the approved terms field by field, once, within 30 s. It refuses other typed data and all transactions.
   - Local `max`, `askAbove` and optional `payTo` allowlist per asset, in atomic units. Above `askAbove`, a repeat payment while an earlier authorization is still live, or an asset with no limit: a person must approve; a rule ALLOW is refused. Optional local budgets with a developer-supplied compare-and-set store.
-  - Supported: scheme `exact`, `eip3009`, `authorization` flow, USDC on Base Sepolia; x402 v1 and v2 over HTTP, v2 over MCP. Base mainnet is off by default and unproven. Everything else is refused. x402's own `spendControls` stay on.
+  - Supported: scheme `exact`, `eip3009`, `authorization` flow, USDC on Base Sepolia; x402 v1 and v2 over HTTP, v2 over MCP. Base mainnet is off by default. Everything else is refused. x402's own `spendControls` stay on.
   - Built on `@odingard/guardian-sdk` ^0.4.1 (0.5.0 works too). While a person decides, a claim answered `RATE_LIMITED`, `DB_BUSY`, 429 or 5xx keeps the request held (nothing is signed) until it expires. An `execute` whose outcome is unknown (`outcomeUnknown`) refuses the payment and is recorded as "redeemed or unknown, not signed".
   - Decision-gated, not enforced outside the agent's process. Not governed: signing with the key directly, clients the guard did not build, payload-returning hooks added later, `callToolWithPayment` with an outside payload. Console USD caps and budgets do not apply to x402.
-- `examples/x402/simulated-payments.mjs` (SIMULATED: stand-in Guardian, in-memory 402 server, throwaway test key, no network).
+- `examples/x402/simulated-payments.mjs` (stand-in Guardian, in-memory 402 server, throwaway test key, no network).
 
 ## sdk 0.5.0 / guardian-langchain 0.5.0 / guardian-vercel-ai 0.5.0 / guardian-openai-agents 0.3.0 / Python 0.3.0 (unreleased)
 
@@ -145,7 +148,6 @@ No package versions change.
 - Hosted agent credentials start with `gak_` and connection ids with `pcn_`; the READMEs, the MCP proxy's `--help` text and the examples now say so.
 - "Set up for Claude Code" in the console creates the two coding-agent connections and allows their tools; the agent and its credential come first, from Agents → New agent. The hosted Claude Code and OpenClaw READMEs now say so, and say that a tool must be on a connection before it can be allowed, added when the connection is registered or later with "Add tools".
 - The hook README's Claude Code example pins the hook version.
-- The root README's OpenAI Agents SDK status now matches its package README: "Tested, but not yet proven against a live Guardian and a live model".
 
 ## sdk 0.4.0 / guardian-langchain 0.4.0 / guardian-vercel-ai 0.4.0 / guardian-openai-agents 0.2.0 / guardian-mcp 0.4.0 / guardian-hook 0.4.0 / Python 0.2.0
 
@@ -176,7 +178,6 @@ Approval binds the exact arguments. A file path is an argument; the file's conte
 ### Added: OpenClaw plugin on npm
 
 - **`@odingard/guardian-openclaw` 0.1.0** is published to npm. Install it with `openclaw plugins install npm:@odingard/guardian-openclaw@0.1.0 --pin` and follow the README, including "Required: protect the install".
-- Proven live on hosted Guardian for shell commands, on OpenClaw 2026.7.1 with a protected install: an everyday command is allowed, runs and leaves a receipt that verifies offline; a deploy command waits for approval and, once approved, runs once with the approved parameters. On staging, a denied approval, a tool set to off and an unreachable Guardian each block the call. Outbound messages, MCP tools and the other Ask-tier tools have not yet been run live.
 
 ### Changed: rate-limited and busy answers (sdk; every TypeScript adapter built on it)
 
@@ -272,23 +273,22 @@ These changes are in sdk 0.4.0 too, so every adapter that moves to it gets them.
 
 ### Docs
 
-- README: a "Works with" table with one status per integration (proven on production, tested against Guardian with production proof pending, example not yet tested, not yet available on hosted Guardian, unpublished), and the three ways any agent can use Guardian.
-- guardian-mcp: the remote (`--url`) mode is documented as shipped in 0.3.3 and tested against a real Guardian, with production proof pending. The package description no longer says every outcome carries a receipt (a plain refusal does not).
+- README: a "Works with" table of integrations, and the three ways any agent can use Guardian.
+- guardian-mcp: the remote (`--url`) mode is documented as shipped in 0.3.3. The package description no longer says every outcome carries a receipt (a plain refusal does not).
 - guardian-langchain and guardian-vercel-ai: the examples register the tool in the console and pass `installRecordTransport: false`. LangChain explains how to keep approvals with LangGraph's `ToolNode`; Vercel AI shows how errors arrive as `tool-error` parts with ai v5 and later.
-- guardian-steel: the live tests are described as in-process (a real Steel browser with Guardian's test code in the same process), Steel is marked as not yet available on hosted Guardian, and the outage reason code is documented as `SERVICE_UNAVAILABLE`.
-- Python: framework recipes are labelled by test status, the OpenAI Agents recipe uses `on_ask`/`on_deny="result"` or `failure_error_function=None`, and the Hermes install step is marked unverified.
+- guardian-steel: the outage reason code is documented as `SERVICE_UNAVAILABLE`.
+- Python: the OpenAI Agents recipe uses `on_ask`/`on_deny="result"` or `failure_error_function=None`.
 - guardian-openclaw: `GUARDIAN_*` settings, the credential included, belong in the Gateway's service or container environment only. The README no longer suggests `<state dir>/.env`, which the agent can read; the protection recipe keeps those files empty.
 
 ## sdk 0.3.8 / guardian-mcp 0.3.3 / guardian-hook 0.3.0 / guardian-langchain, guardian-vercel-ai 0.3.2 / guardian-openai-agents 0.1.0 / Python 0.1.5, released 2026-11-09
 
 ### Added: OpenAI Agents SDK
 
-- **`@odingard/guardian-openai-agents` 0.1.0** (new; tested, not yet proven live): an adapter for the OpenAI Agents SDK (TypeScript, `@openai/agents` 0.21.x; tested against 0.21.0). `guardianTool` / `createGuardianTool` take the same options as the SDK's `tool()` and send every call to Guardian before `execute` runs.
+- **`@odingard/guardian-openai-agents` 0.1.0** (new): an adapter for the OpenAI Agents SDK (TypeScript, `@openai/agents` 0.21.x). `guardianTool` / `createGuardianTool` take the same options as the SDK's `tool()` and send every call to Guardian before `execute` runs.
   - ALLOW runs `execute` once with the arguments Guardian saw, then redeems the capability and records the receipt. ASK does not run the tool: by default the run ends with `GuardianApprovalPending` (found with `findApprovalPending`), and `pending.resume()` runs it once after a person approves; `onAsk: "result"` keeps the run going instead. DENY never runs the tool and tells the model plainly.
   - Fails closed: a Guardian error, network failure, timeout or cancelled call never runs the tool, and a late answer is ignored. Text the model writes is never read as a decision.
   - Two modes: `inProcess` (default, your `execute` runs after ALLOW) and `remote` (Guardian performs the call itself).
   - Not governed: hosted tools, computer, shell and apply-patch tools, handoffs and agents used as tools.
-  - Tested against the real Agents SDK runner with a scripted model and a stubbed Guardian client. **Not yet proven against a live Guardian and a live model.**
 
 ### Added: Codex and DeepSeek Harness
 
@@ -299,7 +299,6 @@ These changes are in sdk 0.4.0 too, so every adapter that moves to it gets them.
 - A missing or unparseable hook config (Codex `hooks.json`, dsh `guardian-hooks.json`) governs nothing; an Allow-tier file edit can rewrite it unless it is managed or read-only.
 - Codex and the dsh bridge both **let a call run when the hook process fails** (crash, timeout, cannot start). The hook turns every failure it sees into a deny, and the documented command ends in `|| … exit 2` so a hook that cannot start blocks; a hook killed from outside still fails open.
 - Codex: hosted tools (`WebSearch`), other local tools, and tool paths Codex runs without hooks. dsh: every tool the matcher does not name, including `run_code` itself, `subagent`, `workflow`, `plugin_manager`, `load_workspace_dependencies`, `stagehand_act`/`stagehand_navigate`, `send_message`, `job_*`, `schedule_*`, `web_search`, read-only tools; `terminal_send` is checked per message.
-- Not yet confirmed live: hooks under Codex's `--dangerously-bypass-approvals-and-sandbox`; the dsh bridge in a hosted dsh image and its tool names as passed to hooks.
 
 ### Added: OpenClaw
 
@@ -308,15 +307,15 @@ These changes are in sdk 0.4.0 too, so every adapter that moves to it gets them.
   - ALLOW redeems the capability, then runs the call with exactly the parameters Guardian saw. ASK waits for a person in Guardian; OpenClaw's own `/approve` is never the authority. DENY and every failure return `block: true`.
   - Fails closed on missing config, an unreachable Guardian, a crash, a timeout, a cancelled call, or a non-string command, path or URL. It never claims or redeems after OpenClaw's hook timeout, and it reads the operator's `hooks.timeouts.before_tool_call` (set it to 330000 ms).
   - The credential comes only from the Gateway environment, is removed from `process.env` so `exec` children do not inherit it, and is never logged.
-  - Loaded by OpenClaw 2026.7.1's plugin loader (`npm-pack:` install, `plugins inspect --runtime`) and run through its real tool-hook wrapper. **Not yet proven live on a hosted agent.** The README lists what is not governed.
+  - The README lists what is not governed.
   - Security review fixes: `process` input is classified from the exact bytes OpenClaw writes (`data`, `text`, `literal` + `hex` + `keys`), a decoy field blocks the call, and process input is never on the everyday tier (`openclaw.process_input`). Calls that drive the `openclaw` CLI or change `openclaw.json`, the OpenClaw state directory or the plugin's files go to the Ask tier as `shell_destructive`, because OpenClaw hot-reloads its config and one everyday call could otherwise switch Guardian off. An `exec` with env overrides is never everyday. Code Mode's `exec` is governed as `openclaw.code_mode_exec`. Obfuscated commands can still get past these patterns; the README says how to close that (make the config unwritable by the user exec runs as).
   - Path fixes: `write`, `edit`, `apply_patch`, `read` paths and the `exec` `workdir` are matched both raw and normalised as OpenClaw 2026.7.1's file tools resolve them (leading `@` dropped, unicode spaces, `file://` URLs decoded with percent-escapes, `~` expanded, `.`/`..` collapsed), with a segment-wise, case-insensitive state-directory match. A path that cannot be normalised (a bad `file://` URL, a `file://` URL with a host other than `localhost` or an encoded `/`, any other `scheme://`, a NUL byte) fails closed to the Ask tier and is flagged `pathUnresolved`, for `read` too. An `exec` whose `workdir` is in the state directory or a control root is Ask tier. The `openclaw` CLI is recognised quoted or escaped (`"openclaw"`, `o'p'enclaw`), and `plugins.entries.guardian` and `plugins disable|uninstall|remove …guardian` are Ask tier whatever runs them. Control roots from the environment expand `~`, are normalised and are matched case-insensitively (macOS APFS). The legacy `~/.clawdbot` state directory and `clawdbot.json` are control plane too. `apply_patch` headers with leading whitespace are read, as OpenClaw trims header lines. Any `exec` that creates a symbolic or hard link (`ln`, `link`, `cp -s`/`-l`, `mklink`, `-ItemType SymbolicLink`, `symlink`/`link` calls in Python, Node, Perl, Ruby) is Ask tier, so `ln -s .. s` then `write s/extensions/guardian/index.js` is no longer two everyday calls.
   - **Install integrity (new primary defence, fail closed).** Security review kept finding everyday ways for the agent to disable Guardian by changing OpenClaw's state directory, because its default workspace is inside it (`mv ../extensions/guardian x`, `cp -r evil/. ..`, `tar -C ..`, `git --work-tree=..`, pathlib `symlink_to`, `cp --sym`, `FileUtils.ln_s`, `perl -e 'symlink …'`). Pattern matching cannot close that class, so tamper-resistance is now a deployment precondition the plugin enforces: on load and before every tool call (cached at most 5 s) it checks whether the OpenClaw process user can change the plugin's own directory (real path, every file), `<state>/extensions/guardian`, the OpenClaw config OpenClaw would load (`OPENCLAW_CONFIG_PATH`, or the candidates up to the first existing one, `openclaw.json5` beside it), `<state>/extensions/`, the start-up dotenv files (`<config dir>/.env`, `~/.config/openclaw/gateway.env`), and every parent directory that would let it rename them. Owned entries count as writable (the owner can `chmod`) unless immutable or on a read-only mount; a Gateway running as root always fails; errors count as writable. While any is writable, every tool call is blocked and Guardian is never asked; the message says how to fix it. The README has a "Required: protect the install" section with the commands for the official OpenClaw container image.
-  - Opt-out: `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`, read once from the Gateway's environment at load, keeps the pattern-based behaviour and logs one warning. In that mode the agent can switch Guardian off; the README says not to claim it as tamper-proof.
+  - Opt-out: `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`, read once from the Gateway's environment at load, keeps the pattern-based behaviour and logs one warning. In that mode the agent can switch Guardian off; the README says so.
   - Pattern backstops added for the misses above: pathlib `symlink_to` / `hardlink_to`, `cp --s…` / `--l…` abbreviations, `FileUtils.ln*`, any `symlink` / `link` / `ln_s` word in inline interpreter code, and `..` path operands in `exec` commands whose cwd may be the workspace (Ask tier).
   - Install integrity, second pass. **The plugin is now self-contained:** `dist/index.js` bundles the Guardian SDK and zod (no `--external`; the SDK moved to `devDependencies`) and imports only Node.js builtins, so nothing it loads sits outside the checked plugin directory (an `npm:` install used to put the SDK in a sibling `node_modules/@odingard/guardian-sdk` the agent could rewrite). A test builds with the real build command and fails if the output imports anything else. As a second line, the check resolves every non-builtin import in the plugin's entry files and `package.json` dependencies from the plugin's real path as Node.js would, and checks the package found, its parents, and every nearer `node_modules` where a shadowing copy could be created; an import it cannot find blocks. **The real install locations are covered:** OpenClaw 2026.7.1 puts `npm:` / `npm-pack:` installs in `<state>/npm/projects/<name>/node_modules/@odingard/guardian-openclaw` and local-path installs in `<state>/extensions/guardian`; the check now requires the whole `<state>/npm` tree and `<state>/hooks` (managed hooks, imported into the Gateway) to be unwritable, or impossible to create. The README's official-image recipe now protects `npm/` and `hooks/` too, and was run end to end on a real 2026.7.1 layout as uid 1000 (install, check failing, recipe as root, check passing, `plugins inspect --runtime` loading the hook, tamper attempts refused); not on a hosted deployment. **The Gateway's working-directory `.env`** (which OpenClaw loads, without filtering `GUARDIAN_*`) is now checked like the other start-up env files, and any `GUARDIAN_*` key named in it (the opt-out, the credential, the connection ids and the other settings) is ignored with a warning: Guardian settings are honoured only from the Gateway's real start-up environment or the protected `<state>/.env`. **Not governed, now documented:** OpenClaw's state database `<state>/state/openclaw.sqlite`, which the Gateway must write, holds the installed-plugin index; rewriting the `guardian` entry there made OpenClaw 2026.7.1 load a different directory as `guardian` (checked by running it), so an agent that can write it and get the Gateway restarted can swap Guardian out. The mitigation is to run the agent's tools as a different user or in OpenClaw's sandbox. Workspace-origin plugins and hooks (disabled by default) are listed as not checked.
   - Install integrity, third pass (root upkeep and npm). The official-image recipe left `$HOME` (`/data`) group-writable for `node`, so the Gateway user could create `/data/.npmrc` and owned `/data/.npm`; the documented upkeep ran `HOME=/data openclaw plugins install/update` as root, and OpenClaw 2026.7.1 runs npm with the caller's environment and no `--userconfig` (and drops any `npm_config_cache` it is given), so root would install from a registry `node` chose and the re-lock would make the result root-owned. The check now also covers the npm user config (`$HOME/.npmrc` or `npm_config_userconfig`) and global config (`<node prefix>/etc/npmrc`, `npm_config_globalconfig`, `npm_config_prefix`), `<state>/mpm/` and `<state>/plugins/` (plugin catalogs, the legacy `plugins/installs.json`), and `openclaw.json.bak` / `.bak.*` (OpenClaw restores the config from `.bak`): each must exist read-only or be impossible to create. The recipe refuses linked paths before it `chown`s anything, writes an empty root-owned `/data/.npmrc`, removes `/data/.npm`, creates `mpm/`, `plugins/` and `openclaw.json.bak` root-owned. A new Upkeep section: as root, `HOME=/root` from `/root` with `NPM_CONFIG_USERCONFIG=/dev/null`, an empty root-owned global config (npm refuses `/dev/null` for both), `NPM_CONFIG_CACHE=/root/.npm` and an explicit registry; edit `openclaw.json` directly instead of running the `openclaw` CLI as root (it would run OpenClaw, and the plugin code the Gateway-writable state database names, as root); update Guardian by unpacking the published tarball into the plugin directory; after every upkeep compare the installed `dist/index.js` sha256 (and `diff -r`) with the tarball, then re-lock. The README says a Gateway started from a writable working directory is blocked, and lists what stays unchecked (npm's cache, builtin `npmrc`, `.npmrc` in another command's cwd, catalog paths from the environment, running the CLI as root). Recipe and upkeep re-run end to end as uid 1000 on a real 2026.7.1 layout, with a planted `.npmrc` naming another registry.
-- `examples/openclaw/`: a SIMULATED run inside OpenClaw's real hook runtime (step 0 now shows a writable install blocked; the rest uses the opt-out), and the LIVE official-image recipe (`/data/.openclaw/openclaw.json`, with the new "protect the install" step).
+- `examples/openclaw/`: a run with a stand-in Guardian inside OpenClaw's real hook runtime (step 0 now shows a writable install blocked; the rest uses the opt-out), and the LIVE official-image recipe (`/data/.openclaw/openclaw.json`, with the new "protect the install" step).
 
 ### Added: Hermes Agent
 
@@ -326,19 +325,19 @@ These changes are in sdk 0.4.0 too, so every adapter that moves to it gets them.
   - Writes to Hermes' own home (`config.yaml`, `.env`, `plugins/`) or to the plugin, reading `$HERMES_HOME/.env`, and commands naming them or `GUARDIAN_*` are routed as `hermes_config` (needs approval), so the agent cannot switch Guardian off through an everyday edit. This is pattern-based; the README says what it misses.
   - The credential is moved out of `os.environ` when the plugin loads and before each call, so Hermes' tool subprocesses do not inherit it. Arguments Hermes coerces after the hook (a non-string `command`, a bare-string `urls`) are governed as their raw value, and every terminal argument (`timeout`, `pty`, …) is part of the proposal.
   - It fails closed: missing settings, a non-https URL, Guardian unreachable, a crash, a timeout or an unapproved ASK all block. Messages never include the credential or the error text.
-  - Not governed: read-only tools, anything outside Hermes' tool dispatch, `HERMES_SAFE_MODE`, a failure in Hermes' own dispatcher (which Hermes treats as no block), other plugins' `modify` directives, shell commands the patterns miss (they run as `shell`), config edits through a path built at run time, a credential read from `.env` or `/proc`, and in `GUARDIAN_HERMES_MCP=proxy` mode every `mcp__*`/`mcp_*` tool not behind guardian-mcp. Not yet proven live.
-- `examples/hermes/`: setup for Hermes, locally and on a host that runs one `hermes chat -q` per message, a `config.yaml` (plugin plus the `guardian-mcp proxy` recipe for MCP servers), and `hermes_hook_demo.py` (SIMULATED unless Guardian settings are set; Hermes itself is simulated).
+  - Not governed: read-only tools, anything outside Hermes' tool dispatch, `HERMES_SAFE_MODE`, a failure in Hermes' own dispatcher (which Hermes treats as no block), other plugins' `modify` directives, shell commands the patterns miss (they run as `shell`), config edits through a path built at run time, a credential read from `.env` or `/proc`, and in `GUARDIAN_HERMES_MCP=proxy` mode every `mcp__*`/`mcp_*` tool not behind guardian-mcp.
+- `examples/hermes/`: setup for Hermes, locally and on a host that runs one `hermes chat -q` per message, a `config.yaml` (plugin plus the `guardian-mcp proxy` recipe for MCP servers), and `hermes_hook_demo.py` (a local demo policy unless Guardian settings are set; Hermes itself is a stand-in).
 
 - **guardian-hook: OpenAI Codex CLI** (`guardian-hook codex`). Governs Codex's `Bash` (shell and unified exec), every `apply_patch` file edit and MCP tools. A patch is decided on its target paths and operations (`add`, `update`, `delete`, `move`) plus a size and SHA-256 digest; the patch text is never sent. Allow prints nothing; deny prints the deny JSON, writes the reason to stderr and exits 2. `guardian-hook codex setup` prints the `hooks.json`. A headless host that runs `codex exec` needs `--dangerously-bypass-hook-trust` on it (or a managed `requirements.toml` hook), or Codex skips the hook.
 - **guardian-hook: DeepSeek Harness** (`guardian-hook dsh`), through dsh's `@deepseek-ai/dsh-hooks-claude-code` bridge. Knows dsh's tool names: `bash`, `pwsh`, `terminal_send`, `write`, `edit`, `apply_patch`, `str_replace_editor` (all but `view`), `web_fetch`, `mcp__*`; the shipped matcher names all of them plus Claude Code's names. A deny also exits 2.
 - New Ask-tier tool **`shell_session`**: starting an interactive shell, interpreter, database client, `ssh` or `docker exec -it` session (what is typed into it later is not seen). Register it on the needs-approval connection; until then such calls are denied.
 - The hook's deadline now also covers reading stdin, and the hook answers as soon as a complete JSON object arrives, so an agent that leaves stdin open gets an answer rather than a hang. Patch headers that are indented or CRLF-terminated are read.
 - The hook has its own hard deadline (`GUARDIAN_HOOK_DEADLINE_MS`, default and maximum 540 s): past it, it denies, so it never reaches the agent's 600 s hook timeout. Crashes, uncaught errors and unparseable input deny in the agent's format. Applies to Claude Code too; Claude Code's output is otherwise unchanged.
-- `examples/agent-hooks.mjs` (SIMULATED), `examples/codex/` and `examples/deepseek-harness/` (LIVE recipes, including hosted agents).
+- `examples/agent-hooks.mjs` (stand-in Guardian), `examples/codex/` and `examples/deepseek-harness/` (LIVE recipes, including hosted agents).
 
 ### Added: remote MCP upstreams
 
-- **guardian-mcp:** `guardian-mcp proxy --url <https-url> [--transport streamable-http|sse] [--header "Name: ${ENV_VAR}"]` fronts a remote MCP server, such as Composio, over Streamable HTTP (default) or SSE. Not yet proven live: tested against local MCP servers and a fake Guardian only. The agent still talks stdio. Every `tools/call` is decided by Guardian exactly as for a stdio server; `tools/list` passes through with `guardian_claim` and `guardian_receipt` added. Stdio proxying is unchanged.
+- **guardian-mcp:** `guardian-mcp proxy --url <https-url> [--transport streamable-http|sse] [--header "Name: ${ENV_VAR}"]` fronts a remote MCP server, such as Composio, over Streamable HTTP (default) or SSE. The agent still talks stdio. Every `tools/call` is decided by Guardian exactly as for a stdio server; `tools/list` passes through with `guardian_claim` and `guardian_receipt` added. Stdio proxying is unchanged.
   - Header and URL values are expanded from `${ENV_VAR}` by guardian-mcp itself, are never printed, and stay in the proxy. Expanding a missing variable or any `GUARDIAN_*` variable is refused, so the agent credential cannot reach the remote server.
   - `https://` only (plain `http://` for localhost), no user name or password in the URL, and no redirects to another origin.
   - Fails closed: an unreachable server or a rejected key at startup exits with a scrubbed one-line message and serves no tools. A remote failure after ALLOW is reported as "may or may not have run", and the capability is not redeemed.
@@ -347,14 +346,14 @@ These changes are in sdk 0.4.0 too, so every adapter that moves to it gets them.
   - Not governed: a call that may have run after ALLOW but whose result was lost (timeout, dropped session) has no receipt; code in the same container can read the upstream key from its own environment.
   - Not supported: OAuth sign-in flows (use an API key or bearer header).
 - **guardian-mcp:** a tool call made while the upstream's tool list cannot be fetched now returns a "nothing was forwarded" error instead of an MCP protocol error.
-- `examples/remote-mcp.mjs`: the real CLI in front of a local Streamable HTTP server. SIMULATED by default (fail closed); LIVE with Guardian settings.
+- `examples/remote-mcp.mjs`: the real CLI in front of a local Streamable HTTP server. With no settings it shows the fail-closed case; with Guardian settings it runs against Guardian.
 - `examples/zeroclaw/`: recipe that wraps ZeroClaw's MCP servers in guardian-mcp and switches off its built-in tools. ZeroClaw's built-ins (shell, file writes, HTTP, browser, cron, delegation) cannot be governed from outside; its images ship no Node.js.
 - `examples/byo/`: CrewAI, LangGraph and AutoGen recipes. Each must keep one MCP session open (`MCPServerAdapter`, `client.session(...)`, `McpWorkbench`), because their default per-call sessions drop a held ASK.
 - `packages/mcp` has a `typecheck` script.
 
 ### Fixed
 
-- **guardian-hook:** an approval made in the last seconds of the 5-minute window was missed, because checks backed off to every 10 s on the hook's own clock (seen in a live run). The hook now times the window from when the request was created and always checks once more 1.5 s before it closes.
+- **guardian-hook:** an approval made in the last seconds of the 5-minute window was missed, because checks backed off to every 10 s on the hook's own clock. The hook now times the window from when the request was created and always checks once more 1.5 s before it closes.
 
 ## guardian-hook 0.2.0, released 2026-11-06
 
@@ -442,7 +441,7 @@ commands, file writes, web fetches and MCP tool calls through Guardian.
 
 - Shell commands are routed by consequence: `shell`, `shell_deploy`,
   `shell_destructive` and `git_push`. That routing is what lets deploys
-  wait for a phone approval while ordinary commands run under Allow.
+  wait for a human approval while ordinary commands run under Allow.
 - ALLOW redeems the capability before the agent runs the call.
 - ASK waits for a human (never auto-approved).
 - DENY, timeouts and an unreachable Guardian all fail closed.
@@ -452,8 +451,8 @@ commands, file writes, web fetches and MCP tool calls through Guardian.
   verified.
 - **Two connections, one per risk tier.** Guardian modes are per
   connection, so Allow-tier tools go to `GUARDIAN_CONNECTION_ID` and
-  Ask-tier tools go to `GUARDIAN_HOOK_ASK_CONNECTION_ID`. Found in a live
-  run, where a read-only `ls` waited for approval.
+  Ask-tier tools go to `GUARDIAN_HOOK_ASK_CONNECTION_ID`, so a read-only
+  `ls` does not wait for approval.
 
 ## 0.3.2 (TypeScript: sdk, mcp) / 0.1.2 (Python), released 2026-11-05
 

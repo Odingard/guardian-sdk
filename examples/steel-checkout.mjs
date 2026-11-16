@@ -7,8 +7,9 @@
  * Guardian side, holding the Steel session + merchant credential) place it.
  *
  * SIMULATED with no env vars (local demo policy; no browser, no merchant).
- * Against hosted Guardian it needs a Steel tool connection whose executor
- * is deployed behind Guardian — see packages/steel/README.md for maturity.
+ * Hosted Guardian has no protected Steel executor: there the checkout is
+ * recorded, no order is placed, and the result is not-executed. See
+ * packages/steel/README.md.
  */
 import { createGuardianSteelDispatcher, SteelCheckoutArgumentsSchema } from "@odingard/guardian-steel";
 import { guardian } from "./demo-guardian.mjs";

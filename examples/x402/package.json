@@ -2,7 +2,7 @@
   "name": "guardian-x402-example",
   "private": true,
   "type": "module",
-  "description": "Guardian deciding x402 payments. simulated-payments.mjs is SIMULATED: stand-in Guardian, in-memory 402 server, a throwaway Base Sepolia test key made on each run. No network, no money.",
+  "description": "Guardian deciding x402 payments. simulated-payments.mjs uses a stand-in Guardian, in-memory 402 server, a throwaway Base Sepolia test key made on each run. No network, no money.",
   "scripts": {
     "simulated": "node simulated-payments.mjs"
   },

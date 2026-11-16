@@ -8,10 +8,6 @@ OpenAI Agents SDK adapter for Guardian: every tool call goes through a
 deterministic `ALLOW` / `ASK` / `DENY` authority decision before the tool
 runs.
 
-**Tested, but not yet proven against a live Guardian and a live model.** The
-tests run the real Agents SDK runner with a scripted model and a stubbed
-Guardian client.
-
 ## Install
 
 ```bash
@@ -153,8 +149,8 @@ becomes `refund_order`), and Guardian sees the new name. A `modes` entry
 under the name you wrote is applied to the new name; two entries for the
 same tool that disagree are refused when the tool is built. `installRecordTransport`
 is off by default. `true` makes the adapter propose the record-only entry
-itself on first use (this needs a grant that allows it; production usually
-does not), and it only works for a tool that has no entry yet: an "already
+itself on first use (this needs a grant that allows it; most grants
+do not), and it only works for a tool that has no entry yet: an "already
 registered" answer is refused (`RECORD_TRANSPORT_UNVERIFIED`) and nothing
 runs, including after a restart for an entry the adapter created itself,
 because which entries it registered is kept in memory only. Once the entry

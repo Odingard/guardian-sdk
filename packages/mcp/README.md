@@ -167,13 +167,6 @@ Each call of that tool carries the declaration and the amount the proxy reads, a
 
 ## Govern a remote MCP server: `guardian-mcp proxy --url` (0.3.3 and later)
 
-**Status: tested against a real Guardian; production proof pending.** It ran
-end to end over Streamable HTTP against the real Guardian server code (allow,
-ask then approve, deny, outage), not yet on hosted production. SSE is tested
-against local servers and a stand-in Guardian only, and no real hosted server
-such as Composio has been tried. Composio's `x-api-key` header is
-unconfirmed.
-
 The proxy can also front an MCP server that runs online, such as Composio.
 The agent still starts `guardian-mcp` over stdio like any
 local server; guardian-mcp connects to the remote server over **Streamable
@@ -255,8 +248,8 @@ MCP connector), and anything the agent does without MCP. Also not covered:
   was set in and calling the remote server directly. Recipes:
   [ZeroClaw](../../examples/zeroclaw/README.md) and
   [your own container (CrewAI, LangGraph, AutoGen)](../../examples/byo/README.md).
-  Runnable example: `examples/remote-mcp.mjs` (SIMULATED by default, LIVE with
-  Guardian settings). `--url` is in the published `@odingard/guardian-mcp`
+  Runnable example: `examples/remote-mcp.mjs` (fails closed with no settings,
+  runs against Guardian with Guardian settings). `--url` is in the published `@odingard/guardian-mcp`
   from 0.3.3.
 
 ## See what you are about to govern: `guardian-mcp tools`

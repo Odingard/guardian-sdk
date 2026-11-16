@@ -1,5 +1,5 @@
 /**
- * simulated-payments.mjs — SIMULATED. Guardian decides x402 payments before
+ * simulated-payments.mjs — stand-ins, no network. Guardian decides x402 payments before
  * the wallet signs.
  *
  * Everything here is local and fake on purpose:

@@ -2,7 +2,7 @@
   "name": "guardian-ap2-example",
   "private": true,
   "type": "module",
-  "description": "Guardian deciding AP2 mandates. simulated-payments.mjs is SIMULATED: stand-in Guardian, Trusted Surface, merchant and processor, throwaway P-256 keys made on each run. No network, no money.",
+  "description": "Guardian deciding AP2 mandates. simulated-payments.mjs uses a stand-in Guardian, Trusted Surface, merchant and processor, throwaway P-256 keys made on each run. No network, no money.",
   "scripts": {
     "simulated": "node simulated-payments.mjs"
   },

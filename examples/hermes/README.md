@@ -12,17 +12,7 @@ Hermes plugin `guardian`. It asks Guardian before the tool runs:
 - anything Guardian denies, or that nobody approves in time, does not run;
 - every allowed call leaves a receipt you can verify offline.
 
-Status: tested locally against a real Guardian. A scripted stand-in for Hermes
-loads the installed plugin from its entry point with the `plugins` settings in
-[`config.yaml`](config.yaml), calls it before each tool call, and runs the tool
-only when it does not block: allow, ask then approve or deny, no approval in
-time, deny and the fail-closed cases (Guardian unreachable, no
-credential) pass against the real Guardian server
-code, with receipts verified offline. Also tested with a fake Guardian
-(`packages/python/tests/test_hermes.py`). **Not yet proven live** on Hermes,
-locally or hosted.
-
-## Try it without Hermes (SIMULATED)
+## Try it without Hermes
 
 ```bash
 pip install odingard-guardian
@@ -33,7 +23,7 @@ This calls the exact callback Hermes registers, with the payload Hermes gives
 it, against a local demo policy (`[SIMULATED guardian]`). Set
 `GUARDIAN_AGENT_CREDENTIAL`, `GUARDIAN_CONNECTION_ID` and
 `GUARDIAN_HOOK_ASK_CONNECTION_ID` to send the same calls to real Guardian
-(`[LIVE guardian]`); Hermes is still simulated.
+(`[LIVE guardian]`); Hermes itself is still a stand-in.
 
 ## Set up Guardian
 
@@ -64,9 +54,8 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
 
 3. Merge [`config.yaml`](config.yaml) into Hermes' `config.yaml`
    (`plugins.enabled: [guardian]`, `plugins.hook_callback_timeout: 130`).
-   Edit `plugins.enabled` by hand. `hermes plugins enable guardian` is
-   unverified: in the only real attempt it answered that the plugin was "not
-   installed or bundled".
+   Edit `plugins.enabled` by hand, then check with `hermes plugins` that
+   `guardian` shows as enabled.
 4. `hermes chat -q "List the files here, then run terraform apply -auto-approve in ./infra"`.
    `ls` runs. `terraform apply` is held: approve it in the Guardian app while
    the hook waits, and the command runs once. If nobody approves in time, the
@@ -134,7 +123,6 @@ approval).
 - If `plugins.enabled` does not list `guardian`, or `plugins.disabled` does,
   Hermes never loads the hook and nothing is governed. Check with
   `hermes plugins` that it shows as enabled.
-- `plugins.isolation: host` (plugins in a separate process) has not been tested.
 - **Shell commands are classified by pattern**, as in guardian-hook. Anything
   the patterns miss (`bash -c 'r''m -rf /'`, `python -c "import shutil; ..."`,
   `git -C . push`) is proposed as `shell`, which the setup above allows by

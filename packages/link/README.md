@@ -1,8 +1,7 @@
 # @odingard/guardian-link
 
-> **DRAFT. Not released. The wording must be approved before any release.** Every
-> sentence in this file is draft wording. Nothing here is published to npm.
-> The package is marked `"private": true` until the wording is approved.
+> **DRAFT. Not released.** Every sentence in this file is draft wording.
+> Nothing here is published to npm. The package is marked `"private": true`.
 
 **DRAFT:** Guardian for the [Stripe Link](https://github.com/stripe/link-cli)
 agent wallet, **in Link test mode only**. Before a Link spend request is
@@ -17,12 +16,6 @@ made through it. It cannot stop code that runs `link-cli` with the same
 login some other way, nor an agent that has a Link login of its own. Run
 the guard where the agent cannot read that file, for example as another
 user. See [Not governed](#not-governed).
-
-**DRAFT: Proof status.** Tested with a fake Guardian, a fake Link and a fake
-`link-cli`. **Not yet run against a real Link account**, even in test mode.
-The exact JSON the CLI prints and the error Link returns when no approval
-policy exists are taken from the Link CLI source (stripe/link-cli 308a15a),
-not from a real run.
 
 ## DRAFT: What it covers
 

@@ -2,14 +2,12 @@
 
 Two ways to see `@odingard/guardian-openclaw` work:
 
-| What                             | Label         | Needs                                                              |
-| -------------------------------- | ------------- | ------------------------------------------------------------------ |
-| `simulated-openclaw-runtime.mjs` | **SIMULATED** | Node 22. Nothing else: Guardian is a stand-in.                     |
-| The official-image recipe below  | **LIVE**      | An OpenClaw agent on the official image and a real Guardian agent. |
+| What                             | Needs                                                              |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `simulated-openclaw-runtime.mjs` | Node 22. Nothing else: Guardian is a stand-in.                     |
+| The official-image recipe below  | An OpenClaw agent on the official image and a real Guardian agent. |
 
-**Not yet proven live.** The LIVE recipe has not been run end to end yet.
-
-## SIMULATED: the plugin inside OpenClaw's real tool-hook runtime
+## The plugin inside OpenClaw's real tool-hook runtime (stand-in Guardian)
 
 ```bash
 npm run build -w packages/openclaw     # from the repo root
@@ -125,4 +123,4 @@ or the config (protect the install, step 5); whoever can still change them
 are not checked; the Gateway's start-up environment
 (`/proc/<pid>/environ`) still holds the credential for anything running as the
 same user; a host's own built-in integrations (such as a "Connect Gmail"
-button) have not been checked and may not reach the agent as a tool call.
+button) may not reach the agent as a tool call.

@@ -1,5 +1,5 @@
 /**
- * simulated-payments.mjs — SIMULATED. Guardian decides AP2 v0.2 mandates
+ * simulated-payments.mjs — stand-ins, no network. Guardian decides AP2 v0.2 mandates
  * before the agent key signs them.
  *
  * Everything here is local and fake on purpose:
