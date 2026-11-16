@@ -160,8 +160,16 @@ async with McpWorkbench(params) as workbench:   # one guardian-mcp process
   never as success.
 - Held calls live in the guardian-mcp process. A container restart, or a
   host snapshot/resume that restarts it, drops them, and nothing runs.
-- Hosted Guardian decides per tool today; it does not yet apply rules to
-  argument values such as amounts.
+- Guardian decides per tool. An owner can also put a dollar limit on a tool
+  in the Guardian console: name the argument that holds the amount, then
+  allow up to an amount, ask a person above it and block above a maximum.
+  Declare the same argument where the call goes through: `--amount-arg` for
+  `guardian-mcp proxy` (0.5 and later; see
+  [the MCP package](../../packages/mcp/README.md#dollar-amounts-on-tools---amount-arg-05)),
+  or `amountArgs` in TypeScript code with `@odingard/guardian-sdk` 0.6. A call
+  whose amount cannot be read is blocked. The Python SDK does not send amount
+  declarations, so through `Guard` a tool with an amount set in the console is
+  refused.
 
 Claude Agent SDK containers are covered separately by
 [`@odingard/guardian-hook/agent-sdk`](../hosted-claude-code).

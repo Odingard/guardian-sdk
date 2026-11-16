@@ -3,7 +3,7 @@
  *
  *   ALLOW → redeem the single-use capability (revocation/expiry checked now,
  *           receipt recorded) → tell the agent to run the call.
- *   ASK   → wait for the human's decision (phone or console) → on approval,
+ *   ASK   → wait for the human's decision in the console → on approval,
  *           claim + redeem → run. Never auto-approved.
  *   DENY  → the agent is told no, with the reason. Nothing runs.
  *
