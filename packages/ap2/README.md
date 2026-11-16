@@ -147,6 +147,11 @@ open mandate that was not approved by a person through this guard's
 `delegate()`. A pair from the same open mandate that is still outstanding
 is not a reason to ask: it is a refusal (below).
 
+A request outside Guardian's request limits (nesting deeper than 8 levels,
+more than 16,384 bytes of arguments, or anything the Guardian SDK refuses
+before sending) is refused locally with the reason (`REQUEST_INVALID`);
+nothing is sent. `GUARDIAN_UNREACHABLE` means Guardian could not be reached.
+
 An unreachable Guardian, a timeout, malformed answers, a failed `execute`,
 an approval that never comes, a store error, or a refusal at any step means
 nothing is signed and nothing is presented.
@@ -197,11 +202,38 @@ nothing is signed and nothing is presented.
     "checkout": { "aud": "merchant_1", "nonce": "…", "bindsToOpenMandate": "…" },
     "payment": { "aud": "credential-provider", "nonce": "…", "bindsToOpenMandate": "…" }
   },
-  "openMandates": { "checkout": { "…": "every constraint, exp, cnf" }, "payment": { "…": "every constraint and preset" } },
+  "openMandates": { "checkout": { "…": "every constraint (line items flat, below), exp, cnf" }, "payment": { "…": "every constraint and preset" } },
   "termsDigest": "sha256:…",
   "reviewReasons": ["FIRST_USE_OF_OPEN_MANDATE"]
 }
 ```
+
+An open checkout mandate's `checkout.line_items` constraint nests deeper
+than a Guardian request allows (8 levels), so it is shown flat, one entry
+per acceptable item, nothing left out:
+
+```json
+{
+  "type": "checkout.line_items",
+  "constraintDigest": "sha256:…",
+  "acceptableItems": [
+    {
+      "requirementId": "line_1",
+      "quantity": 2,
+      "itemId": "sku_mug",
+      "title": "Coffee mug"
+    },
+    { "requirementId": "line_2", "quantity": 1, "anyItem": true }
+  ]
+}
+```
+
+`anyItem` marks a requirement that accepts any item. `constraintDigest` is
+SHA-256 of the constraint's JCS form, so the exact constraint is part of
+the approved terms; before signing, the guard reads the open checkout
+mandate again and refuses (`TERMS_CHANGED`) if a digest or the mandate
+differs. More than 64 acceptable items in all is refused
+(`TOO_MANY_ITEMS`), not shortened.
 
 The person sees all of it, untruncated. The buyer is shown as field names
 only, and risk data as its keys and a digest; their values are never sent to
@@ -351,7 +383,8 @@ Refusals throw `Ap2GuardRefused` with a `code`, for example
 `AMOUNT_TOTAL_MISMATCH`, `PAYEE_MERCHANT_MISMATCH`, `CONSTRAINT_VIOLATED`,
 `CURRENCY_NOT_SUPPORTED`, `BUDGET_UNIT_AMBIGUOUS`, `RECURRENCE_EXCEEDED`,
 `MANDATE_ALREADY_USED`, `OUTSTANDING_PRESENTATION`, `MANDATE_IN_USE`,
-`OPEN_MANDATE_EXPIRED`, `CHECKOUT_EXPIRED`, `ABOVE_MAX`,
+`OPEN_MANDATE_EXPIRED`, `CHECKOUT_EXPIRED`, `ABOVE_MAX`, `TOO_MANY_ITEMS`,
+`REQUEST_INVALID`, `GUARDIAN_UNREACHABLE`,
 `PERSON_APPROVAL_REQUIRED`, `TERMS_CHANGED`, `SIGNING_INPUT_MISMATCH`,
 `SIGNING_TOKEN_USED`, `ALREADY_PRESENTED`, `PAIR_RELEASED`, `RECEIPT_INVALID`. Guardian's own
 reason follows the code, for example `GUARDIAN_DENIED:TOOL_NOT_GRANTED`.

@@ -1,7 +1,7 @@
 // The canonical terms Guardian decides on and the person sees, in full.
 // Plain JSON, built by the guard from verified data only, deep-copied and
 // frozen. The approval binds to `termsDigest` = sha256(JCS(terms)).
-import { AP2_VERSION } from "./constants.js";
+import { AP2_VERSION, MAX_ITEM_CONSTRAINT_ENTRIES } from "./constants.js";
 import { jwkThumbprint, type PublicJwk } from "./jose.js";
 import {
   budgetMinor,
@@ -16,7 +16,7 @@ import {
   type PaymentConstraint,
   type ReadCheckout,
 } from "./mandates.js";
-import { termsDigestOf } from "./util.js";
+import { isPlainObject, refused, termsDigestOf } from "./util.js";
 
 export type Mode = "human-not-present" | "human-present";
 
@@ -66,8 +66,53 @@ export type DelegateTerms = Readonly<{
 
 const iso = (sec: number | undefined) => (sec === undefined ? null : new Date(sec * 1000).toISOString());
 
+type LineItemsConstraint = Extract<CheckoutConstraint, { type: "checkout.line_items" }>;
+
+/** `sha256:<hex>` of the JCS form of one `checkout.line_items` constraint, exactly as read. */
+export function lineItemsConstraintDigest(c: LineItemsConstraint): string {
+  return termsDigestOf(c);
+}
+
+/**
+ * Open checkout constraints as Guardian sees them. `checkout.line_items`
+ * nests too deep for a Guardian request (`items[].acceptable_items[]`), so
+ * it is shown flat, every requirement and acceptable item with its id, title
+ * and quantity, nothing left out, and bound by `constraintDigest`. A
+ * requirement that accepts any item is shown with `anyItem: true`. More
+ * than MAX_ITEM_CONSTRAINT_ENTRIES entries in all is refused.
+ */
 export function checkoutConstraintsView(cs: readonly CheckoutConstraint[]): unknown[] {
-  return cs.map((c) => ({ ...c }));
+  let entries = 0;
+  return cs.map((c) => {
+    if (c.type !== "checkout.line_items") return { ...c };
+    type Entry = { requirementId: string; quantity: number } & ({ itemId: string; title: string } | { anyItem: true });
+    const acceptableItems = c.items.flatMap((r): Entry[] =>
+      r.acceptable_items.length === 0
+        ? [{ requirementId: r.id, quantity: r.quantity, anyItem: true }]
+        : r.acceptable_items.map((a) => ({ requirementId: r.id, quantity: r.quantity, itemId: a.id, title: a.title })),
+    );
+    entries += acceptableItems.length;
+    if (entries > MAX_ITEM_CONSTRAINT_ENTRIES) {
+      throw refused(
+        "TOO_MANY_ITEMS",
+        `The open checkout mandate lists more than ${MAX_ITEM_CONSTRAINT_ENTRIES} acceptable items; the guard does not shorten what a person approves.`,
+      );
+    }
+    return { type: c.type, constraintDigest: lineItemsConstraintDigest(c), acceptableItems };
+  });
+}
+
+/** The `constraintDigest` of each `checkout.line_items` constraint, in order. */
+export function lineItemsDigestsOf(cs: readonly CheckoutConstraint[]): string[] {
+  return cs.flatMap((c) => (c.type === "checkout.line_items" ? [lineItemsConstraintDigest(c)] : []));
+}
+
+/** The `constraintDigest` values in a constraints view, in order. */
+export function lineItemsDigestsOfView(view: unknown): string[] {
+  if (!Array.isArray(view)) return [];
+  return view.flatMap((c) =>
+    isPlainObject(c) && c.type === "checkout.line_items" && typeof c.constraintDigest === "string" ? [c.constraintDigest] : [],
+  );
 }
 
 export function paymentConstraintsView(cs: readonly PaymentConstraint[]): unknown[] {

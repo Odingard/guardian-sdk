@@ -30,6 +30,7 @@ export type RefusalCode =
   | "CURRENCY_NOT_SUPPORTED"
   | "BUDGET_UNIT_AMBIGUOUS"
   | "INVALID_AUDIENCE"
+  | "TOO_MANY_ITEMS"
   // local caps and the ledger
   | "ABOVE_MAX"
   | "NO_CAP_FOR_CURRENCY"
@@ -42,6 +43,7 @@ export type RefusalCode =
   | "STORE_REQUIRED"
   | "STORE_UNAVAILABLE"
   // Guardian
+  | "REQUEST_INVALID"
   | "GUARDIAN_UNREACHABLE"
   | "GUARDIAN_TIMEOUT"
   | "GUARDIAN_DENIED"
