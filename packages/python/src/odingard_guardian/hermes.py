@@ -17,8 +17,8 @@ and in the environment Hermes runs in: ``GUARDIAN_AGENT_CREDENTIAL``,
 
 * ALLOW: the single-use capability is redeemed (receipt recorded), then
   Hermes runs the tool. Decision-gated, like ``@odingard/guardian-hook``.
-* ASK: the hook waits for a person to approve in Guardian (phone or
-  console). Approved: redeemed, then the tool runs. Not approved in time:
+* ASK: the hook waits for a person to approve in the Guardian
+  console. Approved: redeemed, then the tool runs. Not approved in time:
   blocked. Within the same Hermes process, the exact same call retried picks
   up the open request; it is never carried across processes (see
   :class:`PendingStore`).
@@ -582,7 +582,7 @@ def decide(
         if store is not None and held is None:
             store.put(key, request_id, wall() + request_ttl_s)
         log(f'Guardian: "{call.summary}" is held for approval (request {request_id}). '
-            "Approve it on your phone or in the console.")
+            "Approve it in the Guardian console.")
         window = max(0.0, min(approval_timeout_s, remaining_ttl))
         lead = min(FINAL_CHECK_LEAD_S, window / 4)
         last_check_at = answered_at + window - lead

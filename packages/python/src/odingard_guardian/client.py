@@ -283,7 +283,7 @@ class _Base:
         timeout: float = 30.0,
     ) -> None:
         if not credential:
-            raise ValueError("credential (the agent credential, gac1.…) is required")
+            raise ValueError("credential (the agent credential, gak_…) is required")
         self.base_url = base_url.rstrip("/")
         self.adapter_id = adapter_id
         self._headers = {"authorization": f"Bearer {credential}"}

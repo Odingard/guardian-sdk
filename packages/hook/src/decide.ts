@@ -214,7 +214,7 @@ export async function decide(
   if (isPending(result)) {
     if (!requestId) return denied(call, "MISSING_REQUEST_ID");
     log(
-      `Guardian: "${call.summary}" is held for approval (request ${requestId}). Approve it on your phone or in the console.`,
+      `Guardian: "${call.summary}" is held for approval (request ${requestId}). Approve it in the Guardian console.`,
     );
     // Stop waiting at our own timeout or when Guardian's window closes,
     // whichever is first. The last check runs just before that moment, so an

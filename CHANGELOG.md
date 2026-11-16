@@ -1,5 +1,10 @@
 # Changelog
 
+## Messages (unreleased)
+
+- **`@odingard/guardian-hook`**, **`@odingard/guardian-openclaw`** (which uses the hook's decision code) and the **Python Hermes plugin**: a held call now logs `… is held for approval (request req_…). Approve it in the Guardian console.`
+- **Python `odingard-guardian`**: the missing-credential error names the current prefix, `gak_…`.
+
 ## Docs (unreleased)
 
 - **skill.md 1.0.9.** Text only; no pin change (hash in `skill/CHANGELOG.md`).

@@ -52,7 +52,7 @@ function standInGuardian() {
     },
     async claim(requestId) {
       console.log(
-        `  (simulated) a person approves ${requestId} on their phone`,
+        `  (simulated) a person approves ${requestId} in the Guardian console`,
       );
       return {
         ok: true,

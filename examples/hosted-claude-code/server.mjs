@@ -13,7 +13,7 @@
  * to Guardian first:
  *   - everyday commands run;
  *   - deploys, destructive commands and pushes wait for a person to approve
- *     the exact action (Guardian console or phone);
+ *     the exact action (in the Guardian console);
  *   - anything Guardian denies, or nobody approves in time, does not run;
  *   - every allowed call leaves a receipt you can verify offline.
  * A PreToolUse hook runs even under bypassPermissions, and its deny holds.
