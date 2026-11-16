@@ -7,6 +7,7 @@
 
 ## Docs (unreleased)
 
+- **skill.md 1.0.10.** Text only; no pin change (hash in `skill/CHANGELOG.md`). The credential check is one provided check that never prints the value; `scripts/check-skill.mjs` refuses code that prints the credential.
 - **skill.md 1.0.9.** Text only; no pin change (hash in `skill/CHANGELOG.md`).
 
 ## sdk 0.6.2 (unreleased)

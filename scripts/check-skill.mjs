@@ -90,6 +90,31 @@ const FORBIDDEN = [
     what: "--dangerously-bypass-hook-trust",
   },
   { re: /--break-system-packages/, what: "--break-system-packages" },
+  // The credential is checked only with the check in section 3.1: a
+  // ${VAR:-…} or ${VAR:+…} form, a command that prints it, or a read of the
+  // credential file prints it.
+  {
+    re: /\$\{GUARDIAN_AGENT_CREDENTIAL:?[-+=?]/,
+    what: "a ${GUARDIAN_AGENT_CREDENTIAL:-…} form (it prints the credential)",
+  },
+  {
+    re: /\b(echo|printf|cat)\b[^\n;|&]*\$\{?GUARDIAN_AGENT_CREDENTIAL\b/,
+    what: "a command that prints the credential",
+  },
+  {
+    re: /\b(printenv|declare -p|typeset -p)\b[^\n;|&]*\bGUARDIAN_AGENT_CREDENTIAL\b|\b(printenv|env|set|export -p|declare -p|typeset -p)\s*\|[^\n]*\bGUARDIAN_/,
+    what: "a command that prints the credential",
+  },
+  {
+    // A bare dump of the environment (alone, piped or redirected) prints
+    // every variable, the credential included.
+    re: /(^|[;&|]\s*)(env|printenv|set|export -p|declare -p|typeset -p)\s*($|[;&|<>])/m,
+    what: "a command that prints the credential",
+  },
+  {
+    re: /\b(cat|less|more|head|tail|grep|sed|awk)\b[^\n;|&]*(~|\$HOME|\$\{HOME\})\/\.config\/guardian\/env\b/,
+    what: "a command that reads the credential file",
+  },
   // dash (Debian/Ubuntu /bin/sh) prints nothing when the first of several
   // names is missing, so detection must ask one name at a time.
   {
