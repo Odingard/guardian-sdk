@@ -335,6 +335,11 @@ export function checkDrift(text, root) {
     fail(`Codex matcher ${codexMatcher} differs from packages/hook/README.md`);
   }
 
+  // Every integration section is present.
+  for (const key of ["4A", "4B", "4C", "4D", "4E", "4F", "4G", "4H"]) {
+    if (!bySection[key]) fail(`section ${key} is missing`);
+  }
+
   // Internal wording.
   const rootReadme = read("README.md");
   for (const [name, source] of [["skill.md", text], ["README.md", rootReadme]]) {

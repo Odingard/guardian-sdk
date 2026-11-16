@@ -58,6 +58,7 @@ const MUTATIONS = [
   ["a hook tool name not in HOOK_TOOLS", "`shell_deploy`, `shell_destructive`, `git_push`, `shell_session`)", "`shell_deploy`, `shell_destructive`, `git_push`, `shell_interactive`)", /shell_interactive is not in HOOK_TOOLS/],
   ["a Claude Code matcher that differs from the hook README", '"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"', '"matcher": "Bash|Write|Edit"', /Claude Code matcher/],
   ["a Codex matcher that differs from the hook README", "matcher `^(Bash|apply_patch)$|^mcp__.*`", "matcher `^(Bash)$`", /Codex matcher/],
+  ["a missing integration section", "### 4H. OpenClaw\n", "### OpenClaw\n", /section 4H is missing/],
   ["a proof status", "### 4C. Codex CLI\n", "### 4C. Codex CLI — proven on production\n", /line \d+: a proof status belongs in internal tracking/],
   ["a test status", "### 4D. DeepSeek Harness\n", "### 4D. DeepSeek Harness — tested locally against a real Guardian\n", /line \d+: a test status belongs in internal tracking/],
   ["a staging host", "export GUARDIAN_BASE_URL=https://guardian-api.odingard.com", "export GUARDIAN_BASE_URL=https://guardian.staging.example.test", /line \d+: staging belongs in internal tracking/],

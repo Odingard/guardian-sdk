@@ -13,7 +13,7 @@ builds. It cannot stop code that signs with the key some other way. See
 [Not governed](#not-governed).
 
 **Networks.** Supports USDC on Base Sepolia (testnet). Base mainnet is off by
-default.
+default; run your flow on Base Sepolia before you turn it on.
 
 ## What it covers
 
