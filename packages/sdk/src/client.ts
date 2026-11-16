@@ -28,7 +28,7 @@ import {
 export type GuardianClientConfig = Readonly<{
   /** Production: https://guardian-api.odingard.com */
   baseUrl: string;
-  /** Agent credential (gac1.…). */
+  /** Agent credential (gak_…). */
   credential: string;
   /** Adapter audience for executes; defaults to the tool adapter. */
   adapterId?: string;

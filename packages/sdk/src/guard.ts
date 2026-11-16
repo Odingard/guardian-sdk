@@ -1877,7 +1877,7 @@ export type Guard = <Input, Output>(
  * framework.
  *
  * ```ts
- * const guard = createGuard({ client, connectionId: "con_…" });
+ * const guard = createGuard({ client, connectionId: "pcn_…" });
  * const payInvoice = guard("pay_invoice", async (inv: Invoice) => stripe.paymentIntents.create(…));
  * await payInvoice({ invoiceId: "inv_42", amountCents: 1_240_000, payee: "acme" });
  * // ALLOW → your code runs, receipt recorded. ASK → GuardianApprovalPending (resume() after approval).
