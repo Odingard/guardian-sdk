@@ -785,7 +785,8 @@ inspect` for lower priorities), and if another plugin returned
 - **Nested tool calls.** OpenClaw documents that calls made through Tool
   Search (`tool_call`, `tool_search_code`) go through `before_tool_call` as
   final calls. The plugin governs the wrapper too, so one action can produce
-  two Guardian requests.
+  two Guardian requests. Check that a denied tool called through Tool Search
+  is blocked before relying on it.
 - **The Codex app-server runtime** relays native tool calls through its own
   contract. OpenClaw documents that it rejects some parameter rewrites, so
   returning the evaluated parameters may block calls there (fail closed).

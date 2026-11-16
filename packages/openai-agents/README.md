@@ -6,7 +6,8 @@
 
 OpenAI Agents SDK adapter for Guardian: every tool call goes through a
 deterministic `ALLOW` / `ASK` / `DENY` authority decision before the tool
-runs.
+runs. Before relying on it, run one guarded tool with your model against your
+Guardian and check that an Ask waits for approval.
 
 ## Install
 

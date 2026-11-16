@@ -15,6 +15,8 @@ stop code that signs with the key some other way. See
 the user approves and signs. A Guardian approval is your operator control,
 not the user's AP2 consent, and never replaces the Trusted Surface step. The
 guard never signs open mandates and never acts as the Trusted Surface.
+Check that your merchant's and processor's AP2 verifiers accept the chains the
+guard presents before relying on it.
 
 ## What it covers
 

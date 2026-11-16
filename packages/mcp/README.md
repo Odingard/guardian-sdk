@@ -170,7 +170,9 @@ Each call of that tool carries the declaration and the amount the proxy reads, a
 The proxy can also front an MCP server that runs online, such as Composio.
 The agent still starts `guardian-mcp` over stdio like any
 local server; guardian-mcp connects to the remote server over **Streamable
-HTTP** (the default) or **SSE** (`--transport sse`).
+HTTP** (the default) or **SSE** (`--transport sse`). Before relying on a
+remote server, check that its key header is accepted and that a call on an Ask
+connection waits for approval.
 
 ```json
 {
