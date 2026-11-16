@@ -101,7 +101,7 @@ const FORBIDDEN = [
     what: "a command that prints the credential",
   },
   {
-    re: /\bprintenv\b[^\n;|&]*\bGUARDIAN_AGENT_CREDENTIAL\b|\b(env|set|export -p|declare -p)\s*\|[^\n]*\bGUARDIAN_AGENT_CREDENTIAL\b/,
+    re: /\b(printenv|declare -p|typeset -p)\b[^\n;|&]*\bGUARDIAN_AGENT_CREDENTIAL\b|\b(printenv|env|set|export -p|declare -p|typeset -p)\s*\|[^\n]*\bGUARDIAN_/,
     what: "a command that prints the credential",
   },
   // dash (Debian/Ubuntu /bin/sh) prints nothing when the first of several
