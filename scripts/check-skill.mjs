@@ -106,6 +106,12 @@ const FORBIDDEN = [
     what: "a command that prints the credential",
   },
   {
+    // A bare dump of the environment prints every variable, the credential
+    // included.
+    re: /(^|[;&|]\s*)(env|printenv|set|export -p|declare -p|typeset -p)\s*($|[;&])/m,
+    what: "a command that prints the credential",
+  },
+  {
     re: /\b(cat|less|more|head|tail|grep|sed|awk)\b[^\n;|&]*(~|\$HOME|\$\{HOME\})\/\.config\/guardian\/env\b/,
     what: "a command that reads the credential file",
   },
