@@ -141,7 +141,8 @@ a string, or the call is blocked.
 Code Mode's `exec` runs JavaScript in OpenClaw's sandbox, and each tool it
 calls goes through `before_tool_call` on its own. The script itself is
 governed as `openclaw.code_mode_exec` on the Ask tier; if you rely on the
-per-tool checks, add it to `allowTierTools`.
+per-tool checks, add it to `allowTierTools`, but first check that a denied
+tool called from inside a Code Mode script is blocked.
 
 Guardian modes are per connection, so the plugin uses two record-only
 connections: everyday tools go to `connectionId` (set it to Allow), Ask-tier
