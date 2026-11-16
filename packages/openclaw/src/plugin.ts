@@ -5,7 +5,7 @@
  *   ALLOW -> the single-use capability is redeemed (receipt recorded), then
  *            the handler returns the parameters Guardian saw, and the tool runs.
  *   ASK   -> the handler waits while a person approves or declines the exact
- *            call in Guardian (phone or console). Guardian is the authority:
+ *            call in Guardian (in the console). Guardian is the authority:
  *            OpenClaw's own `requireApproval` is never used to let a call run.
  *   DENY  -> `{ block: true, blockReason }`. Nothing runs.
  *

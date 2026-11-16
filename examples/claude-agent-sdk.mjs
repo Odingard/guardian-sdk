@@ -4,7 +4,7 @@
  * LIVE: needs a real Claude API key and a real Guardian agent. Nothing here
  * is simulated: every shell command, file write and MCP call the agent makes
  * goes to Guardian first. Everyday commands run; deploys, destructive
- * commands and pushes wait for a person to approve on their phone; every
+ * commands and pushes wait for a person to approve in the Guardian console; every
  * allowed call leaves a receipt you can verify offline.
  *
  *   export ANTHROPIC_API_KEY=...                 (your Claude key)

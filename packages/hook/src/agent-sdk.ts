@@ -12,12 +12,12 @@
  *
  * Every shell command, file write and MCP call the agent makes is sent to
  * Guardian for a deterministic ALLOW / ASK / DENY decision before it runs.
- * Deploys, destructive commands and pushes wait for a person to approve on
- * their phone; every allowed call leaves a verifiable receipt. Read-only
+ * Deploys, destructive commands and pushes wait for a person to approve in
+ * the Guardian console; every allowed call leaves a verifiable receipt. Read-only
  * tools are left to the agent's own permissions.
  *
  * It is the same decision path as the Claude Code hook (`runHook`), so the
- * Agent SDK gets exactly the behaviour already proven there. A PreToolUse
+ * Agent SDK gets exactly the same behaviour. A PreToolUse
  * hook runs for every tool call, including calls an allow rule or a bypass
  * mode would approve, and its deny holds in every permission mode.
  *

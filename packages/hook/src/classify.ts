@@ -5,7 +5,7 @@
  * name is a record-only tool on one Guardian tool-server connection, and
  * the human sets its mode (Allow / Ask / Deny) in the Guardian console.
  * Splitting shell commands by consequence is what lets `ls` run under Allow
- * while `terraform apply` waits for a phone approval.
+ * while `terraform apply` waits for a human approval.
  */
 import { createHash } from "node:crypto";
 

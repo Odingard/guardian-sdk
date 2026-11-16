@@ -3,7 +3,7 @@
  *
  *   ALLOW → redeem the single-use capability (revocation/expiry checked now,
  *           receipt recorded) → tell the agent to run the call.
- *   ASK   → wait for the human's decision (phone or console) → on approval,
+ *   ASK   → wait for the human's decision in the console → on approval,
  *           claim + redeem → run. Never auto-approved.
  *   DENY  → the agent is told no, with the reason. Nothing runs.
  *
@@ -214,7 +214,7 @@ export async function decide(
   if (isPending(result)) {
     if (!requestId) return denied(call, "MISSING_REQUEST_ID");
     log(
-      `Guardian: "${call.summary}" is held for approval (request ${requestId}). Approve it on your phone or in the console.`,
+      `Guardian: "${call.summary}" is held for approval (request ${requestId}). Approve it in the Guardian console.`,
     );
     // Stop waiting at our own timeout or when Guardian's window closes,
     // whichever is first. The last check runs just before that moment, so an
