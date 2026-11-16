@@ -16,6 +16,9 @@ sends every consequential tool call to Guardian for a deterministic
 - anything Guardian denies, or that no person approves in time, does not run;
 - every allowed call leaves a signed decision record you can verify offline.
 
+Before relying on it for outbound messages or MCP tools, send one test
+message or MCP call and check that it waits for approval in the console.
+
 **Tamper-resistance is a deployment precondition, and the plugin enforces
 it.** If the OpenClaw process user can change the plugin, the OpenClaw config,
 the plugin directories, managed hooks or a start-up `.env`, every tool call is

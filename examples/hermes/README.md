@@ -123,6 +123,9 @@ approval).
 - If `plugins.enabled` does not list `guardian`, or `plugins.disabled` does,
   Hermes never loads the hook and nothing is governed. Check with
   `hermes plugins` that it shows as enabled.
+- With `plugins.isolation: host` (plugins in a separate process), check that a
+  deny still blocks (for example `rm -rf ./tmp-guardian-check`) before relying
+  on it.
 - **Shell commands are classified by pattern**, as in guardian-hook. Anything
   the patterns miss (`bash -c 'r''m -rf /'`, `python -c "import shutil; ..."`,
   `git -C . push`) is proposed as `shell`, which the setup above allows by
