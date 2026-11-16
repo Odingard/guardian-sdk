@@ -13,9 +13,9 @@ The hash must equal the one recorded below for its version.
 ## 1.0.10
 
 - Date: 2026-11-16
-- SHA-256: `7d5ee83c9fd1503585e4c6cc80bde2d4d870da86219de2fb5f23db0f1cb5996d`
+- SHA-256: `3606641e9fc04b3f89622e2bf89025eb498f31482e0aa707de5cb1e2dd738510`
 - Pins: unchanged from 1.0.9.
-- Credential check: use only the provided check; never print the credential. Section 3.1 gives one check, `test -n "$GUARDIAN_AGENT_CREDENTIAL" && echo set || echo missing`, and rule 6 forbids printing, echoing or interpolating the credential and the `${VAR:-…}` and `${VAR:+…}` forms. No other change.
+- Credential check: use only the provided check; never print the credential. Section 3.1 gives one check, which prints only `set`, `missing` or `set, wrong format` (the same `gak_` prefix and length test as before, written without stripping the value). Rule 6 says to run only that check and never to print, echo, `cat` or interpolate the credential, or use the `${VAR:-…}` and `${VAR:+…}` forms with it. No other change.
 
 ## 1.0.9
 

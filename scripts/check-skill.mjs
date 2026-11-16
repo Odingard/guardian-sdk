@@ -100,6 +100,10 @@ const FORBIDDEN = [
     re: /\b(echo|printf|cat)\b[^\n;|&]*\$\{?GUARDIAN_AGENT_CREDENTIAL\b/,
     what: "a command that prints the credential",
   },
+  {
+    re: /\bprintenv\b[^\n;|&]*\bGUARDIAN_AGENT_CREDENTIAL\b|\b(env|set|export -p|declare -p)\s*\|[^\n]*\bGUARDIAN_AGENT_CREDENTIAL\b/,
+    what: "a command that prints the credential",
+  },
   // dash (Debian/Ubuntu /bin/sh) prints nothing when the first of several
   // names is missing, so detection must ask one name at a time.
   {

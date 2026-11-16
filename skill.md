@@ -114,10 +114,10 @@ They load it in the shell that starts the agent or app (`. ~/.config/guardian/en
 
 Tell the person plainly: an agent started from that shell (including you) can read the credential from its environment. That credential can propose actions but cannot approve them or change rules; approvals need the person's sign-in.
 
-Then check that it is set with exactly this command, unchanged. It prints only `set` or `missing`, never the value. Do not write any other check for the credential (rule 6):
+Then check it with exactly this command, unchanged. It prints only `set`, `missing` or `set, wrong format`, never the value. Do not write any other check for the credential (rule 6):
 
 ```sh
-test -n "$GUARDIAN_AGENT_CREDENTIAL" && echo set || echo missing
+case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;; gak_*) if [ "${#GUARDIAN_AGENT_CREDENTIAL}" -eq 47 ]; then echo set; else echo "set, wrong format"; fi ;; *) echo "set, wrong format" ;; esac
 ```
 
 ```sh
