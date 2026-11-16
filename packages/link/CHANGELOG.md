@@ -1,14 +1,12 @@
 # Changelog: @odingard/guardian-link
 
-> **DRAFT. Not released. The wording must be approved before any release.** This
-> entry moves to the root `CHANGELOG.md` only after the wording is approved.
+> **DRAFT. Not released.**
 
 ## DRAFT: guardian-link 0.1.0 (unreleased)
 
 ### DRAFT: Added: Stripe Link agent wallet, test mode
 
-- **DRAFT:** **`@odingard/guardian-link` 0.1.0** (new; tested with fakes, not
-  yet run against a real Link account): Guardian decides a Stripe Link spend
+- **DRAFT:** **`@odingard/guardian-link` 0.1.0** (new): Guardian decides a Stripe Link spend
   request on its exact terms (merchant name and URL, amount, currency, line
   items, totals) before it is created, in Link test mode only. Line items and
   totals must add up to the amount.

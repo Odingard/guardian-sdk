@@ -15,9 +15,7 @@ Guardian before it runs (input typed into an already open session with
 Guardian sees the command, or for a patch only its target paths and
 operations plus a size and SHA-256 digest. It never sees file contents.
 
-Status: tested locally against a real Guardian. A scripted stand-in for Codex applies this `hooks.json` as Codex does (the matcher, the command line, Codex's reading of exit codes) and runs the published hook against the real Guardian server code: allow, ask then approve or deny, no approval in time, deny, and the fail-closed cases (Guardian unreachable, no credential, hook not installed), with receipts verified offline. Also tested with simulated Codex payloads and a stand-in Guardian (the Codex tests in `packages/hook`, and `node agent-hooks.mjs codex`). **Not yet proven live:** no real Codex run against a real Guardian yet, locally or hosted.
-
-## SIMULATED: see what Codex would receive (no account needed)
+## See what Codex would receive (no account needed)
 
 ```bash
 cd examples && npm install
@@ -45,7 +43,7 @@ and exit 0 to allow, deny JSON plus stderr and exit 2 to block.
      "List the files here, then run terraform apply -auto-approve in ./infra"
    ```
 
-   `ls` runs; `terraform apply` waits for your approval on your phone. An
+   `ls` runs; `terraform apply` waits for your approval in the console. An
    untrusted hook is skipped by Codex, and then nothing is governed.
 
 For a fleet, deliver the hook as a managed hook instead; see
@@ -64,8 +62,8 @@ under `/data/.codex`. Such a host's Codex image needs a custom build to:
    host needs; without it Codex skips the hook.
 
 Then set the three `GUARDIAN_*` variables in the agent's settings (the
-credential as a secret). Not yet confirmed live: that hooks fire under
-`--dangerously-bypass-approvals-and-sandbox`, and which Codex version a host runs.
+credential as a secret). Check that hooks fire under
+`--dangerously-bypass-approvals-and-sandbox`, and which Codex version your host runs.
 
 ## What is not governed
 
@@ -75,7 +73,8 @@ credential as a secret). Not yet confirmed live: that hooks fire under
   it unseen. Turn unified exec off with `unified_exec = false` under
   `[features]` in the managed [`requirements.toml`](requirements.toml); then
   `exec_command` is one-shot and `write_stdin` is not offered (per Codex's
-  source; not yet confirmed live).
+  source). Check that `write_stdin` is no longer offered before you rely on
+  it.
 - `apply_patch` deletes are `file_write` (Allow tier) under the suggested
   modes.
 - A missing, untrusted or unparseable `hooks.json` governs nothing: check

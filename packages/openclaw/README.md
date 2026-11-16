@@ -16,15 +16,8 @@ sends every consequential tool call to Guardian for a deterministic
 - anything Guardian denies, or that no person approves in time, does not run;
 - every allowed call leaves a signed decision record you can verify offline.
 
-**Status: proven live on hosted Guardian for shell commands.** Run on
-OpenClaw 2026.7.1 with a protected install, through the Gateway agent's real
-`before_tool_call` hook. On staging and production: an everyday command was
-allowed and ran, and its signed decision record verified offline; a deploy command waited for
-approval in the console and, once approved, ran once with the approved
-parameters. On staging also: a denied approval, a tool set to off, and an
-unreachable Guardian each blocked the call, and nothing ran. Outbound
-messages, MCP tools and the other Ask-tier tools use the same hook and
-decision path but have not yet been run live.
+Before relying on it for outbound messages or MCP tools, send one test
+message or MCP call and check that it waits for approval in the console.
 
 **Tamper-resistance is a deployment precondition, and the plugin enforces
 it.** If the OpenClaw process user can change the plugin, the OpenClaw config,
@@ -148,7 +141,8 @@ a string, or the call is blocked.
 Code Mode's `exec` runs JavaScript in OpenClaw's sandbox, and each tool it
 calls goes through `before_tool_call` on its own. The script itself is
 governed as `openclaw.code_mode_exec` on the Ask tier; if you rely on the
-per-tool checks, add it to `allowTierTools`. Not yet proven live.
+per-tool checks, add it to `allowTierTools`, but first check that a denied
+tool called from inside a Code Mode script is blocked.
 
 Guardian modes are per connection, so the plugin uses two record-only
 connections: everyday tools go to `connectionId` (set it to Allow), Ask-tier
@@ -423,7 +417,7 @@ plugin does not read `openclaw.json` and does not check them.
 - `chattr +i` on the files and directories is an alternative to root
   ownership (an immutable entry cannot be changed, renamed or removed).
 
-### Opting out (not tamper-proof)
+### Opting out (the agent can switch Guardian off)
 
 `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1` in the Gateway's start-up
 environment turns the check off and keeps the pattern-based behaviour. It is
@@ -431,8 +425,8 @@ read once, when the plugin loads; setting it later (the agent cannot change
 the running Gateway's environment) has no effect. The plugin logs one
 warning at load. **In this mode the agent can switch Guardian off** by
 changing the plugin or the OpenClaw config with an everyday command the
-patterns do not recognise; do not describe such a deployment as
-tamper-proof or claim coverage for it. Set it only in a place the agent cannot
+patterns do not recognise; do not describe such a deployment as protected
+against the agent or claim coverage for it. Set it only in a place the agent cannot
 write: a `.env` file in the state directory that the agent can write would let
 the agent turn the check off at the next restart, which is why those files
 are checked. A value from `.env` in the Gateway's working directory is always
@@ -519,16 +513,11 @@ Running on the official image: see [examples/openclaw](../../examples/openclaw).
 
 ## NVIDIA NemoClaw (OpenShell)
 
-**Status: verified on Guardian staging with NVIDIA NemoClaw v0.0.143, NVIDIA
-OpenShell 0.0.116, the OpenClaw that NemoClaw release ships (2026.10.5) and
-plugin 0.1.0**: an allowed `shell` call ran, a destructive one waited for a
-person and ran once after approval, and one on a connection set to Off was
-refused with no prompt. Guardian production was not part of that run. The
-step-by-step guide is
-[examples/nemoclaw](../../examples/nemoclaw). The rest of this README
-describes OpenClaw 2026.7.1; this section notes where NemoClaw differs. Plugin
-0.1.1, including an in-place Gateway restart, was then verified on the same
-setup.
+This section covers NVIDIA NemoClaw v0.0.143, NVIDIA OpenShell 0.0.116, the
+OpenClaw that NemoClaw release ships (2026.10.5) and plugin 0.1.0 and 0.1.1.
+The step-by-step guide is [examples/nemoclaw](../../examples/nemoclaw). The
+rest of this README describes OpenClaw 2026.7.1; this section notes where
+NemoClaw differs.
 
 In a NemoClaw sandbox the Gateway never sees the raw credential. OpenShell
 gives it a placeholder, `openshell:resolve:env:v<N>_GUARDIAN_AGENT_CREDENTIAL`,
@@ -627,7 +616,7 @@ Guardian and every governed call is blocked.
   as raw, and OpenShell would not resolve it anyway. Stop then start also
   works.
 
-**Opt-out mode is required, and it is not tamper-proof.** NemoClaw runs the
+**Opt-out mode is required, and in it the agent can switch Guardian off.** NemoClaw runs the
 Gateway as the `sandbox` user and keeps `/sandbox/.openclaw` (the OpenClaw
 config included) writable by that user by design, so the install check in
 [Required: protect the install](#required-protect-the-install) cannot pass
@@ -642,12 +631,12 @@ Gateway log after the next start, which shows the plugin's one opt-out
 warning ("`GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1`, so the
 install-integrity check is off"). The plugin ignores `GUARDIAN_*` keys from
 `<cwd>/.env`, so the route works only while the Gateway's working directory
-is not `/sandbox/.openclaw`. It was `/sandbox` in the tested versions;
+is not `/sandbox/.openclaw`. It was `/sandbox` in the versions above;
 NemoClaw does not guarantee that. This departs from the advice in
-[Opting out](#opting-out-not-tamper-proof) to set the flag only where the
+[Opting out](#opting-out-the-agent-can-switch-guardian-off) to set the flag only where the
 agent cannot write: the agent can edit that `.env`. **In this mode the agent
 can switch Guardian off**: do not describe a NemoClaw deployment as
-tamper-proof. Never put credential material in that `.env` file; a
+protected against the agent. Never put credential material in that `.env` file; a
 placeholder written there by hand would not resolve.
 
 **Which processes can use the placeholder (`binaries`).** The binary
@@ -795,12 +784,12 @@ inspect` for lower priorities), and if another plugin returned
   exec, or a node host) to close this.
 - **Nested tool calls.** OpenClaw documents that calls made through Tool
   Search (`tool_call`, `tool_search_code`) go through `before_tool_call` as
-  final calls. Until that is proven live, the wrapper is governed too, so one
-  action can produce two Guardian requests.
+  final calls. The plugin governs the wrapper too, so one action can produce
+  two Guardian requests. Check that a denied tool called through Tool Search
+  is blocked before relying on it.
 - **The Codex app-server runtime** relays native tool calls through its own
   contract. OpenClaw documents that it rejects some parameter rewrites, so
-  returning the evaluated parameters may block calls there (fail closed). Not
-  tested.
+  returning the evaluated parameters may block calls there (fail closed).
 - Channel replies the model writes as its normal answer are not tool calls
   and are not governed; only the `message` tool is.
 - Things OpenClaw does without a tool call (cron jobs already scheduled,

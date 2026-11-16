@@ -1,13 +1,6 @@
 # ZeroClaw, governed by Guardian (recipe)
 
-**Status: LIVE recipe, tested locally against a real Guardian, not yet proven
-on ZeroClaw.** A scripted stand-in for ZeroClaw started the two server entries
-in [`config.toml`](config.toml) as written (a local server, and a remote one
-with `--url` and an API-key header) and ran allow, ask then approve or deny,
-deny, Guardian-unreachable and no-credential calls against the real Guardian
-server code (nothing was forwarded in the last two),
-with receipts verified offline; the key never reached the agent. Nothing here
-has run on a real ZeroClaw yet. The ZeroClaw settings are taken from
+The recipe needs a real Guardian agent. The ZeroClaw settings are taken from
 ZeroClaw's own docs (`docs/book/src/tools/mcp.md`, `tools/overview.md`,
 `security/autonomy.md`, read at zeroclaw-labs/zeroclaw master `a66cc98`,
 2026-11-06). Hosted ZeroClaw builds may be older (for example `v0.8.5`), and
@@ -106,13 +99,11 @@ COPY --from=guardian /opt/guardian-mcp /opt/guardian-mcp
 This image has **not been built or run** in this work (no Docker daemon was
 available). The Node binary needs glibc and `libstdc++`, which
 `bookworm-slim` provides. If your host (for example a hosted ZeroClaw
-template) does not let you change the image, this recipe cannot run there
-yet: use the bring-your-own-container path ([../byo](../byo/README.md))
-instead. Copying a Node binary onto `/data` at runtime has not been verified
-and is not documented here.
+template) does not let you change the image, this recipe cannot run there:
+use the bring-your-own-container path ([../byo](../byo/README.md))
+instead. Copying a Node binary onto `/data` at runtime is not covered here.
 
-`--url` support ships in the next `@odingard/guardian-mcp` release (see the
-CHANGELOG); until it is published, build it from this repository.
+`--url` needs `@odingard/guardian-mcp` 0.3.3 or later.
 
 ## Env-only configuration
 

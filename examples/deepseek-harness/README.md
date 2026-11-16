@@ -12,9 +12,7 @@ tools the matcher in `guardian-hooks.json` names, so keep it as shipped:
 - anything denied, or not approved within 5 minutes, does not run;
 - every allowed call leaves a receipt you can verify offline.
 
-Status: tested locally against a real Guardian. A scripted stand-in for the bridge applies this `guardian-hooks.json` and runs the published hook with dsh's tool names against the real Guardian server code: allow, ask then approve or deny, no approval in time, deny, and the fail-closed cases (Guardian unreachable, no credential, hook not installed), with receipts verified offline. Also tested with simulated dsh payloads and a stand-in Guardian (the dsh tests in `packages/hook`, and `node agent-hooks.mjs dsh`). **Not yet proven live:** no real dsh agent run against a real Guardian yet, locally or hosted.
-
-## SIMULATED: see what dsh would receive (no account needed)
+## See what dsh would receive (no account needed)
 
 ```bash
 cd examples && npm install
@@ -44,7 +42,7 @@ node agent-hooks.mjs dsh
    `ls` runs; `terraform apply` waits for your approval. The hook waits for
    the approval itself, so this works in one-shot headless chats.
 
-Not yet confirmed live: that the bridge plugin is in a host's prebuilt dsh
+Check on your host: that the bridge plugin is in its prebuilt dsh
 image (if not, install it with `dsh plugin`), the tool names the bridge passes there (its source passes dsh's
 names unchanged; the matcher also lists Claude Code's), that the hook's environment keeps
 `GUARDIAN_AGENT_CREDENTIAL`, and that a headless run may wait 5 minutes.

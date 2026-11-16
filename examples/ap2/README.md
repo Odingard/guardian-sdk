@@ -1,11 +1,8 @@
 # AP2 payments, decided by Guardian
 
-| What                     | Label         | Needs                                         |
-| ------------------------ | ------------- | --------------------------------------------- |
-| `simulated-payments.mjs` | **SIMULATED** | Node 22 and a build of this repo. No network. |
-
-**Not yet proven live.** AP2 has no public sandbox; a run against the AP2
-reference merchant, credential provider and processor has not been done yet.
+| What                     | Needs                                                                 |
+| ------------------------ | --------------------------------------------------------------------- |
+| `simulated-payments.mjs` | Node 22 and a build of this repo. No network; Guardian is a stand-in. |
 
 ```bash
 npm install && npm run build     # from the repo root
@@ -22,7 +19,7 @@ It does four things:
 
 1. **Delegation.** The agent asks for open mandates (up to 40.00 USD a
    payment, at most 5 payments, 100.00 USD in all). Guardian holds
-   `ap2.delegate.recurring` for a (simulated) person; only then does the
+   `ap2.delegate.recurring` for a (stand-in) person; only then does the
    Trusted Surface sign.
 2. **19.99 USD mug.** Below `askAbove` and under an open mandate a person
    approved here, so a rule allows `ap2.pay`; Guardian redeems it, then the

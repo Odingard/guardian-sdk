@@ -2,7 +2,7 @@
   "name": "guardian-sdk-examples",
   "private": true,
   "type": "module",
-  "description": "Runnable examples for @odingard/guardian-sdk. Labels are honest: SIMULATED = local demo policy stand-in; LIVE = real hosted Guardian (set env vars) or real published receipt keys.",
+  "description": "Runnable examples for @odingard/guardian-sdk. Each labels its output: a local demo policy stand-in, or a real Guardian (set env vars) or real published keys.",
   "scripts": {
     "shopping-agent": "node shopping-agent.mjs",
     "prompt-injection": "node prompt-injection-deny.mjs",

@@ -174,7 +174,7 @@ Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-a
 2. Add `--dangerously-bypass-hook-trust` to the host's `codex exec` command, or deliver the hook as a managed `requirements.toml` hook. **This is the one setting a headless host needs**; without it the hook is skipped.
 3. Set `GUARDIAN_AGENT_CREDENTIAL`, `GUARDIAN_CONNECTION_ID` and `GUARDIAN_HOOK_ASK_CONNECTION_ID` as agent environment variables (the credential as a secret).
 
-`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals, but that hooks still fire under that flag is **not yet confirmed live**. See `examples/codex/`.
+`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals; check that hooks still fire before you use that flag. See `examples/codex/`.
 
 ### Not governed under Codex
 
@@ -185,12 +185,12 @@ Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-a
   unified_exec = false
   ```
 
-  With it off, Codex registers `exec_command` as one-shot (runs to completion, no `tty`, no session) and does not offer `write_stdin` (Codex `spec_plan.rs`, `add_shell_tools`; the source notes that only managed requirements can keep it off). Not yet confirmed live. `examples/codex/requirements.toml` includes it.
+  With it off, Codex registers `exec_command` as one-shot (runs to completion, no `tty`, no session) and does not offer `write_stdin` (Codex `spec_plan.rs`, `add_shell_tools`; the source notes that only managed requirements can keep it off). Check that `write_stdin` is no longer offered before you rely on it. `examples/codex/requirements.toml` includes it.
 
 - **`apply_patch` deletes and moves are `file_write` (Allow tier).** A `*** Delete File:` patch runs without approval under the suggested modes; the approver sees `delete <path>` in the operations. That is a policy choice: set the everyday connection to Ask if deletes must wait for a person.
 - **A missing, untrusted or unparseable `hooks.json` governs nothing.** Codex skips it and runs every call. Check with a deny (for example `rm -rf ./tmp-guardian-check` should be blocked or wait for approval) after every config change.
 - Hosted tools such as `WebSearch` (they do not use Codex's hook path), and any "specialized tool path" Codex runs without hooks; Codex itself calls hooks "a useful guardrail, not a complete enforcement boundary".
-- Other local tools (`update_plan`, `spawn_agent`, …) are left to Codex. Whether a subagent's own tool calls reach the hook is not yet confirmed.
+- Other local tools (`update_plan`, `spawn_agent`, …) are left to Codex. Check whether a subagent's own tool calls reach the hook before you rely on it.
 - **Codex lets the call run if the hook process fails** (crash, timeout, malformed output). The hook makes every failure it can see a deny: it catches crashes, exits 2 on deny, and has its own 540-second deadline under Codex's 600-second timeout. The `|| … exit 2` in the command turns a hook that cannot start into a block. A hook killed from outside, or a `timeout` set below the hook's deadline, still fails open; keep `timeout` at 600.
 
 ## DeepSeek Harness (dsh)
@@ -250,11 +250,11 @@ A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both 
 
 ### Not governed under DeepSeek Harness
 
-- **Every dsh tool not in the table**, including ones with real effects: `run_code` itself (its tool sub-calls go through the same pre-execute pipeline, per dsh's docs; not yet confirmed live), `subagent`, `workflow`, `ralph`; `plugin_manager` and `load_workspace_dependencies` (they install packages); the experimental browser tools `stagehand_act` and `stagehand_navigate` (they can click, submit forms and navigate); `send_message`, `spawn_teammate`, `team_task_*`; `job_*` (including `job_kill`); `schedule_*`; `skill`, `lsp`, `propose_action`, `terminal_open`, `web_search`; and read-only tools. Disable the ones you do not want with your dsh profile.
+- **Every dsh tool not in the table**, including ones with real effects: `run_code` itself (its tool sub-calls go through the same pre-execute pipeline, per dsh's docs; check with a denied sub-call before you rely on it), `subagent`, `workflow`, `ralph`; `plugin_manager` and `load_workspace_dependencies` (they install packages); the experimental browser tools `stagehand_act` and `stagehand_navigate` (they can click, submit forms and navigate); `send_message`, `spawn_teammate`, `team_task_*`; `job_*` (including `job_kill`); `schedule_*`; `skill`, `lsp`, `propose_action`, `terminal_open`, `web_search`; and read-only tools. Disable the ones you do not want with your dsh profile.
 - **A missing or unparseable hooks file governs nothing.** The bridge logs "could not load hook config … no hooks registered" and runs every call. Check with a deny after every config change.
 - `terminal_send` is classified per message, so a command split across several sends (e.g. `terraform ap` then `ply`) is seen in pieces, and text sent to a program already running in the PTY (a REPL, `ssh`) is classified as if it were a shell command. Prefer the plain `bash` tool and turn the terminal tools off where that matters.
 - **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
-- Not yet confirmed live: the tool names the bridge passes in a hosted dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether a host's dsh image already includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether a host's headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
+- Check on your host: the tool names the bridge passes in your dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether your dsh image includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
 
 ## Edit-type tools: the target file is pinned (0.4)
 
@@ -276,7 +276,7 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - **Starting the hook.** It answers only when run as `guardian-hook` (or `…/hook/dist/index.js`). Installed under another file name it exits 0 with no output, which every agent treats as "no objection". Use the documented commands.
 - **Only calls through the hook are governed.** Commands you run yourself, or other credentials on the machine, are not.
 - **Arguments are bounded.** Commands over 2,000 characters are truncated in what the approver sees; MCP inputs over that size are sent as a digest.
-- **Claude Code, Codex and DeepSeek Harness.** A Cursor adapter will ship once its hook contract is verified against its documentation.
+- **Claude Code, Codex and DeepSeek Harness.** There is no Cursor hook adapter; use the MCP proxy for Cursor.
 - **Claude Code itself also runs a call when a hook times out or exits with an error other than 2.** The hook's own 540-second deadline and crash handling deny before that can happen; keep the hook `timeout` at 600.
 
 Licensed Apache-2.0.

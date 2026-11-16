@@ -15,11 +15,8 @@ stop code that signs with the key some other way. See
 the user approves and signs. A Guardian approval is your operator control,
 not the user's AP2 consent, and never replaces the Trusted Surface step. The
 guard never signs open mandates and never acts as the Trusted Surface.
-
-**Proof status.** Tested with a fake Guardian, stand-in Trusted Surface,
-merchant and processor keys made fresh for each test, and the AP2
-specification's own example tokens. **Not yet proven live**, and not yet
-checked against the AP2 Python SDK's verifier. AP2 has no public sandbox.
+Check that your merchant's and processor's AP2 verifiers accept the chains the
+guard presents before relying on it.
 
 ## What it covers
 
@@ -43,7 +40,7 @@ checked against the AP2 Python SDK's verifier. AP2 has no public sandbox.
   `payment.allowed_payment_instruments`, `payment.allowed_pisps`,
   `payment.execution_date`, `payment.reference`. Anything else is refused.
 - Amounts are integer minor units. Display uses the guard's own ISO 4217
-  exponents (USD 2, JPY 0, KWD 3, …), never a `$` sign. Tested in USD.
+  exponents (USD 2, JPY 0, KWD 3, …), never a `$` sign.
 
 Everything the guard cannot read exactly is refused, not ignored.
 
@@ -361,9 +358,9 @@ reason follows the code, for example `GUARDIAN_DENIED:TOOL_NOT_GRANTED`.
 
 ## Example
 
-[`examples/ap2/simulated-payments.mjs`](../../examples/ap2) (SIMULATED:
-stand-in Guardian, Trusted Surface, merchant and processor, throwaway keys,
-no network).
+[`examples/ap2/simulated-payments.mjs`](../../examples/ap2) (stand-in
+Guardian, Trusted Surface, merchant and processor, throwaway keys, no
+network).
 
 ## License
 

@@ -1,16 +1,9 @@
 # Your own container (CrewAI, LangGraph, AutoGen), governed by Guardian
 
-**Status: LIVE recipes, tested locally against a real Guardian, not yet proven
-with a framework.** A scripted container (serving `/health` and `/chat`, one
-`guardian-mcp proxy` session kept open) ran allow, ask then approve or deny and
-deny calls against the real Guardian server code, with receipts verified
-offline; with Guardian unreachable or no credential nothing was forwarded,
-and a claim sent to a fresh MCP process ran nothing. Each recipe
-below still needs a real Guardian agent, a real model key and the framework
-installed; none has run end to end with a framework yet. The framework
-APIs below were checked against the released source: `crewai` /
-`crewai-tools` 1.15.36, `langchain-mcp-adapters` 0.3.2 and `autogen-ext` 0.7.5
-(PyPI, 2026-11-06).
+Each recipe below needs a real Guardian agent, a real model key and the
+framework installed. The framework APIs below were checked against the
+released source: `crewai` / `crewai-tools` 1.15.36, `langchain-mcp-adapters`
+0.3.2 and `autogen-ext` 0.7.5 (PyPI, 2026-11-06).
 
 A bring-your-own agent container often only has to serve `GET /health` and
 `POST /chat` on `$PORT`. All tool calling happens inside the framework you

@@ -9,10 +9,6 @@
 #   openshell provider profile import -f guardian-api-profile.yaml
 #
 # Then register the credential through NemoClaw and rebuild (guide, step 3).
-#
-# Verified with Guardian staging: this file with host
-# guardian-api-staging.odingard.com. The production host below was not part
-# of that run.
 id: guardian-api
 display_name: Guardian API
 description: Guardian agent API used by @odingard/guardian-openclaw

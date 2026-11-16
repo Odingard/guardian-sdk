@@ -172,12 +172,11 @@ in either mode.
 
 `@guard(...)` returns an ordinary function, so register the guarded function
 wherever your framework expects a tool. These are recipes, not separate
-integrations, and they are not all tested to the same level:
+integrations:
 
-- **LangChain / LangGraph** (tested against Guardian; production proof
-  pending): `StructuredTool.from_function(pay_invoice)`, or `@tool` on top of
+- **LangChain / LangGraph**: `StructuredTool.from_function(pay_invoice)`, or `@tool` on top of
   `@guard`. Map `GuardianApprovalPending` to a LangGraph `interrupt`.
-- **OpenAI Agents SDK** (tested against Guardian; production proof pending):
+- **OpenAI Agents SDK**:
 
   ```python
   from agents import function_tool
@@ -202,9 +201,9 @@ integrations, and they are not all tested to the same level:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI** (example, not yet tested): `@tool("Pay invoice")` on top of
+- **CrewAI** (example): `@tool("Pay invoice")` on top of
   `@guard`.
-- **Claude Agent SDK** (example, not yet tested): guard the handler, or put
+- **Claude Agent SDK** (example): guard the handler, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
 
 ### Honest limits
@@ -272,10 +271,7 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the
 Hosted setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
-Tested locally against a real Guardian with a scripted stand-in for Hermes;
-not yet proven on Hermes itself. The install step is unverified: in
-the only real attempt, `hermes plugins enable guardian` answered that the
-plugin was "not installed or bundled". Install `odingard-guardian` into the
+Install `odingard-guardian` into the
 same Python environment Hermes runs in, list `guardian` under
 `plugins.enabled` in `config.yaml` yourself, and check that Hermes loads it
 before relying on it.

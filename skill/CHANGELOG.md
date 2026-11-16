@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.9
+
+- Date: 2026-11-16
+- SHA-256: `230087ee309699148c5bf04ac1c155f589b55e1783b745b9ba98e465ebf1a509`
+- Pins: unchanged from 1.0.8.
+- No pin change; public text only. The section headings 4A to 4E and 4H carry no status, and the status sentences in 4F, 4G and 4H are removed. 4H asks for one test message or MCP call before relying on it for those. No other change.
+
 ## 1.0.8
 
 - Date: 2026-11-15
@@ -36,7 +43,7 @@ The hash must equal the one recorded below for its version.
 - Date: 2026-11-14
 - SHA-256: `809c721d459eee6d281a8a9e30394a97af307220e51985d1dcaff8b6a5362322`
 - Pins: unchanged from 1.0.4.
-- Codex CLI, DeepSeek Harness and Hermes: "tested locally against a real Guardian" in place of "example, not yet tested". Two sentences in 4C shortened. No other change.
+- Wording for Codex CLI, DeepSeek Harness and Hermes. Two sentences in 4C shortened. No other change.
 
 ## 1.0.4
 

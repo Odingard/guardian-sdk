@@ -269,7 +269,7 @@ await purchase({ sku: "mug-1", amount: 2000 }); // $20.00
 | `{ ok: true, decision: "ASK" }` or `{ ok: false, reasonCode: "APPROVAL_REQUIRED", requestId }` | `ASK`                   | keep `requestId`; `claim(requestId)` after the human decides |
 | anything else (DENY, `SERVICE_UNAVAILABLE`, ALLOW without token)                               | `DENY`                  | do not run the effect                                        |
 
-A held ASK always carries its `requestId` (fixed in 0.2 — 0.1 dropped it).
+A held ASK always carries its `requestId` (0.2 and later).
 
 Invocation types: `tool.invoke`, `mcp.install`, `mcp.enable` (typed), and the
 governed pass-through actions `api.request`, `protected_data.derive|transform|export`,
@@ -387,23 +387,12 @@ proof). Maturity L1 = built-in governed, L2 = modeled/decidable, L3 =
 production-integrated with recorded proof.
 `verticalsForAction("tool.invoke")` lists verticals using an action.
 
-## Guardian for Steel — `@odingard/guardian-steel`
+## What this SDK reaches
 
-Browser-agent checkout governed by Guardian: the agent can only propose
-`steel.checkout.submit`; ALLOW/ASK/DENY happens before the order; the Steel
-session and merchant credential stay on the protected executor side. See
-[`packages/steel`](https://github.com/Odingard/guardian-sdk/tree/main/packages/steel) for the boundary and
-current maturity.
-
-## Maturity of what this SDK reaches
-
-| Path                                                                                     | Status                                                                                            |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Decision + capability + execute for `api.request`, Gmail, Calendar, tool/MCP connections | LIVE on hosted Guardian                                                                           |
-| Signed decision record retrieval + offline/online verification                           | LIVE (staging and production publish keys)                                                        |
-| Embedded human approvals                                                                 | LIVE routes; needs a human session from your Guardian sign-in                                     |
-| Steel checkout                                                                           | agent side published; protected executor proven in-process, not yet injected into hosted Guardian |
-| Framework `inProcess` mode                                                               | decision-gated only — see below                                                                   |
+- Decision, capability and execute for `api.request`, Gmail, Calendar and tool/MCP connections.
+- Signed decision record retrieval and offline or online verification.
+- Embedded human approvals; these need a human session from your Guardian sign-in.
+- Framework `inProcess` mode: decision-gated — see below.
 
 ## Plans and limits
 
@@ -414,7 +403,7 @@ Reading signed decision records and verifying them is never metered.
 
 ## Related packages
 
-MCP server, LangChain.js, Vercel AI SDK and Steel adapters, plus runnable
+MCP server, LangChain.js and Vercel AI SDK adapters, plus runnable
 examples, live in the [guardian-sdk repository](https://github.com/Odingard/guardian-sdk#packages).
 
 ## License
