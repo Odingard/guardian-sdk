@@ -106,9 +106,9 @@ const FORBIDDEN = [
     what: "a command that prints the credential",
   },
   {
-    // A bare dump of the environment prints every variable, the credential
-    // included.
-    re: /(^|[;&|]\s*)(env|printenv|set|export -p|declare -p|typeset -p)\s*($|[;&])/m,
+    // A bare dump of the environment (alone, piped or redirected) prints
+    // every variable, the credential included.
+    re: /(^|[;&|]\s*)(env|printenv|set|export -p|declare -p|typeset -p)\s*($|[;&|<>])/m,
     what: "a command that prints the credential",
   },
   {

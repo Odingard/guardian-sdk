@@ -52,6 +52,8 @@ const MUTATIONS = [
   ["declare -p of the credential", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'declare -p GUARDIAN_AGENT_CREDENTIAL; case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
   ["env piped to a search for GUARDIAN_", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'env | grep GUARDIAN_; case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
   ["a bare environment dump", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'env\ncase "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
+  ["a piped environment dump", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'env | sort\ncase "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
+  ["a redirected environment dump", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'export -p > vars.txt\ncase "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
   ["a read of the credential file", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'cat ~/.config/guardian/env; case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that reads the credential file/],
   ["env piped to a search for the credential", 'case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', 'env | grep GUARDIAN_AGENT_CREDENTIAL; case "$GUARDIAN_AGENT_CREDENTIAL" in "") echo missing ;;', /a command that prints the credential/],
   ["--break-system-packages", 'python -m pip install "odingard-guardian==0.4.0"', 'python -m pip install --break-system-packages "odingard-guardian==0.4.0"', /--break-system-packages/],
