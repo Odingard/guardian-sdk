@@ -122,7 +122,7 @@ class GuardianFunctionInvocationFilter:
     def _innermost(self, context: FunctionInvocationContext) -> bool:
         """Whether this filter runs last, right before the function.
 
-        The kernel keeps the last filter added first in its list, and that
+        The kernel keeps the most recently added filter at the start of its list, and that
         one wraps the function directly.
         """
         filters = getattr(context.kernel, "function_invocation_filters", None)
