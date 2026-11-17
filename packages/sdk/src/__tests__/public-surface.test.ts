@@ -54,10 +54,10 @@ import type {
 
 const fixtures = join(import.meta.dirname, "fixtures");
 const receipt = JSON.parse(
-  readFileSync(join(fixtures, "staging-receipt.json"), "utf8"),
+  readFileSync(join(fixtures, "sample-receipt.json"), "utf8"),
 ) as Record<string, unknown>;
 const keys = JSON.parse(
-  readFileSync(join(fixtures, "staging-keys.json"), "utf8"),
+  readFileSync(join(fixtures, "sample-keys.json"), "utf8"),
 );
 
 const json = (body: unknown, status = 200) =>
@@ -152,26 +152,51 @@ describe("request lifecycle", () => {
         return json({ ok: true, receipt });
       },
     });
-    const result = await client.portableReceipt("req_probe_w20_fix1");
+    const result = await client.portableReceipt(
+      "req_6afe9ef1155c8897f3e508f1009b3fa9",
+    );
     expect(url).toBe(
-      "https://api.example.test/v1/agent/receipts/req_probe_w20_fix1/portable",
+      "https://api.example.test/v1/agent/receipts/req_6afe9ef1155c8897f3e508f1009b3fa9/portable",
     );
     expect(result.ok).toBe(true);
   });
 });
 
 describe("portable receipt verification", () => {
-  it("verifies a real staging receipt offline against the published keys", () => {
+  it("verifies a real production sample record offline against the published keys", () => {
     const result = verifyReceiptOffline(receipt, keys);
-    expect(result).toMatchObject({ valid: true, decision: "ALLOW" });
+    expect(result).toMatchObject({
+      valid: true,
+      decision: "ALLOW",
+      effect: "verified",
+      subject: {
+        tenantId: "ten_ec02b245b1cf621e14a51314e9fa2bc2",
+        requestId: "req_6afe9ef1155c8897f3e508f1009b3fa9",
+      },
+    });
   });
 
   it("rejects a tampered receipt", () => {
     const tampered = structuredClone(receipt) as {
-      action: { materialParameters: { url: string } };
+      action: { materialParameters: { toolName: string } };
     };
-    tampered.action.materialParameters.url = "https://attacker.example/";
+    tampered.action.materialParameters.toolName = "sample.delete";
     expect(verifyReceiptOffline(tampered, keys).valid).toBe(false);
+
+    const onePurposeByte = structuredClone(receipt) as {
+      action: { purpose: string };
+    };
+    onePurposeByte.action.purpose = onePurposeByte.action.purpose.replace(
+      /t$/,
+      "T",
+    );
+    expect(onePurposeByte.action.purpose).not.toBe(
+      (receipt as { action: { purpose: string } }).action.purpose,
+    );
+    expect(verifyReceiptOffline(onePurposeByte, keys)).toEqual({
+      valid: false,
+      reasonCode: "SIGNATURE_INVALID",
+    });
   });
 
   it("rejects a receipt signed by an unknown key", () => {
@@ -200,7 +225,8 @@ describe("portable receipt verification", () => {
       "https://api.example.test",
       { fetch },
     );
-    expect(fetched.ok).toBe(true);
+    expect(fetched).toEqual({ ok: true, keys });
+    expect(verifyReceiptOffline(receipt, fetched).valid).toBe(true);
     const online = await verifyReceiptOnline(
       "https://api.example.test",
       receipt,
@@ -380,9 +406,11 @@ describe("content pins (public surface)", () => {
       text: "a,b\n1,2\n",
       truncated: false,
     });
-    expect(contentPreview("q3.pdf", new Uint8Array([37, 80, 68, 70]))).toEqual(
-      { kind: "binary", mediaType: "application/pdf", size: 4 },
-    );
+    expect(contentPreview("q3.pdf", new Uint8Array([37, 80, 68, 70]))).toEqual({
+      kind: "binary",
+      mediaType: "application/pdf",
+      size: 4,
+    });
   });
 
   it("refuses __proto__ as a file argument name instead of dropping it", () => {

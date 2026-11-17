@@ -6,11 +6,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_BASE_URL, runCli, USAGE } from "../cli.js";
 
 const fixtures = join(import.meta.dirname, "fixtures");
-const receiptText = readFileSync(
-  join(fixtures, "staging-receipt.json"),
-  "utf8",
-);
-const keysText = readFileSync(join(fixtures, "staging-keys.json"), "utf8");
+const receiptText = readFileSync(join(fixtures, "sample-receipt.json"), "utf8");
+const keysText = readFileSync(join(fixtures, "sample-keys.json"), "utf8");
 const receipt = JSON.parse(receiptText) as {
   receiptId: string;
   decision: { decision: string };
