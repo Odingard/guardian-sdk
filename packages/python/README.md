@@ -291,12 +291,12 @@ guardian = GuardianFunctionMiddleware(
 agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 ```
 
-| Decision                | What happens                                                                                                                                                                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ALLOW**               | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                              |
-| **ASK**                 | The tool does not run. The model is told the call is held for a person. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
-| **DENY**                | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                       |
-| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                             |
+| Decision                 | What happens                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                             |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                      |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                            |
 
 - `on_ask="stop"` or `on_deny="stop"` also stops the agent run, with Guardian's message as the tool result. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
 - Guardian decides on the arguments as Agent Framework validated them for the tool (for example `"500"` for an `int` parameter is proposed as `500`), and the tool runs with them.

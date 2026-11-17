@@ -66,8 +66,16 @@ const reads: [string, object, Record<string, unknown>][] = [
   ["currency eur", WITH_CURRENCY, { amount: 100, currency: "eur" }],
   ["currency missing", WITH_CURRENCY, { amount: 100 }],
   ["currency number", WITH_CURRENCY, { amount: 100, currency: 840 }],
-  ["allowed listed arguments", ALLOWED, { amount: 100, currency: "usd", sku: "a" }],
-  ["allowed extra argument", ALLOWED, { amount: 100, currency: "usd", note: "x" }],
+  [
+    "allowed listed arguments",
+    ALLOWED,
+    { amount: 100, currency: "usd", sku: "a" },
+  ],
+  [
+    "allowed extra argument",
+    ALLOWED,
+    { amount: 100, currency: "usd", note: "x" },
+  ],
   [
     "allowed with valid pin",
     ALLOWED,
