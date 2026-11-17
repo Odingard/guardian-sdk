@@ -2,10 +2,10 @@
  * Golden cross-language fixtures for the Python SDK, generated from
  * the canonical TypeScript implementation.
  *
- *   npm run fixtures   (from packages/python)
+ *   npm run fixtures:python   (from the repo root)
  *
  * Writes tests/fixtures/receipts.json and tests/fixtures/canonical-json.json.
- * The receipt cases start from the real staging sample receipt, re-signed
+ * The receipt cases start from the real sample decision record, re-signed
  * with an ephemeral test key so the fixtures need no network. Every case
  * records the TypeScript verifier's verdict; the Python verifier must match.
  */
@@ -21,7 +21,7 @@ import { verifyReceiptOffline } from "../../sdk/src/receipts.js";
 const here = new URL(".", import.meta.url);
 const sample = JSON.parse(
   readFileSync(
-    new URL("../../../examples/receipts/staging-sample.greceipt.json", here),
+    new URL("../../../examples/receipts/sample.greceipt.json", here),
     "utf8",
   ),
 );
