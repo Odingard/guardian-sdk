@@ -1,0 +1,855 @@
+{
+  "reads": [
+    {
+      "name": "minor integer",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 2000
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 2000,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "minor zero",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 0
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 0,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "minor text",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "2000"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 2000,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "minor text leading zero",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "02000"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor text sign",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "+2000"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor text space",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": " 2000"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor text decimal",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "20.00"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor fraction",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 19.99
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor negative",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": -1
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor whole float",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 2000
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 2000,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "minor largest safe",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 9007199254740991
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 9007199254740991,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "minor above safe",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 9007199254740992
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor seventeen digits text",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "12345678901234567"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor boolean",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": true
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "minor null",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": null
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_MISSING"
+      }
+    },
+    {
+      "name": "minor missing",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "other": 1
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_MISSING"
+      }
+    },
+    {
+      "name": "minor object",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": {
+          "value": 1
+        }
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major whole",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 20
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 2000,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "major text cents",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "19.99"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 1999,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "major text one decimal",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "19.9"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 1990,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "major text three decimals",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "19.999"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major text dollar sign",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "$19.99"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major text comma",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "1,000"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major text exponent",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "1e3"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major fraction number",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 19.99
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major text thirteen digits",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "1234567890123.45"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 123456789012345,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "major text fourteen digits",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": "12345678901234"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "major number too large for cents",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "args": {
+        "amount": 90071992547410
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_INVALID"
+      }
+    },
+    {
+      "name": "currency usd",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 100,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "currency upper",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "args": {
+        "amount": 100,
+        "currency": "USD"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 100,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "currency eur",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "args": {
+        "amount": 100,
+        "currency": "eur"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "CURRENCY_NOT_ALLOWED"
+      }
+    },
+    {
+      "name": "currency missing",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "args": {
+        "amount": 100
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "CURRENCY_MISSING"
+      }
+    },
+    {
+      "name": "currency number",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "args": {
+        "amount": 100,
+        "currency": 840
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "CURRENCY_NOT_ALLOWED"
+      }
+    },
+    {
+      "name": "allowed listed arguments",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd",
+        "sku": "a"
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 100,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "allowed extra argument",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd",
+        "note": "x"
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_ARGUMENT_NOT_ALLOWED"
+      }
+    },
+    {
+      "name": "allowed with valid pin",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd",
+        "sku": "a",
+        "guardianContentPins": [
+          {
+            "arg": "sku",
+            "index": 0,
+            "mode": "bytes",
+            "size": 3,
+            "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      "expected": {
+        "kind": "money",
+        "amountMinor": 100,
+        "currency": "usd"
+      }
+    },
+    {
+      "name": "allowed with pin for unlisted argument",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd",
+        "sku": "a",
+        "guardianContentPins": [
+          {
+            "arg": "note",
+            "index": 0,
+            "mode": "bytes",
+            "size": 3,
+            "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_ARGUMENT_NOT_ALLOWED"
+      }
+    },
+    {
+      "name": "allowed with malformed pin",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "args": {
+        "amount": 100,
+        "currency": "usd",
+        "sku": "a",
+        "guardianContentPins": [
+          {
+            "arg": "sku",
+            "index": 0,
+            "mode": "bytes",
+            "size": 3,
+            "sha256": "sha256:abc"
+          }
+        ]
+      },
+      "expected": {
+        "kind": "refused",
+        "code": "AMOUNT_ARGUMENT_NOT_ALLOWED"
+      }
+    }
+  ],
+  "declarations": [
+    {
+      "name": "minor",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": true
+    },
+    {
+      "name": "major",
+      "declaration": {
+        "argument": "amount",
+        "unit": "major",
+        "currency": "usd"
+      },
+      "valid": true
+    },
+    {
+      "name": "with currency",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency"
+      },
+      "valid": true
+    },
+    {
+      "name": "with allowed",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount",
+          "currency",
+          "sku"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown key",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "cap": 100
+      },
+      "valid": false
+    },
+    {
+      "name": "eur",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "eur"
+      },
+      "valid": false
+    },
+    {
+      "name": "unit cents",
+      "declaration": {
+        "argument": "amount",
+        "unit": "cents",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "dotted argument",
+      "declaration": {
+        "argument": "order.amount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty argument",
+      "declaration": {
+        "argument": "",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "proto argument",
+      "declaration": {
+        "argument": "__proto__",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "long argument",
+      "declaration": {
+        "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "64 character argument",
+      "declaration": {
+        "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": true
+    },
+    {
+      "name": "control character",
+      "declaration": {
+        "argument": "am\u0001ount",
+        "unit": "minor",
+        "currency": "usd"
+      },
+      "valid": false
+    },
+    {
+      "name": "currency same as amount",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "amount"
+      },
+      "valid": false
+    },
+    {
+      "name": "allowed missing amount",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "allowedArguments": [
+          "sku"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "allowed missing currency",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "currencyArgument": "currency",
+        "allowedArguments": [
+          "amount"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "allowed repeated",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "allowedArguments": [
+          "amount",
+          "amount"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "allowed empty",
+      "declaration": {
+        "argument": "amount",
+        "unit": "minor",
+        "currency": "usd",
+        "allowedArguments": []
+      },
+      "valid": false
+    },
+    {
+      "name": "not an object",
+      "declaration": "amount",
+      "valid": false
+    }
+  ]
+}

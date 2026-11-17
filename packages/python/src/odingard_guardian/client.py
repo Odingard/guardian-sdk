@@ -123,12 +123,17 @@ def _material_parameters(invocation: Mapping[str, Any]) -> Dict[str, Any]:
         arguments = invocation.get("arguments") or {}
         if not isinstance(arguments, Mapping):
             raise TypeError("tool.invoke arguments must be a mapping")
-        return {
+        params: Dict[str, Any] = {
             "schema": "odingard.guardian.tool.invoke.v1",
             "connectionId": connection_id,
             "toolName": invocation["tool_name"],
             "arguments": dict(arguments),
         }
+        # The owner's amount declaration for this tool, echoed exactly as set
+        # in the Guardian console (``Guard(amount_args=...)``).
+        if invocation.get("amount_argument") is not None:
+            params["amountArgument"] = dict(invocation["amount_argument"])
+        return params
     if action == "mcp.install":
         return {
             "schema": "odingard.guardian.mcp.install.v1",
@@ -153,7 +158,9 @@ def build_proposal(invocation: Mapping[str, Any]) -> Dict[str, Any]:
     optional ``adapter_id``, ``purpose``, ``intent_id``, ``plan_id``,
     ``parent_action_id``, ``source_effect_id``, and for money-moving actions
     ``value_cents`` (minor units; the executor refuses a request that moves
-    more), ``merchant_id``, ``merchant_category``, ``recurring``.
+    more), ``merchant_id``, ``merchant_category``, ``recurring``; for
+    tool.invoke on a tool with a dollar amount, ``amount_argument`` (the
+    owner's declaration, sent as ``amountArgument``).
     """
     action = invocation["action"]
     if action not in _RESOURCE_TYPE:
