@@ -11,7 +11,7 @@
  * The x402 client, its fetch wrapper, the exact EVM scheme and the guard
  * are the real packages.
  *
- * Run (from the repo root):  npm run build && node examples/x402/simulated-payments.mjs
+ * Run (from the repo root):  npm run build && node examples/payments/x402/simulated-payments.mjs
  */
 import { createX402Guard } from "@odingard/guardian-x402";
 import { guardedFetch } from "@odingard/guardian-x402/fetch";

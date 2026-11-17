@@ -100,7 +100,7 @@ This image has **not been built or run** in this work (no Docker daemon was
 available). The Node binary needs glibc and `libstdc++`, which
 `bookworm-slim` provides. If your host (for example a hosted ZeroClaw
 template) does not let you change the image, this recipe cannot run there:
-use the bring-your-own-container path ([../byo](../byo/README.md))
+use the bring-your-own-container path ([../../mcp/byo](../../mcp/byo/README.md))
 instead. Copying a Node binary onto `/data` at runtime is not covered here.
 
 `--url` needs `@odingard/guardian-mcp` 0.3.3 or later.

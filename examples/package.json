@@ -9,12 +9,12 @@
     "coding-agent": "node coding-agent-ask.mjs",
     "demo-classes": "node demo-classes.mjs",
     "verify-receipt": "node verify-receipt.mjs",
-    "steel-checkout": "node steel-checkout.mjs",
-    "invoice-agent": "node invoice-agent.mjs",
-    "claude-agent-sdk": "node claude-agent-sdk.mjs",
-    "remote-mcp": "node remote-mcp.mjs",
-    "codex-hook": "node agent-hooks.mjs codex",
-    "dsh-hook": "node agent-hooks.mjs dsh"
+    "steel-checkout": "node payments/steel-checkout.mjs",
+    "invoice-agent": "node payments/invoice-agent.mjs",
+    "claude-agent-sdk": "node agents/claude-agent-sdk.mjs",
+    "remote-mcp": "node mcp/remote-mcp.mjs",
+    "codex-hook": "node agents/agent-hooks.mjs codex",
+    "dsh-hook": "node agents/agent-hooks.mjs dsh"
   },
   "dependencies": {
     "@odingard/guardian-sdk": "^0.6.0",

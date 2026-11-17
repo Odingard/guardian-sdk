@@ -154,7 +154,7 @@ refuses, `GuardianDenied.hint`
 says what to fix: register the tool, allow it for the agent, or check the plan
 limit. The decision itself never changes.
 
-Runnable: [`examples/invoice-agent.mjs`](../../examples/invoice-agent.mjs).
+Runnable: [`examples/payments/invoice-agent.mjs`](../../examples/payments/invoice-agent.mjs).
 For Python, see [`odingard-guardian`](../python).
 
 ## Pin the contents of file arguments — `fileArgs` (0.4)

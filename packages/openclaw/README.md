@@ -509,13 +509,13 @@ ignored (see above).
 | `approvalTimeoutMs`                        |                                   | `300000` (also the maximum)             |
 | `allowTierTools`                           |                                   | `[]`                                    |
 
-Running on the official image: see [examples/openclaw](../../examples/openclaw).
+Running on the official image: see [examples/agents/openclaw](../../examples/agents/openclaw).
 
 ## NVIDIA NemoClaw (OpenShell)
 
 This section covers NVIDIA NemoClaw v0.0.143, NVIDIA OpenShell 0.0.116, the
 OpenClaw that NemoClaw release ships (2026.10.5) and plugin 0.1.0 and 0.1.1.
-The step-by-step guide is [examples/nemoclaw](../../examples/nemoclaw). The
+The step-by-step guide is [examples/agents/nemoclaw](../../examples/agents/nemoclaw). The
 rest of this README describes OpenClaw 2026.7.1; this section notes where
 NemoClaw differs.
 
@@ -534,7 +534,7 @@ Guardian API host on port 443, the agent paths `POST /v1/agent/requests`,
 `POST /v1/agent/claims`, `POST /v1/agent/execute` and
 `GET /v1/agent/receipts/**`; credential env var `GUARDIAN_AGENT_CREDENTIAL`,
 bearer; see the guide's
-[`guardian-api-profile.yaml`](../../examples/nemoclaw/guardian-api-profile.yaml)),
+[`guardian-api-profile.yaml`](../../examples/agents/nemoclaw/guardian-api-profile.yaml)),
 then:
 
 ```bash

@@ -248,9 +248,9 @@ MCP connector), and anything the agent does without MCP. Also not covered:
   of the agent's MCP view. It cannot stop other code that runs as the same
   user, in the same container, from reading the key from the environment it
   was set in and calling the remote server directly. Recipes:
-  [ZeroClaw](../../examples/zeroclaw/README.md) and
-  [your own container (CrewAI, LangGraph, AutoGen)](../../examples/byo/README.md).
-  Runnable example: `examples/remote-mcp.mjs` (fails closed with no settings,
+  [ZeroClaw](../../examples/agents/zeroclaw/README.md) and
+  [your own container (CrewAI, LangGraph, AutoGen)](../../examples/mcp/byo/README.md).
+  Runnable example: `examples/mcp/remote-mcp.mjs` (fails closed with no settings,
   runs against Guardian with Guardian settings). `--url` is in the published `@odingard/guardian-mcp`
   from 0.3.3.
 

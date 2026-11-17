@@ -376,16 +376,16 @@ export function checkDrift(text, root) {
   }
 
   // Changelog entry with this file's hash.
-  const changelogPath = join(root, "skill/CHANGELOG.md");
-  if (!existsSync(changelogPath)) fail("skill/CHANGELOG.md is missing");
+  const changelogPath = join(root, "docs/skill-changelog.md");
+  if (!existsSync(changelogPath)) fail("docs/skill-changelog.md is missing");
   else {
     const changelog = readFileSync(changelogPath, "utf8");
     const entry = new RegExp(`^## ${version?.replace(/\./g, "\\.")}\\b[\\s\\S]*?(?=^## |(?![\\s\\S]))`, "m").exec(changelog)?.[0];
-    if (!entry) fail(`skill/CHANGELOG.md has no entry for ${version}`);
+    if (!entry) fail(`docs/skill-changelog.md has no entry for ${version}`);
     else {
       const sha = createHash("sha256").update(text).digest("hex");
       if (!entry.includes(sha)) {
-        fail(`skill/CHANGELOG.md entry ${version} does not record the SHA-256 ${sha}`);
+        fail(`docs/skill-changelog.md entry ${version} does not record the SHA-256 ${sha}`);
       }
     }
   }

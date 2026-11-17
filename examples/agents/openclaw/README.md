@@ -11,7 +11,7 @@ Two ways to see `@odingard/guardian-openclaw` work:
 
 ```bash
 npm run build -w packages/openclaw     # from the repo root
-cd examples/openclaw && npm install && npm run simulated
+cd examples/agents/openclaw && npm install && npm run simulated
 ```
 
 It installs OpenClaw 2026.7.1, registers the
@@ -75,14 +75,14 @@ the container with `HOME=/data`, or they write config the Gateway never reads.
 
 5. **Protect the install** (required: until you do, every tool call is
    blocked). As root in the container, run the commands in the package
-   README, [Required: protect the install](../../packages/openclaw#the-official-openclaw-image):
+   README, [Required: protect the install](../../../packages/openclaw#the-official-openclaw-image):
    `extensions/`, `npm/` (where `npm:` / `npm-pack:` installs put the
    plugin), `hooks/`, `mpm/`, `plugins/`, `openclaw.json`,
    `openclaw.json.bak`, the `.env` files and an empty `/data/.npmrc`
    root-owned and read-only, `/data`, `/data/.config` and `/data/.openclaw`
    root-owned and sticky. Later config changes and Guardian updates follow
    the package README's
-   [Upkeep](../../packages/openclaw#upkeep-config-changes-and-guardian-updates):
+   [Upkeep](../../../packages/openclaw#upkeep-config-changes-and-guardian-updates):
    never `HOME=/data openclaw …` as root, and verify the installed plugin
    against the published tarball before re-locking.
 
@@ -116,7 +116,7 @@ decision is the only one that lets a governed call run.
 
 ## What is not governed
 
-See the package README: [packages/openclaw](../../packages/openclaw#what-is-not-governed).
+See the package README: [packages/openclaw](../../../packages/openclaw#what-is-not-governed).
 In short: the plugin refuses to run while the agent could change its files
 or the config (protect the install, step 5); whoever can still change them
 (root, the operator) can remove Guardian; read-only tools

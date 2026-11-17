@@ -16,7 +16,7 @@ tools the matcher in `guardian-hooks.json` names, so keep it as shipped:
 
 ```bash
 cd examples && npm install
-node agent-hooks.mjs dsh
+node agents/agent-hooks.mjs dsh
 ```
 
 ## LIVE: a hosted dsh agent, real Guardian

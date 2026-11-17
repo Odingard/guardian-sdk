@@ -264,7 +264,7 @@ reason follows the code, for example `GUARDIAN_DENIED:TOOL_NOT_GRANTED`.
 
 ## Example
 
-[`examples/x402/simulated-payments.mjs`](../../examples/x402) (stand-in
+[`examples/payments/x402/simulated-payments.mjs`](../../examples/payments/x402) (stand-in
 Guardian, in-memory server, throwaway key, no network).
 
 ## License

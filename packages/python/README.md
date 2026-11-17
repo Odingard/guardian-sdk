@@ -372,7 +372,7 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
 
 Read-only tools (`read_file`, `search_files`, `web_search`, …) are not routed,
 and anything outside Hermes' tool dispatch is not governed. Details, the
-Hosted setup and the MCP recipe: [examples/hermes](../../examples/hermes/README.md).
+Hosted setup and the MCP recipe: [examples/agents/hermes](../../examples/agents/hermes/README.md).
 Install `odingard-guardian` into the
 same Python environment Hermes runs in, list `guardian` under
 `plugins.enabled` in `config.yaml` yourself, and check that Hermes loads it

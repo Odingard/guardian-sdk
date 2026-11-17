@@ -6,7 +6,7 @@
 
 ```bash
 npm install && npm run build     # from the repo root
-node examples/x402/simulated-payments.mjs
+node examples/payments/x402/simulated-payments.mjs
 ```
 
 What is real: the official x402 client, its fetch wrapper, the exact EVM
@@ -39,4 +39,4 @@ GET https://api.example.test/scam
 ```
 
 The guard is decision-gated, not enforced outside the agent's process: see
-[packages/x402](../../packages/x402/README.md#not-governed).
+[packages/x402](../../../packages/x402/README.md#not-governed).

@@ -1,8 +1,8 @@
 /**
  * Stand-in Guardian: Guardian's hook as OpenAI Codex CLI or DeepSeek Harness sees it.
  *
- *   node agent-hooks.mjs codex    # Codex PreToolUse payloads (Bash, apply_patch, MCP)
- *   node agent-hooks.mjs dsh      # DeepSeek Harness payloads (bash, write, str_replace_editor, …)
+ *   node agents/agent-hooks.mjs codex    # Codex PreToolUse payloads (Bash, apply_patch, MCP)
+ *   node agents/agent-hooks.mjs dsh      # DeepSeek Harness payloads (bash, write, str_replace_editor, …)
  *
  * The payloads have the shape each agent sends on stdin. The Guardian here is
  * a local stand-in policy (no account, no network): shell → ALLOW, deploys →

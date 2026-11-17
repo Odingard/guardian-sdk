@@ -6,7 +6,7 @@
 
 ```bash
 npm install && npm run build     # from the repo root
-node examples/ap2/simulated-payments.mjs
+node examples/payments/ap2/simulated-payments.mjs
 ```
 
 What is real: `@odingard/guardian-ap2`, its SD-JWT and ES256 code, and the
@@ -53,4 +53,4 @@ pay: scam
 
 The guard is decision-gated, not enforced outside the agent's process, and
 it is not the AP2 Trusted Surface: see
-[packages/ap2](../../packages/ap2/README.md#not-governed).
+[packages/ap2](../../../packages/ap2/README.md#not-governed).

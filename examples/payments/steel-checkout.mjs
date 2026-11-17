@@ -12,7 +12,7 @@
  * packages/steel/README.md.
  */
 import { createGuardianSteelDispatcher, SteelCheckoutArgumentsSchema } from "@odingard/guardian-steel";
-import { guardian } from "./demo-guardian.mjs";
+import { guardian } from "../demo-guardian.mjs";
 
 const { client, connectionId, demo } = guardian();
 const label = demo ? "SIMULATED" : "LIVE";

@@ -19,7 +19,7 @@ operations plus a size and SHA-256 digest. It never sees file contents.
 
 ```bash
 cd examples && npm install
-node agent-hooks.mjs codex
+node agents/agent-hooks.mjs codex
 ```
 
 It feeds Codex-shaped `PreToolUse` payloads to the hook with a local
