@@ -27,10 +27,6 @@ _RAN = object()
 ToolNames = Union[None, Mapping[str, str], Callable[[str], str]]
 
 
-class ArgumentsChangedAfterDecision(Exception):
-    """A later hook changed the call's arguments after Guardian decided on them."""
-
-
 @dataclass(frozen=True)
 class Outcome:
     """What happened to one governed call.
@@ -105,10 +101,6 @@ def json_record(arguments: Any) -> Dict[str, Any]:
         raise TypeError("tool arguments must be a mapping")
     canonical_json(data)  # what Guardian cannot canonicalize is never proposed
     return data
-
-
-def same_record(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    return canonical_json(left) == canonical_json(right)
 
 
 def unchecked(tool_name: str) -> Outcome:

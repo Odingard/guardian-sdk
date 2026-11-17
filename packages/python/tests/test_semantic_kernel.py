@@ -129,19 +129,77 @@ async def test_amount_args_and_tool_names():
     assert guardian.last_invocation["value_cents"] == 500
 
 
-async def test_a_filter_after_guardian_that_changes_arguments_is_caught():
+async def test_a_filter_added_after_guardian_blocks_every_call():
     guardian = FakeClient(ALLOW)
     kernel, billing = kernel_with(guardian)
+    seen = []
 
     async def tamper(context, next):
+        seen.append("tamper")
         context.arguments["amount_cents"] = 99_999
         await next(context)
 
-    kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, tamper)  # added last: runs inside Guardian's
-    with pytest.raises(Exception) as err:  # the kernel wraps it in KernelInvokeException
-        await kernel.invoke(plugin_name="billing", function_name="refund_order", order_id="o1", amount_cents=1)
-    assert "changed after Guardian decided" in str(err.value.__cause__)
-    assert "execute:req_allow" not in guardian.calls
+    kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, tamper)  # added last: would run inside Guardian's
+    text = await model_calls(kernel)
+    assert "another function invocation filter was added after Guardian's" in text
+    assert billing.ran == [] and guardian.calls == [] and seen == []
+
+
+async def test_a_filter_added_before_guardian_is_decided_on():
+    async def repair(context, next):
+        context.arguments["order_id"] = "o43"
+        await next(context)
+
+    guardian = FakeClient(ALLOW)
+    kernel, billing = kernel_with(guardian, repair)
+    assert await model_calls(kernel) == "refunded o43"
+    assert guardian.last_invocation["arguments"]["order_id"] == "o43"
+    assert billing.ran == [("o43", 500)]
+
+
+async def test_a_function_that_reads_all_kernel_arguments_has_them_all_proposed():
+    class Mailer:
+        def __init__(self):
+            self.sent = []
+
+        @kernel_function(name="send")
+        def send(self, arguments: KernelArguments) -> str:
+            self.sent.append(arguments["recipient"])
+            return "sent"
+
+    guardian = FakeClient(ALLOW)
+    kernel = Kernel()
+    mailer = Mailer()
+    kernel.add_plugin(mailer, plugin_name="mail")
+    kernel.add_filter(
+        FilterTypes.FUNCTION_INVOCATION,
+        GuardianFunctionInvocationFilter(AsyncFake(guardian), connection_id=CONNECTION),
+    )
+    await kernel.invoke(plugin_name="mail", function_name="send", recipient="ops@example.com")
+    assert guardian.last_invocation["arguments"] == {"recipient": "ops@example.com"}
+    assert mailer.sent == ["ops@example.com"]
+
+
+async def test_a_function_that_changes_its_own_inputs_is_still_recorded():
+    class Orders:
+        @kernel_function(name="submit")
+        def submit(self, payload: dict) -> str:
+            payload.pop("invoice")
+            return "submitted"
+
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    kernel = Kernel()
+    kernel.add_plugin(Orders(), plugin_name="orders")
+    kernel.add_filter(
+        FilterTypes.FUNCTION_INVOCATION,
+        GuardianFunctionInvocationFilter(
+            AsyncFake(guardian), connection_id=CONNECTION, on_receipt=lambda t, r, rc: receipts.append(r)
+        ),
+    )
+    result = await kernel.invoke(plugin_name="orders", function_name="submit", payload={"invoice": {"id": "INV-1"}})
+    assert str(result.value) == "submitted"
+    assert receipts == ["req_allow"]
 
 
 async def test_streaming_invocation_is_refused():

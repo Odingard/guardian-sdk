@@ -25,11 +25,12 @@ tool runs::
 * DENY, or Guardian unreachable: the tool does not run and the model is
   told so (``on_deny="stop"`` stops the run).
 
-Put this middleware last, after any middleware that repairs or changes
-arguments: middleware listed after it runs between Guardian's decision and
-the tool. If one of them changes the arguments, the run is aborted with
-``MiddlewareFailure`` once the tool returns, and Guardian records no
-execution for that call.
+After ALLOW this middleware runs the tool itself (``FunctionTool.invoke``)
+with the arguments Guardian decided on, and does not call ``call_next``:
+nothing can change the arguments between the decision and the tool. Function
+middleware listed after it, and middleware passed to ``agent.run``, does not
+run for the call. Put middleware that should see the call (argument repair,
+logging) before Guardian's in the agent's list.
 """
 
 from __future__ import annotations
@@ -40,22 +41,9 @@ from typing import Any, Awaitable, Callable, Dict, Literal, Mapping, Optional, U
 
 from agent_framework import FunctionInvocationContext, FunctionMiddleware, MiddlewareTermination
 
-from ._framework import (
-    ArgumentsChangedAfterDecision,
-    ToolNames,
-    build_guard,
-    decide_and_run,
-    json_record,
-    resolve_tool_name,
-    same_record,
-)
+from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
 from .client import AsyncGuardianClient
 from .guard import GuardianExecutionFailed
-
-try:  # agent-framework-core 1.x: the fail-closed abort signal
-    from agent_framework import MiddlewareFailure as _Abort
-except ImportError:  # pragma: no cover - older releases
-    _Abort = RuntimeError  # type: ignore[misc,assignment]
 
 __all__ = ["GuardianFunctionMiddleware"]
 
@@ -133,20 +121,16 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
             return
 
         async def run_tool() -> None:
-            # The tool runs with the arguments Guardian decided on.
+            # Run the tool here, not through call_next: middleware after this
+            # one could otherwise change the arguments after the decision.
             context.arguments = copy.deepcopy(decided)
-            await call_next()
-            if not same_record(json_record(context.arguments), proposed):
-                raise ArgumentsChangedAfterDecision(tool_name)
+            context.result = await context.function.invoke(
+                arguments=copy.deepcopy(decided),
+                context=context,
+                tool_call_id=context.metadata.get("call_id"),
+            )
 
-        try:
-            outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool)
-        except ArgumentsChangedAfterDecision:
-            raise _Abort(
-                f"The arguments of {tool_name} changed after Guardian decided on them. Put "
-                "Guardian's middleware after any middleware that changes arguments. Guardian "
-                "recorded no execution for this call."
-            ) from None
+        outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool)
         if outcome.message is None:
             return  # ALLOW: the tool ran and Guardian recorded it
         context.result = outcome.message

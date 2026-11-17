@@ -29,10 +29,10 @@ the model, and the native functions the model then asks for are decided
 one by one. A streaming invocation (``invoke_stream``) of a native function
 is refused, because the function would run after the filter returns.
 
-Add this filter after the others: filters added later run closer to the
-function, between Guardian's decision and the call. If one of them changes
-the arguments, the call raises once the function returns, and Guardian
-records no execution for it.
+Add this filter last. Filters added later run closer to the function, so
+they would run between Guardian's decision and the call: while another
+function invocation filter was added after Guardian's, every native function
+call is refused before anything is proposed or run.
 """
 
 from __future__ import annotations
@@ -43,19 +43,14 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 from semantic_kernel.filters import FunctionInvocationContext
 from semantic_kernel.functions import FunctionResult
 
-from ._framework import (
-    ArgumentsChangedAfterDecision,
-    ToolNames,
-    build_guard,
-    decide_and_run,
-    json_record,
-    resolve_tool_name,
-    same_record,
-)
+from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
 from .client import AsyncGuardianClient
 from .guard import GuardianDenied, GuardianExecutionFailed
 
 __all__ = ["GuardianFunctionInvocationFilter", "default_tool_name"]
+
+#: Parameters Semantic Kernel fills in itself, never from the call's arguments.
+_INJECTED = frozenset({"kernel", "service", "execution_settings"})
 
 
 def default_tool_name(plugin_name: Optional[str], function_name: str) -> str:
@@ -108,9 +103,30 @@ class GuardianFunctionInvocationFilter:
 
     @staticmethod
     def _parameters(context: FunctionInvocationContext) -> Dict[str, Any]:
-        """The arguments the function receives: its own parameters, not other kernel arguments."""
+        """The arguments the function receives.
+
+        Its own parameters, without the ones Semantic Kernel injects
+        (``kernel``, ``service``, ``execution_settings``). A function with an
+        ``arguments`` parameter receives every kernel argument, so then every
+        kernel argument is proposed.
+        """
         names = [p.name for p in context.function.metadata.parameters if p.name]
-        return {name: context.arguments[name] for name in names if name in context.arguments}
+        if "arguments" in names:
+            return dict(context.arguments.items())
+        return {
+            name: context.arguments[name]
+            for name in names
+            if name not in _INJECTED and name in context.arguments
+        }
+
+    def _innermost(self, context: FunctionInvocationContext) -> bool:
+        """Whether this filter runs last, right before the function.
+
+        The kernel keeps the last filter added first in its list, and that
+        one wraps the function directly.
+        """
+        filters = getattr(context.kernel, "function_invocation_filters", None)
+        return bool(filters) and filters[0][1] is self
 
     async def __call__(
         self,
@@ -134,6 +150,14 @@ class GuardianFunctionInvocationFilter:
         def refuse(message: str) -> None:
             context.result = FunctionResult(function=metadata, value=message)
 
+        if not self._innermost(context):
+            refuse(
+                f"{tool_name} did not run: another function invocation filter was added after "
+                "Guardian's, so it would run between Guardian's decision and the function. Add "
+                "Guardian's filter last. Nothing was proposed or run."
+            )
+            return
+
         try:
             proposed = json_record(self._parameters(context))
             decided = {name: copy.deepcopy(value) for name, value in self._parameters(context).items()}
@@ -148,17 +172,8 @@ class GuardianFunctionInvocationFilter:
             # The function runs with the arguments Guardian decided on.
             for name, value in decided.items():
                 context.arguments[name] = copy.deepcopy(value)
-            await next(context)
-            if not same_record(json_record(self._parameters(context)), proposed):
-                raise ArgumentsChangedAfterDecision(tool_name)
+            await next(context)  # this filter is the last one: next is the function
 
-        try:
-            outcome = await decide_and_run(self._guard, tool_name, proposed, run_function)
-        except ArgumentsChangedAfterDecision:
-            raise RuntimeError(
-                f"The arguments of {tool_name} changed after Guardian decided on them. Add "
-                "Guardian's filter after any filter that changes arguments. Guardian recorded "
-                "no execution for this call."
-            ) from None
+        outcome = await decide_and_run(self._guard, tool_name, proposed, run_function)
         if outcome.message is not None:
             refuse(outcome.message)

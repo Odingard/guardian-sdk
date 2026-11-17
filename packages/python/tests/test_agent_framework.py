@@ -18,7 +18,6 @@ from agent_framework import (  # noqa: E402
     FunctionInvocationContext,
     FunctionInvocationLayer,
     Message,
-    MiddlewareFailure,
     function_middleware,
     tool,
 )
@@ -191,18 +190,25 @@ async def test_tool_names_map_to_guardian_names():
     assert guardian.last_invocation["tool_name"] == "billing.refund"
 
 
-async def test_a_middleware_after_guardian_that_changes_arguments_aborts_the_run():
+async def test_a_middleware_after_guardian_cannot_change_what_runs():
+    seen = []
+
     @function_middleware
     async def tamper(context: FunctionInvocationContext, call_next):
+        seen.append("tamper")
         context.arguments = {**context.arguments, "amount_cents": 99_999}
         await call_next()
 
     guardian = FakeClient(ALLOW)
     model = ScriptedModel([CALL])
     agent = Agent(client=model, tools=[refund_order], middleware=[middleware(guardian), tamper])
-    with pytest.raises(MiddlewareFailure, match="changed after Guardian decided"):
-        await agent.run("refund order 42")
-    assert "execute:req_allow" not in guardian.calls  # nothing recorded for it
+    await agent.run("refund order 42")
+    # Guardian runs the tool itself with the decided arguments; the later
+    # middleware never sees the call.
+    assert seen == []
+    assert ran == [("o42", 500)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert model.results() == ["refunded o42"]
 
 
 async def test_a_middleware_before_guardian_is_decided_on():
@@ -229,7 +235,7 @@ def test_a_sync_client_is_refused():
         GuardianFunctionMiddleware(GuardianClient(credential="gak_test"), connection_id=CONNECTION)
 
 
-async def test_run_level_middleware_runs_inside_the_agent_level_guardian():
+async def test_run_level_middleware_cannot_change_what_runs():
     @function_middleware
     async def tamper(context: FunctionInvocationContext, call_next):
         context.arguments = {**context.arguments, "amount_cents": 1}
@@ -237,6 +243,25 @@ async def test_run_level_middleware_runs_inside_the_agent_level_guardian():
 
     guardian = FakeClient(ALLOW)
     agent = Agent(client=ScriptedModel([CALL]), tools=[refund_order], middleware=[middleware(guardian)])
-    with pytest.raises(MiddlewareFailure):
-        await agent.run("refund order 42", middleware=[tamper])
-    assert "execute:req_allow" not in guardian.calls
+    await agent.run("refund order 42", middleware=[tamper])
+    assert ran == [("o42", 500)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+
+
+async def test_a_tool_that_changes_its_own_inputs_is_still_recorded():
+    @tool(approval_mode="never_require")
+    def submit(payload: dict) -> str:
+        """Submit a payload."""
+        payload.pop("invoice")
+        ran.append("submitted")
+        return "submitted"
+
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    model, _ = await run(
+        [("submit", {"payload": {"invoice": {"id": "INV-1"}, "lines": [1, 2]}})],
+        middleware(guardian, on_receipt=lambda t, r, rc: receipts.append(r)),
+        tools=(submit,),
+    )
+    assert ran == ["submitted"] and receipts == ["req_allow"]
+    assert model.results() == ["submitted"]

@@ -300,7 +300,7 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 
 - `on_ask="stop"` or `on_deny="stop"` also stops the agent run, with Guardian's message as the tool result. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
 - Guardian decides on the arguments as Agent Framework validated them for the tool (for example `"500"` for an `int` parameter is proposed as `500`), and the tool runs with them.
-- **Put Guardian's middleware last** in the list, after any middleware that repairs or changes arguments: middleware after it runs between the decision and the tool. If one changes the arguments, the run is aborted with `MiddlewareFailure` when the tool returns (the tool has run by then), and Guardian records no execution for that call. Middleware passed to `agent.run(middleware=...)` runs after the agent's own.
+- **After ALLOW, Guardian's middleware runs the tool itself** (`FunctionTool.invoke`) with the arguments Guardian decided on, so nothing can change them between the decision and the tool. Function middleware listed after Guardian's, and middleware passed to `agent.run(middleware=...)`, does not run for the call. Put middleware that should see the call (argument repair, logging) before Guardian's in the agent's list.
 - If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
 - Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
@@ -326,13 +326,13 @@ guardian = GuardianFunctionInvocationFilter(
     AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
     connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
 )
-kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it after your other filters
+kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 ```
 
 - The decisions work as in the Agent Framework table above: ALLOW runs the native function once with the arguments Guardian decided on; ASK, DENY and an unreachable Guardian do not run it, and the function result tells the model why. After approval, the same call runs the approved request.
-- The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments.
+- The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
-- Filters added later run closer to the function. If one of them changes the arguments after Guardian decided, the call raises when the function returns, and Guardian records no execution for it.
+- **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
