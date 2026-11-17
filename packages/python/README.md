@@ -119,6 +119,32 @@ def send_report(to: str, attachment_path: PinnedFile) -> str: ...
 - **Display only.** The check before the function runs compares the size and SHA-256, as before. Previews count toward the 16 KB arguments limit; over it the call is refused (`CONTENT_PIN_TOO_MANY`).
 - `content_preview(name, data)` returns the preview for bytes you hold; `normalize_file_arg_preview_roots(tool_name, file_args)` returns the folders per argument. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
 
+### Dollar amounts on tools: `amount_args` (unreleased)
+
+An owner can put a dollar limit on a tool in the Guardian console: allow up to an amount, ask a person above it, and block above a maximum. The owner names the argument that holds the amount. Pass the same declaration in `amount_args`, keyed by the tool name:
+
+```python
+guard = Guard(
+    client,
+    connection_id=...,
+    amount_args={
+        # exactly as set on the tool in the Guardian console
+        "purchase": {"argument": "amount_cents", "unit": "minor", "currency": "usd"},
+    },
+)
+
+@guard("purchase")
+def purchase(sku: str, amount_cents: int): ...
+
+purchase("mug-1", 2000)  # $20.00
+```
+
+- Each call of that tool carries the declaration and the amount in cents, and Guardian decides on the amount. In in-process mode your function runs the tool, so the limit applies to Guardian's decision and its record, not to what your code runs.
+- The same reading as the TypeScript SDK (`readToolAmount`), checked against golden files generated from it: `unit: "minor"` is cents (`2000` or `"2000"`); `unit: "major"` is dollars, a whole number (`20`) or text with up to two decimals (`"19.99"`). A number with cents (`19.99`), a sign, `$`, commas, spaces, leading zeros or an exponent cannot be read. Optional `"currencyArgument"` and `"allowedArguments"` work as in the [SDK README](../sdk/README.md#dollar-amounts-on-tools--amountargs-06).
+- A call whose amount cannot be read is sent without an amount, Guardian refuses it before any decision, and nothing runs; `GuardianDenied.hint` names the argument. A declaration that differs from the console's is refused the same way.
+- An invalid declaration raises `TypeError` when the `Guard` is built.
+- Every tool on a connection needs an amount (or none does); put tools that spend money on their own connection.
+
 ### async
 
 ```python
@@ -203,6 +229,8 @@ integrations:
 
 - **CrewAI** (example): `@tool("Pay invoice")` on top of
   `@guard`.
+- **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
+  the filter below, which decide every function call the agent makes.
 - **Claude Agent SDK** (example): guard the handler, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
 
@@ -232,6 +260,80 @@ integrations:
   or a new `Guard` is refused that way even for an entry the SDK created
   itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
+
+## Microsoft Agent Framework: `odingard_guardian.agent_framework` (unreleased)
+
+[Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/overview/)
+runs function middleware around each tool call in its function-calling loop.
+`GuardianFunctionMiddleware` sends each call to Guardian before the tool runs.
+
+```bash
+pip install "odingard-guardian[agent-framework]"   # Python 3.11+
+```
+
+```python
+import os
+from agent_framework import Agent, tool
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.agent_framework import GuardianFunctionMiddleware
+
+@tool
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianFunctionMiddleware(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                             |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                      |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                            |
+
+- `on_ask="stop"` or `on_deny="stop"` also stops the agent run, with Guardian's message as the tool result. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
+- Guardian decides on the arguments as Agent Framework validated them for the tool (for example `"500"` for an `int` parameter is proposed as `500`), and the tool runs with them.
+- **After ALLOW, Guardian's middleware runs the tool itself** (`FunctionTool.invoke`) with the arguments Guardian decided on, so nothing can change them between the decision and the tool. Function middleware listed after Guardian's, and middleware passed to `agent.run(middleware=...)`, does not run for the call. Put middleware that should see the call (argument repair, logging) before Guardian's in the agent's list.
+- If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
+- Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
+- Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `agent-framework-core` 1.26.0 in a real agent loop with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
+
+## Semantic Kernel: `odingard_guardian.semantic_kernel` (unreleased)
+
+[Semantic Kernel](https://learn.microsoft.com/semantic-kernel/concepts/enterprise-readiness/filters)
+runs function invocation filters around each kernel function call, including
+the calls the model asks for through automatic function calling.
+
+```bash
+pip install "odingard-guardian[semantic-kernel]"   # Python 3.11+
+```
+
+```python
+from semantic_kernel.filters import FilterTypes
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.semantic_kernel import GuardianFunctionInvocationFilter
+
+guardian = GuardianFunctionInvocationFilter(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+)
+kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
+```
+
+- The decisions work as in the Agent Framework table above: ALLOW runs the native function once with the arguments Guardian decided on; ASK, DENY and an unreachable Guardian do not run it, and the function result tells the model why. After approval, the same call runs the approved request.
+- The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
+- Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
+- **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
+- Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 

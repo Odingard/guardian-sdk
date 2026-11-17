@@ -46,6 +46,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
+      - name: Microsoft Agent Framework and Semantic Kernel (Python 3.11+)
+        if: matrix.python-version == '3.13'
+        run: pip install "agent-framework-core==1.26.0" "semantic-kernel==1.47.0"
       - run: python -m pytest -q
       - name: Python example runs (local demo policy)
         run: python ../../examples/python/invoice_agent.py > /dev/null

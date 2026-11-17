@@ -11,7 +11,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.9.2"
 authors = [{ name = "Odingard Security LLC" }]
-keywords = ["guardian", "ai-agents", "authorization", "authority", "human-in-the-loop", "mcp", "agentic-commerce"]
+keywords = ["guardian", "ai-agents", "authorization", "authority", "human-in-the-loop", "mcp", "agentic-commerce", "agent-framework", "semantic-kernel"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -27,6 +27,10 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
+# Python 3.11+ (the frameworks' own minimum). Tested with agent-framework-core
+# 1.26.0 and semantic-kernel 1.47.0.
+agent-framework = ["agent-framework-core>=1.26,<2"]
+semantic-kernel = ["semantic-kernel>=1.47,<2"]
 
 # Hermes Agent discovers this as the plugin "guardian"; it stays off until
 # listed in Hermes' plugins.enabled.

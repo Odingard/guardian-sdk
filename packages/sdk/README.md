@@ -250,7 +250,7 @@ await purchase({ sku: "mug-1", amount: 2000 }); // $20.00
 - **All tools on a connection, or none.** Every tool on a connection needs an amount (or none does); put tools that spend money on their own connection.
 - In the console a declared tool needs a maximum on the grant; without one every call of that tool is blocked.
 - `readToolAmount(declaration, args)` and `ToolAmountDeclarationSchema` (from `@odingard/guardian-sdk/contracts`) are the reader and the schema Guardian uses.
-- Supported in `@odingard/guardian-sdk` 0.6.0, `@odingard/guardian-mcp` 0.5.0, `@odingard/guardian-langchain` 0.6.0, `@odingard/guardian-vercel-ai` 0.6.0 and `@odingard/guardian-openai-agents` 0.4.0. Through any other integration or an earlier version (guardian-hook, OpenClaw, x402, AP2, the Python SDK), a tool with an amount set in the console is refused.
+- Supported in `@odingard/guardian-sdk` 0.6.0, `@odingard/guardian-mcp` 0.5.0, `@odingard/guardian-langchain` 0.6.0, `@odingard/guardian-vercel-ai` 0.6.0 and `@odingard/guardian-openai-agents` 0.4.0. Through any other integration or an earlier version (guardian-hook, OpenClaw, x402, AP2, the Python SDK 0.4.0 and earlier), a tool with an amount set in the console is refused. The Python SDK in this repository adds `amount_args` (not yet released).
 
 ## What the agent can and cannot do
 

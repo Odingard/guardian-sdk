@@ -64,6 +64,7 @@ from typing import (
     Union,
 )
 
+from ._amounts import amount_facts, amount_refusal_hint, normalize_amount_args
 from ._canonical import CanonicalJsonError, canonical_json
 from .client import AsyncGuardianClient, ExecuteResult, GuardianClient, RequestResult
 from .content_pins import (
@@ -401,6 +402,8 @@ class _Options:
     #: Per pinned file cap and per call cap for content pins, in bytes.
     max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES
     max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES
+    #: Amount declarations by tool name, as set in the Guardian console.
+    amount_args: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     #: on_ask="result" only: held request ids by (kind, connection, tool, args),
     #: so calling the tool again after approval claims the approved request
     #: instead of proposing a fresh one that needs a fresh approval.
@@ -777,6 +780,7 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
             # Guardian did not answer: keep the request held for the next try.
             opts.held[held_key] = prior
         return (yield from _settle(opts, tool_name, claimed, held_key))
+    declaration = opts.amount_args.get(tool_name)
     result = yield (
         "request",
         {
@@ -784,10 +788,16 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
             "connection_id": opts.connection_id,
             "tool_name": tool_name,
             "arguments": args,
+            **amount_facts(declaration, args),
             **({"adapter_id": opts.adapter_id} if opts.adapter_id else {}),
             "purpose": opts.purpose_for(tool_name, args),
         },
     )
+    hint = None if result.ok else amount_refusal_hint(tool_name, declaration, args, result.reason_code)
+    if hint is not None:
+        # Refused before any decision: the amount could not be read, or the
+        # declaration is not the console's. Nothing ran.
+        return _deny(opts, tool_name, result.reason_code or "INVALID_REQUEST", result.request_id or None, "invoke", hint)
     return (yield from _settle(opts, tool_name, result, held_key))
 
 
@@ -1056,6 +1066,14 @@ class Guard:
         memory, so after a restart, in another worker or in a new Guard an
         "already registered" answer is refused as ``RECORD_TRANSPORT_UNVERIFIED``
         and nothing runs, even for an entry the SDK created itself.
+    :param amount_args: dollar amounts on tools, by tool name, exactly as the
+        owner set them in the Guardian console (Connections → Dollar amounts),
+        for example ``{"purchase": {"argument": "amount", "unit": "minor",
+        "currency": "usd"}}``, optionally with ``"currencyArgument"`` and
+        ``"allowedArguments"``. Each call of that tool carries the declaration
+        and the amount in cents. Guardian decides on the amount; a call whose
+        amount cannot be read is refused and nothing runs. Checked when the
+        Guard is built.
     :param max_pin_bytes / max_pin_total_bytes: caps for content pins
         (``file_args``): per pinned file (default 25 MiB) and for all pinned
         files of one call (default 64 MiB). Over a cap the call is refused
@@ -1099,6 +1117,7 @@ class Guard:
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
         max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES,
         max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES,
+        amount_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
         if not connection_id:
             raise ValueError("connection_id is required")
@@ -1119,6 +1138,7 @@ class Guard:
             modes=dict(modes or {}),
             max_pin_bytes=max_pin_bytes,
             max_pin_total_bytes=max_pin_total_bytes,
+            amount_args=normalize_amount_args(amount_args),
         )
         #: Record-only entries this Guard registered itself (in memory only).
         self._ensured: Set[str] = set()
