@@ -391,7 +391,7 @@ reason follows the code, for example `GUARDIAN_DENIED:TOOL_NOT_GRANTED`.
 
 ## Example
 
-[`examples/ap2/simulated-payments.mjs`](../../examples/ap2) (stand-in
+[`examples/payments/ap2/simulated-payments.mjs`](../../examples/payments/ap2) (stand-in
 Guardian, Trusted Surface, merchant and processor, throwaway keys, no
 network).
 

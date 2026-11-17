@@ -20,7 +20,7 @@ const MAINNET_PATTERNS = [
 ];
 const namesMainnet = (text: string) => MAINNET_PATTERNS.some((p) => p.test(text));
 const ALLOWED = new Set(["refusals.test.ts", "mainnet.test.ts"]);
-const roots = [here, join(here, "..", "..", "..", "examples", "x402")];
+const roots = [here, join(here, "..", "..", "..", "examples", "payments", "x402")];
 
 function files(dir: string): string[] {
   let out: string[] = [];

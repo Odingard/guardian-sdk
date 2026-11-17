@@ -28,7 +28,7 @@ jobs:
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |
-          for f in demo-classes prompt-injection-deny coding-agent-ask shopping-agent steel-checkout invoice-agent; do
+          for f in demo-classes prompt-injection-deny coding-agent-ask shopping-agent payments/steel-checkout payments/invoice-agent; do
             node "$f.mjs" > /dev/null
           done
 

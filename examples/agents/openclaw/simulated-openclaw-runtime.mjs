@@ -16,7 +16,7 @@
  * protect its install instead (package README, "Required: protect the
  * install"); with the opt-out the agent can switch Guardian off.
  *
- *   cd examples/openclaw && npm install && npm run simulated
+ *   cd examples/agents/openclaw && npm install && npm run simulated
  */
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";

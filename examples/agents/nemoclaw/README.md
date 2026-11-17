@@ -20,7 +20,7 @@ The sandbox decides **where** the agent can connect. Guardian decides **whether*
 
 Read this before relying on Guardian inside NemoClaw.
 
-`@odingard/guardian-openclaw` normally refuses to run unless its install is protected: the user the OpenClaw Gateway runs as must not be able to change the plugin, `openclaw.json`, the plugin directories or the start-up `.env` files ([Required: protect the install](../../packages/openclaw#required-protect-the-install)). NemoClaw is designed the other way. It runs the Gateway as the `sandbox` user and keeps `/sandbox/.openclaw`, including `openclaw.json`, writable by that user so the agent can manage its own config. Its docs say it "does not provide post-provisioning immutability for the OpenClaw config or state tree". **A protected install is not possible in NemoClaw today.** Without the opt-out mode, the plugin blocks every tool call ("the install is not protected… Nothing ran.").
+`@odingard/guardian-openclaw` normally refuses to run unless its install is protected: the user the OpenClaw Gateway runs as must not be able to change the plugin, `openclaw.json`, the plugin directories or the start-up `.env` files ([Required: protect the install](../../../packages/openclaw#required-protect-the-install)). NemoClaw is designed the other way. It runs the Gateway as the `sandbox` user and keeps `/sandbox/.openclaw`, including `openclaw.json`, writable by that user so the agent can manage its own config. Its docs say it "does not provide post-provisioning immutability for the OpenClaw config or state tree". **A protected install is not possible in NemoClaw today.** Without the opt-out mode, the plugin blocks every tool call ("the install is not protected… Nothing ran.").
 
 So inside NemoClaw the plugin runs in its opt-out mode, `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1` (step 7). **In that mode the agent can switch Guardian off** by changing the plugin or the OpenClaw config with an ordinary command the plugin's patterns do not recognise, and the plugin says so in the Gateway log at every start. Do not describe this setup as protected against the agent, and check `openclaw plugins inspect guardian --runtime` after every config change.
 
@@ -97,7 +97,7 @@ In the Guardian console:
    - "Coding agent — needs approval", set to **Ask**.
 3. Copy both `pcn_…` ids.
 
-Everyday tools (such as `ls`) go to the everyday connection; risky ones (deploys, destructive commands, pushes, messages, MCP tools) go to the needs-approval connection. If the agent uses `openclaw.<tool>` or `mcp.<server>.<tool>` names, add them to "Coding agent — needs approval" with **Add tools** and allow each with **Allow a tool by name**; until then those calls are denied. The full mapping is in the [plugin README](../../packages/openclaw#which-guardian-tool-each-call-becomes).
+Everyday tools (such as `ls`) go to the everyday connection; risky ones (deploys, destructive commands, pushes, messages, MCP tools) go to the needs-approval connection. If the agent uses `openclaw.<tool>` or `mcp.<server>.<tool>` names, add them to "Coding agent — needs approval" with **Add tools** and allow each with **Allow a tool by name**; until then those calls are denied. The full mapping is in the [plugin README](../../../packages/openclaw#which-guardian-tool-each-call-becomes).
 
 ## 3. Give OpenShell the credential (not the sandbox)
 
@@ -215,7 +215,7 @@ nemoclaw my-agent exec -- sh -c 'printf "GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTAL
 
 OpenClaw loads `/sandbox/.openclaw/.env` from its state directory when the Gateway starts. The flag does not show in the Gateway's start-up environment; the check is the Gateway log after the next start (step 9).
 
-**This departs from the plugin README's advice.** That README says to set the flag "only in a place the agent cannot write" ([Opting out](../../packages/openclaw#opting-out-the-agent-can-switch-guardian-off)). `/sandbox/.openclaw/.env` is a place the agent can write, and NemoClaw offers no other place to set a Gateway environment variable. So the agent can edit this file, and whatever it leaves there is the Gateway's start-up environment at the next restart. And because the flag turns the install check off, the agent can switch Guardian off by changing the plugin or the OpenClaw config.
+**This departs from the plugin README's advice.** That README says to set the flag "only in a place the agent cannot write" ([Opting out](../../../packages/openclaw#opting-out-the-agent-can-switch-guardian-off)). `/sandbox/.openclaw/.env` is a place the agent can write, and NemoClaw offers no other place to set a Gateway environment variable. So the agent can edit this file, and whatever it leaves there is the Gateway's start-up environment at the next restart. And because the flag turns the install check off, the agent can switch Guardian off by changing the plugin or the OpenClaw config.
 
 The plugin ignores `GUARDIAN_*` keys from a `.env` in the Gateway's working directory, so this works only while that directory is not `/sandbox/.openclaw`. In the versions above it was `/sandbox`. Put nothing else in that file, and never the credential: a placeholder written there by hand would not resolve.
 
@@ -292,7 +292,7 @@ nemoclaw my-agent exec -- node -e 'fetch("https://example.com").then(r=>console.
 
 Each shows as a `DENIED` line in the OpenShell log.
 
-Download a receipt from the console's Activity page and verify it with [`examples/verify-receipt.mjs`](../verify-receipt.mjs), from a checkout of this repository after `npm ci && npm run build`:
+Download a receipt from the console's Activity page and verify it with [`examples/verify-receipt.mjs`](../../verify-receipt.mjs), from a checkout of this repository after `npm ci && npm run build`:
 
 ```bash
 node examples/verify-receipt.mjs ./receipt.greceipt.json https://guardian-api.odingard.com
@@ -331,7 +331,7 @@ It fetches Guardian's published verification keys from that host, then checks th
 
 ## What is not governed
 
-Everything in the plugin's [What is not governed](../../packages/openclaw#what-is-not-governed) applies, plus, because of the opt-out mode, the agent can remove Guardian (see [Before you start](#before-you-start-the-agent-can-switch-guardian-off)). In short:
+Everything in the plugin's [What is not governed](../../../packages/openclaw#what-is-not-governed) applies, plus, because of the opt-out mode, the agent can remove Guardian (see [Before you start](#before-you-start-the-agent-can-switch-guardian-off)). In short:
 
 - **Read-only tools** (`read`, `web_search` and the others in the plugin README) are not sent to Guardian.
 - **Things OpenClaw does without a tool call**, such as scheduled jobs and channel replies, are not seen.

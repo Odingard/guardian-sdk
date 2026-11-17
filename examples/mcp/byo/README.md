@@ -17,9 +17,9 @@ ship, so Guardian goes where that framework calls tools. There are two ways in:
 2. **Your own Python functions: `odingard-guardian`'s `Guard`.** Wrap the
    function that performs the action with `@guard("tool_name")` and register it
    with the framework as usual. See the
-   [Python SDK framework recipes](../../packages/python/README.md#framework-recipes).
+   [Python SDK framework recipes](../../../packages/python/README.md#framework-recipes).
    In TypeScript use `createGuard` from `@odingard/guardian-sdk`, or
-   [`@odingard/guardian-langchain`](../../packages/langchain) for LangChain.js
+   [`@odingard/guardian-langchain`](../../../packages/langchain) for LangChain.js
    and LangGraph.js.
 
 guardian-mcp needs Node.js 22 or later in the container (`npm i -g
@@ -165,11 +165,11 @@ async with McpWorkbench(params) as workbench:   # one guardian-mcp process
   allow up to an amount, ask a person above it and block above a maximum.
   Declare the same argument where the call goes through: `--amount-arg` for
   `guardian-mcp proxy` (0.5 and later; see
-  [the MCP package](../../packages/mcp/README.md#dollar-amounts-on-tools---amount-arg-05)),
+  [the MCP package](../../../packages/mcp/README.md#dollar-amounts-on-tools---amount-arg-05)),
   or `amountArgs` in TypeScript code with `@odingard/guardian-sdk` 0.6. A call
   whose amount cannot be read is blocked. The Python SDK does not send amount
   declarations, so through `Guard` a tool with an amount set in the console is
   refused.
 
 Claude Agent SDK containers are covered separately by
-[`@odingard/guardian-hook/agent-sdk`](../hosted-claude-code).
+[`@odingard/guardian-hook/agent-sdk`](../../agents/hosted-claude-code).

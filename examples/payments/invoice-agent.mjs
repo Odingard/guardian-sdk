@@ -11,7 +11,7 @@
  * may run, and records the evidence. That is `createGuard` from
  * @odingard/guardian-sdk (in-process mode).
  *
- * Run:  node invoice-agent.mjs
+ * Run:  node payments/invoice-agent.mjs
  *
  * Labels are honest:
  *   [SIMULATED guardian]   local demo policy (demo-guardian.mjs), not Guardian
@@ -35,7 +35,7 @@ import {
   GuardianDenied,
 } from "@odingard/guardian-sdk";
 
-import { guardian } from "./demo-guardian.mjs";
+import { guardian } from "../demo-guardian.mjs";
 
 const { client, connectionId, demo } = guardian();
 const G = demo ? "[SIMULATED guardian]" : "[LIVE guardian]";

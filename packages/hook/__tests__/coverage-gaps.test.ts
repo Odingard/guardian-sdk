@@ -173,14 +173,14 @@ describe("interactive sessions go to the Ask tier (Codex write_stdin gap)", () =
     expect(codex).toContain("unified_exec = false");
     for (const file of [
       "packages/hook/README.md",
-      "examples/codex/README.md",
+      "examples/agents/codex/README.md",
       "CHANGELOG.md",
     ]) {
       const text = readFileSync(join(repo, file), "utf8");
       expect(text, file).toContain("write_stdin");
     }
     expect(
-      readFileSync(join(repo, "examples/codex/requirements.toml"), "utf8"),
+      readFileSync(join(repo, "examples/agents/codex/requirements.toml"), "utf8"),
     ).toMatch(/unified_exec\s*=\s*false/);
   });
 });
@@ -240,17 +240,17 @@ describe("the dsh matcher selects every tool the hook governs", () => {
   it("the shipped example configs match what setup prints", () => {
     const dshFile = JSON.parse(
       readFileSync(
-        join(repo, "examples/deepseek-harness/guardian-hooks.json"),
+        join(repo, "examples/agents/deepseek-harness/guardian-hooks.json"),
         "utf8",
       ),
     );
     expect(dshFile).toEqual(DSH_HOOKS_SNIPPET);
     const codexFile = JSON.parse(
-      readFileSync(join(repo, "examples/codex/hooks.json"), "utf8"),
+      readFileSync(join(repo, "examples/agents/codex/hooks.json"), "utf8"),
     );
     expect(codexFile.hooks).toEqual(CODEX_HOOKS_SNIPPET.hooks);
     const toml = readFileSync(
-      join(repo, "examples/codex/requirements.toml"),
+      join(repo, "examples/agents/codex/requirements.toml"),
       "utf8",
     );
     expect(toml).toContain(

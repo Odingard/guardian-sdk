@@ -10,7 +10,7 @@
  *
  * The guard is the real package.
  *
- * Run (from the repo root):  npm run build && node examples/ap2/simulated-payments.mjs
+ * Run (from the repo root):  npm run build && node examples/payments/ap2/simulated-payments.mjs
  */
 import { createHash, createPublicKey, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 

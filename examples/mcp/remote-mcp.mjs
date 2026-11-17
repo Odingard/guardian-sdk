@@ -16,7 +16,7 @@
  *     Set REMOTE_MCP_URL (+ REMOTE_MCP_API_KEY) to front a real remote server
  *     instead of the local one.
  *
- * Run:  npm run build && node examples/remote-mcp.mjs
+ * Run:  npm run build && node examples/mcp/remote-mcp.mjs
  */
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";

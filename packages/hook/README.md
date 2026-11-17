@@ -121,7 +121,7 @@ It uses the same environment variables, the same two connections (the console's 
 
 A `PreToolUse` hook runs for every tool call, even calls an allow rule or `bypassPermissions` would approve, and its deny holds in every permission mode.
 
-A runnable example is in `examples/claude-agent-sdk.mjs`. For a hosted agent where Claude Code runs unattended in its own VM, see `examples/hosted-claude-code/`.
+A runnable example is in `examples/agents/claude-agent-sdk.mjs`. For a hosted agent where Claude Code runs unattended in its own VM, see `examples/agents/hosted-claude-code/`.
 
 ## OpenAI Codex CLI
 
@@ -174,7 +174,7 @@ Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-a
 2. Add `--dangerously-bypass-hook-trust` to the host's `codex exec` command, or deliver the hook as a managed `requirements.toml` hook. **This is the one setting a headless host needs**; without it the hook is skipped.
 3. Set `GUARDIAN_AGENT_CREDENTIAL`, `GUARDIAN_CONNECTION_ID` and `GUARDIAN_HOOK_ASK_CONNECTION_ID` as agent environment variables (the credential as a secret).
 
-`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals; check that hooks still fire before you use that flag. See `examples/codex/`.
+`--dangerously-bypass-approvals-and-sandbox` turns off Codex's own approvals and sandbox; Codex documents hooks separately from approvals; check that hooks still fire before you use that flag. See `examples/agents/codex/`.
 
 ### Not governed under Codex
 
@@ -185,7 +185,7 @@ Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-a
   unified_exec = false
   ```
 
-  With it off, Codex registers `exec_command` as one-shot (runs to completion, no `tty`, no session) and does not offer `write_stdin` (Codex `spec_plan.rs`, `add_shell_tools`; the source notes that only managed requirements can keep it off). Check that `write_stdin` is no longer offered before you rely on it. `examples/codex/requirements.toml` includes it.
+  With it off, Codex registers `exec_command` as one-shot (runs to completion, no `tty`, no session) and does not offer `write_stdin` (Codex `spec_plan.rs`, `add_shell_tools`; the source notes that only managed requirements can keep it off). Check that `write_stdin` is no longer offered before you rely on it. `examples/agents/codex/requirements.toml` includes it.
 
 - **`apply_patch` deletes and moves are `file_write` (Allow tier).** A `*** Delete File:` patch runs without approval under the suggested modes; the approver sees `delete <path>` in the operations. That is a policy choice: set the everyday connection to Ask if deletes must wait for a person.
 - **A missing, untrusted or unparseable `hooks.json` governs nothing.** Codex skips it and runs every call. Check with a deny (for example `rm -rf ./tmp-guardian-check` should be blocked or wait for approval) after every config change.
@@ -254,7 +254,7 @@ A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both 
 - **A missing or unparseable hooks file governs nothing.** The bridge logs "could not load hook config … no hooks registered" and runs every call. Check with a deny after every config change.
 - `terminal_send` is classified per message, so a command split across several sends (e.g. `terraform ap` then `ply`) is seen in pieces, and text sent to a program already running in the PTY (a REPL, `ssh`) is classified as if it were a shell command. Prefer the plain `bash` tool and turn the terminal tools off where that matters.
 - **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
-- Check on your host: the tool names the bridge passes in your dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether your dsh image includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether headless runs allow a 5-minute wait. See `examples/deepseek-harness/`.
+- Check on your host: the tool names the bridge passes in your dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether your dsh image includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether headless runs allow a 5-minute wait. See `examples/agents/deepseek-harness/`.
 
 ## Edit-type tools: the target file is pinned (0.4)
 
