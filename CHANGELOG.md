@@ -24,6 +24,7 @@
 
 ## Docs (unreleased)
 
+- **Sample decision record.** `examples/receipts/sample.greceipt.json`, a signed `greceipt.v1` record from Guardian, replaces the earlier sample. `examples/verify-receipt.mjs` now verifies it by default against the keys published by `https://guardian-api.odingard.com`. The Python receipt fixtures are regenerated from it. No code change.
 - **Repository layout.** Examples are grouped by topic under `examples/` (`agents/`, `mcp/`, `payments/`, `python/`; index in `examples/README.md`). The skill.md changelog moved from `skill/CHANGELOG.md` to `docs/skill-changelog.md`, and the root README's longer sections to `docs/guides.md`. No code change.
 - **skill.md 1.0.10.** Text only; no pin change (hash in `docs/skill-changelog.md`). The credential check is one provided check that never prints the value; `scripts/check-skill.mjs` refuses code that prints the credential.
 - **skill.md 1.0.9.** Text only; no pin change (hash in `docs/skill-changelog.md`).
