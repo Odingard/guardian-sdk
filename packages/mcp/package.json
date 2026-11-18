@@ -42,5 +42,17 @@
     "url": "https://github.com/Odingard/guardian-sdk.git",
     "directory": "packages/mcp"
   },
-  "homepage": "https://odingard.com/guardian"
+  "homepage": "https://odingard.com/guardian",
+  "keywords": [
+    "guardian",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "mcp-proxy",
+    "ai-agents",
+    "agent-security",
+    "authorization",
+    "human-in-the-loop",
+    "x402"
+  ]
 }
