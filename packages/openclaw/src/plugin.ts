@@ -80,6 +80,13 @@ export type GuardianPluginConfig = Readonly<{
   approvalTimeoutMs?: number;
   /** Extra Guardian tool names to send to the everyday (Allow) connection. */
   allowTierTools?: readonly string[];
+  /**
+   * Watch mode (opt-in): while the agent is watched, a call Guardian would
+   * have held or denied runs; Guardian approves and redeems nothing. Falls
+   * back to GUARDIAN_HOOK_WATCH_MODE=on. Default off: such a call is
+   * blocked.
+   */
+  watchMode?: boolean;
 }>;
 
 /** The parts of OpenClaw's before_tool_call event the handler reads. */
@@ -137,6 +144,7 @@ type Settings = {
   agentName: string;
   approvalTimeoutMs: number;
   allowTierTools: ReadonlySet<string>;
+  watchMode: boolean;
 };
 
 function trimmed(value: unknown): string | undefined {
@@ -175,6 +183,10 @@ export function resolveSettings(
     allowTierTools: new Set(
       (config.allowTierTools ?? []).filter((t) => typeof t === "string"),
     ),
+    watchMode:
+      config.watchMode === true ||
+      (config.watchMode === undefined &&
+        env.GUARDIAN_HOOK_WATCH_MODE?.trim() === "on"),
   };
 }
 
@@ -413,7 +425,20 @@ export function createGuardianToolHandler(
         wait: abortableWait(baseWait, signal),
         now,
         log: (line) => log.info?.(line),
+        // Watch mode (opt-in): the agent runs its own tools, so a call
+        // Guardian would have held or denied runs, and Guardian approves
+        // nothing.
+        watchAware: settings.watchMode,
       });
+      if (verdict.decision === "watched") {
+        if (isOver()) {
+          return block(
+            `Guardian: the answer for ${toolName} came too late for OpenClaw's hook timeout. Nothing ran.`,
+          );
+        }
+        log.info?.(`Guardian: ${call.summary} — ${verdict.reason}`);
+        return { params };
+      }
       if (verdict.decision !== "allow") return block(verdict.reason);
       if (isOver()) {
         return block(
