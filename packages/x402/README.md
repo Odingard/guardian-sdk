@@ -17,7 +17,7 @@ default; run your flow on Base Sepolia before you turn it on.
 
 ## What it covers
 
-- The official x402 TypeScript clients, version 2.30.x (the guard refuses to
+- The official x402 TypeScript clients, versions 2.30.x and 2.31.x (the guard refuses to
   start with any other version): `wrapFetchWithPayment`
   (`@x402/fetch`), `wrapAxiosWithPayment` (`@x402/axios`) and `x402MCPClient`
   (`@x402/mcp`). The guard builds them; you do not pass your own.
