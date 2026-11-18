@@ -35,6 +35,9 @@
  *                              exempts (see sensitive.ts)
  *   GUARDIAN_HOOK_SENSITIVE_MODE  ask (default: sensitive files go to the
  *                              Ask tier) | deny (the hook refuses them)
+ *   GUARDIAN_HOOK_WATCH_MODE   on: while the agent is in watch mode, a call
+ *                              Guardian would have held or denied is left to
+ *                              the agent's own permissions (default: denied)
  *   GUARDIAN_HOOK_APPROVAL_TIMEOUT_MS  how long ASK waits (default and
  *                              maximum 300000: the hook asks Guardian to keep
  *                              the request open that long, the gateway's

@@ -33,6 +33,14 @@ import {
   type GuardianAdapterOptions,
 } from "@odingard/guardian-sdk";
 
+import {
+  CANCEL_TOOL,
+  PENDING_TOOL,
+  cancelHeld,
+  heldRequestTools,
+  listHeld,
+} from "./held.js";
+
 export type UpstreamTool = {
   name: string;
   description?: string;
@@ -246,7 +254,14 @@ export const PROXY_GOVERNANCE_TOOLS: UpstreamTool[] = [
       openWorldHint: false,
     },
   },
+  ...heldRequestTools("proxy"),
 ];
+
+/** Names of the proxy's own tools; an upstream tool with one is hidden. */
+const GOVERNANCE_TOOL_NAMES = new Set([
+  ...PROXY_GOVERNANCE_TOOLS.map((tool) => tool.name),
+  LEGACY_RECORD_TOOL,
+]);
 
 function jsonResult(payload: unknown, isError = false): ToolResult {
   return {
@@ -643,11 +658,7 @@ export function createGovernedProxy(
     if (upstreamTools) return upstreamTools;
     const tools = new Map<string, UpstreamTool>();
     for (const tool of await upstream.listTools()) {
-      if (
-        tool.name === CLAIM_TOOL ||
-        tool.name === RECORD_TOOL ||
-        tool.name === LEGACY_RECORD_TOOL
-      ) {
+      if (GOVERNANCE_TOOL_NAMES.has(tool.name)) {
         log(
           `guardian-mcp proxy: upstream tool "${tool.name}" collides with a Guardian tool name and is hidden`,
         );
@@ -761,6 +772,32 @@ export function createGovernedProxy(
     };
   }
 
+  /** Requests withdrawn through this proxy (bounded, oldest forgotten). */
+  const withdrawnRequests = new Set<string>();
+
+  /**
+   * Guardian confirmed the withdrawal: forget the held call (or held setup
+   * step) and any capability kept for it, so no claim here forwards it.
+   */
+  function dropHeld(requestId: string): void {
+    withdrawnRequests.add(requestId);
+    while (withdrawnRequests.size > CLAIMED_REQUESTS_LIMIT) {
+      withdrawnRequests.delete(
+        withdrawnRequests.values().next().value as string,
+      );
+    }
+    pendingCalls.delete(requestId);
+    claimedCapabilities.delete(requestId);
+    const installFor = pendingInstalls.get(requestId);
+    if (installFor !== undefined) {
+      pendingInstalls.delete(requestId);
+      const key = `${options.connectionId}:${installFor}`;
+      if (ctx.heldSetup?.get(key)?.requestId === requestId) {
+        ctx.heldSetup.delete(key);
+      }
+    }
+  }
+
   async function claim(
     requestId: string,
     signal?: AbortSignal,
@@ -778,7 +815,10 @@ export function createGovernedProxy(
       pendingCalls.delete(requestId);
       const putBack = () => {
         claimedRequests.delete(requestId);
-        pendingCalls.set(requestId, held);
+        // Withdrawn while this claim waited: it stays dropped.
+        if (!withdrawnRequests.has(requestId)) {
+          pendingCalls.set(requestId, held);
+        }
       };
       rememberClaim(requestId, { toolName: held.name, state: "forwarding" });
       let claimed: GuardianRequestResult;
@@ -1014,6 +1054,17 @@ export function createGovernedProxy(
             : { ok: false, reasonCode: result.reasonCode },
           !result.ok,
         );
+      }
+      if (name === PENDING_TOOL) {
+        return listHeld(
+          options.client,
+          args,
+          (requestId) =>
+            pendingCalls.has(requestId) || pendingInstalls.has(requestId),
+        );
+      }
+      if (name === CANCEL_TOOL) {
+        return cancelHeld(options.client, args, dropHeld);
       }
       let tools: Map<string, UpstreamTool>;
       try {
