@@ -15,7 +15,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "guardian-hook": "dist/index.js"
+    "guardian-hook": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -26,7 +26,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/index.js && esbuild src/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/agent-sdk.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/index.js && esbuild src/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/agent-sdk.js && esbuild src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:./index.js --outfile=dist/cli.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build && npm test"
