@@ -154,7 +154,18 @@ export type GuardianInvocation = (
      * refused before a request is sent.
      */
     ttlMs?: number;
+    /**
+     * Watch mode: say that this caller handles the watched answer
+     * (`decision: "DENY"`, reasonCode `WATCHED`, with `watched`). Sent as
+     * a request header, never as part of the proposal. The guard sets it,
+     * with `watchMode: true`, for tools that run in your own process; leave
+     * it unset otherwise. A claim never asks for it.
+     */
+    watchAware?: boolean;
   }>;
+
+/** The request header that marks a watch-aware request. */
+const WATCH_AWARE_HEADER = "x-guardian-watch-aware";
 
 /** Longest request window the gateway accepts (5 minutes). */
 export const GUARDIAN_MAX_REQUEST_TTL_MS = 300_000;
@@ -167,6 +178,17 @@ export type GuardianRequestResult =
       decision: "ALLOW" | "ASK" | "DENY";
       capabilityToken?: string;
       reasonCode?: string;
+      /**
+       * Watch mode, for a request sent with `watchAware: true`: the agent
+       * is in watch mode and Guardian would have asked (`"ASK"`) or denied
+       * (`"DENY"`) this call under the current rules. It comes with
+       * `decision: "DENY"` and reasonCode `WATCHED`: Guardian issued no
+       * capability and performs nothing for the call. With `watchMode: true`
+       * the guard runs a tool that runs in your own process anyway, because
+       * watch mode lets the agent's own tools run while Guardian watches.
+       * Set only on an answer to a request sent with `watchAware: true`.
+       */
+      watched?: "ASK" | "DENY";
     }
   | {
       ok: false;
@@ -306,6 +328,22 @@ const DEFAULT_ADAPTER: Record<string, string> = {
   "agent.transfer_capability": "adp_00000007",
 };
 
+/**
+ * Watch mode: a watched answer carries `watch: { wouldDecision }`, what
+ * Guardian would have decided under the current rules. Only an exact
+ * "ASK" or "DENY" is kept; anything else (absent, "ALLOW", malformed)
+ * leaves an ordinary DENY.
+ */
+function watchedDecision(value: unknown): "ASK" | "DENY" | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const wouldDecision = (value as { wouldDecision?: unknown }).wouldDecision;
+  return wouldDecision === "ASK" || wouldDecision === "DENY"
+    ? wouldDecision
+    : undefined;
+}
+
 export function createGuardianClient(
   config: GuardianClientConfig,
 ): GuardianClient {
@@ -315,12 +353,14 @@ export function createGuardianClient(
     path: string,
     body?: unknown,
     method: "GET" | "POST" = "POST",
+    extraHeaders: Readonly<Record<string, string>> = {},
   ) => {
     const init: RequestInit = {
       method,
       headers: {
         authorization: `Bearer ${config.credential}`,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...extraHeaders,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     };
@@ -344,8 +384,11 @@ export function createGuardianClient(
   const requestCapability = async (
     path: "/v1/agent/requests" | "/v1/agent/claims",
     body: unknown,
+    extraHeaders: Readonly<Record<string, string>> = {},
   ): Promise<GuardianRequestResult> => {
-    const response = await call(path, body);
+    const response = await call(path, body, "POST", extraHeaders);
+    // A watched answer counts only when this call asked for it.
+    const askedForWatch = extraHeaders[WATCH_AWARE_HEADER] === "1";
     const data = response.body;
     const requestId = (body as { requestId?: unknown }).requestId;
     if (!data || data.ok !== true) {
@@ -367,11 +410,16 @@ export function createGuardianClient(
     const reasonCode =
       typeof data.reasonCode === "string" ? data.reasonCode : undefined;
     if (data.decision === "ASK" || data.decision === "DENY") {
+      const watched =
+        askedForWatch && data.decision === "DENY" && reasonCode === "WATCHED"
+          ? watchedDecision(data.watch)
+          : undefined;
       return {
         ok: true,
         requestId: answeredRequestId,
         decision: data.decision,
         ...(reasonCode === undefined ? {} : { reasonCode }),
+        ...(watched === undefined ? {} : { watched }),
       };
     }
     // An ALLOW needs a capability token. The hosted gateway answers an ALLOW
@@ -454,7 +502,11 @@ export function createGuardianClient(
           ? { sourceEffectId: invocation.sourceEffectId }
           : {}),
       });
-      return requestCapability("/v1/agent/requests", proposal);
+      return requestCapability(
+        "/v1/agent/requests",
+        proposal,
+        invocation.watchAware === true ? { [WATCH_AWARE_HEADER]: "1" } : {},
+      );
     },
 
     claim(requestId) {
