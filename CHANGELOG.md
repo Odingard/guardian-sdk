@@ -8,7 +8,7 @@
 - **`odingard_guardian.semantic_kernel`**: `GuardianFunctionInvocationFilter`, a Semantic Kernel function invocation filter with the same decisions for native functions, including the calls the model asks for through automatic function calling. Prompt functions pass through; a streaming call of a native function is refused, and so is every call while another function invocation filter was added after Guardian's. Extra: `odingard-guardian[semantic-kernel]` (Python 3.11+; tested with `semantic-kernel` 1.47.0).
 - **`Guard(amount_args=...)`**: dollar amounts on tools, as in the TypeScript SDK's `amountArgs`. Each call of a declared tool carries the owner's declaration (`amountArgument`) and the amount in cents (`valueCents`); a call whose amount cannot be read is refused before any decision, and nothing runs. Golden files generated from the TypeScript `readToolAmount` (`npm run fixtures:python`) check that both SDKs read the same amounts and accept the same declarations.
 
-## guardian-ap2 0.1.1 (unreleased)
+## guardian-ap2 0.1.1, released 2026-11-16
 
 ### Fixed: item constraints from open mandates fit request limits
 
@@ -30,7 +30,7 @@
 - **skill.md 1.0.10.** Text only; no pin change (hash in `docs/skill-changelog.md`). The credential check is one provided check that never prints the value; `scripts/check-skill.mjs` refuses code that prints the credential.
 - **skill.md 1.0.9.** Text only; no pin change (hash in `docs/skill-changelog.md`).
 
-## sdk 0.6.2 (unreleased)
+## sdk 0.6.2, released 2026-11-15
 
 ### Fixed: `guardian-sdk verify --help`
 
