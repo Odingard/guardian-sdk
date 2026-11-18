@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@odingard/guardian-sdk": "^0.3.5 || ^0.4.0 || ^0.5.0 || ^0.6.0",
-    "@types/node": "^22",
+    "@types/node": "^26",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1"
