@@ -116,6 +116,9 @@ export const SETTINGS_SNIPPET = {
             type: "command",
             command: "npx -y @odingard/guardian-hook",
             timeout: 600,
+            // Claude Code v2.1.295+: a hook that cannot start or times out
+            // blocks the call too (without it, the call runs).
+            onFailure: "block",
           },
         ],
       },
@@ -260,6 +263,10 @@ function agentSteps(dialect: Dialect): string[] {
   return [
     "4. Add this to .claude/settings.json (project) or ~/.claude/settings.json (all projects):",
     JSON.stringify(SETTINGS_SNIPPET, null, 2),
+    "",
+    'onFailure "block" (Claude Code v2.1.295 or later) blocks the call when the hook',
+    "cannot start at all (no Node, npx cannot fetch the package) or times out. A hook",
+    "that starts but fails to load or crashes blocks the call either way (exit 2).",
     "",
     "Read-only tools (Read, Grep, Glob, LS, WebSearch) are not routed through Guardian.",
   ];

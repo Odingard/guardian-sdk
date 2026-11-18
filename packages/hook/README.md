@@ -14,13 +14,13 @@ There is no model in the decision: Guardian decides ALLOW / ASK / DENY determini
 
 ## How it works
 
-| Guardian says | What happens                                                                                                                                                                 |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ALLOW**     | The hook redeems the single-use capability (revocation and expiry are checked now, and the decision is recorded), then tells the agent to run the call.                      |
-| **ASK**       | The agent waits. You get the request in the Guardian console. On approval the hook claims and redeems the capability, then the call runs. It is never auto-approved.         |
-| **DENY**      | The agent is told no, with the reason. Nothing runs.                                                                                                                         |
+| Guardian says | What happens                                                                                                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**     | The hook redeems the single-use capability (revocation and expiry are checked now, and the decision is recorded), then tells the agent to run the call.              |
+| **ASK**       | The agent waits. You get the request in the Guardian console. On approval the hook claims and redeems the capability, then the call runs. It is never auto-approved. |
+| **DENY**      | The agent is told no, with the reason. Nothing runs.                                                                                                                 |
 
-**Fail closed.** If Guardian can't be reached, the configuration is wrong, approval times out or redemption fails, the call is denied. Each request stays open for 5 minutes (Guardian's limit), and the hook waits that long for an approval, under Claude Code's 600-second hook timeout, because a hook that times out does not block. An ASK not approved within 5 minutes expires; the call is denied and the agent can ask again. A denial tells the agent Guardian's request id (`Request req_…`), so the developer can find the request in the console. If Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer), the hook looks the request up in Guardian: when Guardian recorded the redemption as verified, the call runs; otherwise it is denied with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT` when Guardian aborted it), nothing runs, and the agent is told not to retry and to have the request checked.
+**Fail closed.** If Guardian can't be reached, the configuration is wrong, approval times out or redemption fails, the call is denied. Each request stays open for 5 minutes (Guardian's limit), and the hook waits that long for an approval, under Claude Code's 600-second hook timeout, because a hook that times out does not block. An ASK not approved within 5 minutes expires; the call is denied and the agent can ask again. If the hook itself fails to start or crashes (a missing or unbuilt `@odingard/guardian-sdk`, a broken install, an uncaught error), the call is blocked too: the hook writes the reason to stderr and exits 2, which blocks in Claude Code, Codex and DeepSeek Harness. A denial tells the agent Guardian's request id (`Request req_…`), so the developer can find the request in the console. If Guardian's answer to the redemption is lost (no answer, a 5xx, an unreadable answer), the hook looks the request up in Guardian: when Guardian recorded the redemption as verified, the call runs; otherwise it is denied with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT` when Guardian aborted it), nothing runs, and the agent is told not to retry and to have the request checked.
 
 ## Tools the hook proposes
 
@@ -85,7 +85,8 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
           {
             "type": "command",
             "command": "npx -y @odingard/guardian-hook@0.4.2",
-            "timeout": 600
+            "timeout": 600,
+            "onFailure": "block"
           }
         ]
       }
@@ -93,6 +94,8 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
   }
 }
 ```
+
+`"onFailure": "block"` (Claude Code v2.1.295 or later) makes Claude Code block the call when the hook cannot start at all (no Node, or npx cannot fetch the package) or times out; without it Claude Code runs the call in those cases. A hook that starts but fails to load or crashes blocks the call either way.
 
 `npx @odingard/guardian-hook setup` prints all of this. To see where a command would be routed, run `npx @odingard/guardian-hook classify "terraform apply"`, which prints `shell_deploy`.
 
@@ -191,7 +194,7 @@ Some hosts run each chat message as `codex exec --dangerously-bypass-approvals-a
 - **A missing, untrusted or unparseable `hooks.json` governs nothing.** Codex skips it and runs every call. Check with a deny (for example `rm -rf ./tmp-guardian-check` should be blocked or wait for approval) after every config change.
 - Hosted tools such as `WebSearch` (they do not use Codex's hook path), and any "specialized tool path" Codex runs without hooks; Codex itself calls hooks "a useful guardrail, not a complete enforcement boundary".
 - Other local tools (`update_plan`, `spawn_agent`, …) are left to Codex. Check whether a subagent's own tool calls reach the hook before you rely on it.
-- **Codex lets the call run if the hook process fails** (crash, timeout, malformed output). The hook makes every failure it can see a deny: it catches crashes, exits 2 on deny, and has its own 540-second deadline under Codex's 600-second timeout. The `|| … exit 2` in the command turns a hook that cannot start into a block. A hook killed from outside, or a `timeout` set below the hook's deadline, still fails open; keep `timeout` at 600.
+- **Codex lets the call run if the hook process fails** (crash, timeout, malformed output). The hook makes every failure it can see a deny: it catches crashes and load failures, exits 2 on deny, and has its own 540-second deadline under Codex's 600-second timeout. The `|| … exit 2` in the command turns a hook that cannot start into a block. A hook killed from outside, or a `timeout` set below the hook's deadline, still fails open; keep `timeout` at 600.
 
 ## DeepSeek Harness (dsh)
 
@@ -253,7 +256,7 @@ A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both 
 - **Every dsh tool not in the table**, including ones with real effects: `run_code` itself (its tool sub-calls go through the same pre-execute pipeline, per dsh's docs; check with a denied sub-call before you rely on it), `subagent`, `workflow`, `ralph`; `plugin_manager` and `load_workspace_dependencies` (they install packages); the experimental browser tools `stagehand_act` and `stagehand_navigate` (they can click, submit forms and navigate); `send_message`, `spawn_teammate`, `team_task_*`; `job_*` (including `job_kill`); `schedule_*`; `skill`, `lsp`, `propose_action`, `terminal_open`, `web_search`; and read-only tools. Disable the ones you do not want with your dsh profile.
 - **A missing or unparseable hooks file governs nothing.** The bridge logs "could not load hook config … no hooks registered" and runs every call. Check with a deny after every config change.
 - `terminal_send` is classified per message, so a command split across several sends (e.g. `terraform ap` then `ply`) is seen in pieces, and text sent to a program already running in the PTY (a REPL, `ssh`) is classified as if it were a shell command. Prefer the plain `bash` tool and turn the terminal tools off where that matters.
-- **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
+- **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes and load failures, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.
 - Check on your host: the tool names the bridge passes in your dsh image (the source passes dsh's names unchanged; the matcher lists Claude Code's too), whether your dsh image includes the bridge plugin, whether the hook's environment keeps `GUARDIAN_AGENT_CREDENTIAL`, and whether headless runs allow a 5-minute wait. See `examples/agents/deepseek-harness/`.
 
 ## Edit-type tools: the target file is pinned (0.4)
@@ -273,10 +276,10 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The signed decision record proves Guardian's authorization of that exact call, not the command's own outcome.
 - **Routing is local and evadable.** The parser and patterns run on your machine. They do not see inside scripts, other interpreters' code, shell functions or configured git aliases (see [Tools the hook proposes](#tools-the-hook-proposes)).
 - **The agent can still edit the hook's own config in ways the hook does not recognise.** Writes to the known config files (`.codex/hooks.json`, `guardian-hooks.json`, `cordis.patch.yml`, `.claude/settings.json` and the others listed above) go to the Ask tier, but a script, an interpreter (`python script.py`) or a path built at run time can still rewrite them and remove the hook. On one-shot dsh runs the harness restarts on every message, so the edit takes effect on the next one. Deliver the hook as a managed hook (Codex `requirements.toml` with `allow_managed_hooks_only`, Claude Code managed settings), or mount the config read-only (owned by another user) where that matters.
-- **Starting the hook.** It answers only when run as `guardian-hook` (or `…/hook/dist/index.js`). Installed under another file name it exits 0 with no output, which every agent treats as "no objection". Use the documented commands.
+- **Starting the hook.** Run it as `guardian-hook` (`dist/cli.js`), as the documented commands do. That entry has no dependencies of its own, so a hook that cannot load still blocks the call. Running `node …/hook/dist/index.js` directly still works and blocks on a crash, but if that file itself cannot load (for example a missing `@odingard/guardian-sdk`), Node exits 1 and the agent runs the call.
 - **Only calls through the hook are governed.** Commands you run yourself, or other credentials on the machine, are not.
 - **Arguments are bounded.** Commands over 2,000 characters are truncated in what the approver sees; MCP inputs over that size are sent as a digest.
 - **Claude Code, Codex and DeepSeek Harness.** There is no Cursor hook adapter; use the MCP proxy for Cursor.
-- **Claude Code itself also runs a call when a hook times out or exits with an error other than 2.** The hook's own 540-second deadline and crash handling deny before that can happen; keep the hook `timeout` at 600.
+- **Claude Code itself also runs a call when a hook times out, cannot start or exits with an error other than 2,** unless the hook is registered with `"onFailure": "block"` (Claude Code v2.1.295 or later). The hook's own 540-second deadline and crash handling deny before that can happen; keep the hook `timeout` at 600 and set `onFailure`.
 
 Licensed Apache-2.0.

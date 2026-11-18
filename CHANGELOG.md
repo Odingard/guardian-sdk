@@ -1,5 +1,15 @@
 # Changelog
 
+## guardian-hook (unreleased)
+
+### Fixed: a hook that fails to start or crashes blocks the action
+
+- **`@odingard/guardian-hook`**: guardian-hook now blocks the action if the hook fails to start or crashes. Before, a hook that could not load (for example a missing or unbuilt `@odingard/guardian-sdk`) exited with code 1, which Claude Code treats as a non-blocking error, so the action ran. (The documented Codex and DeepSeek Harness commands already turned that exit into a block with `|| … exit 2`.)
+  - The `guardian-hook` command is now `dist/cli.js`, an entry with no dependencies that loads the hook with a dynamic import. A load failure (missing module, syntax error, a module that throws), an uncaught exception, an unhandled rejection, a hook that ends without an answer, an early `process.exit` and SIGTERM/SIGINT/SIGHUP all end the same way for every agent: the reason on stderr (`Guardian hook failed to start (…)` or `Guardian hook crashed (…)`, then `Nothing ran.`), the deny JSON on stdout, exit code 2. An answer already given is kept.
+  - The Claude Code settings the hook prints (`guardian-hook setup`) and the README add `"onFailure": "block"` (Claude Code v2.1.295 or later), so Claude Code also blocks the action when the hook cannot start at all or times out.
+  - New exports `main` and `hookAnswered`. Running `node …/dist/index.js` directly still works; use `guardian-hook` so that a hook that cannot load still blocks.
+  - Unchanged: an unreachable Guardian, a Guardian that does not answer before the hook's deadline, and missing configuration are denied, as before.
+
 ## Python odingard-guardian 0.5.0, released 2026-11-18
 
 ### Added: Microsoft Agent Framework and Semantic Kernel; dollar amounts on tools
