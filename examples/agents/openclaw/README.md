@@ -17,7 +17,7 @@ cd examples/agents/openclaw && npm install && npm run simulated
 It installs OpenClaw 2026.7.1, registers the
 plugin's handler with OpenClaw's own hook runner, and calls tools through
 OpenClaw's own `before_tool_call` wrapper. Guardian is an in-memory stand-in
-(no signing, no receipts). Step 0 runs the plugin's real install-integrity check against this checkout,
+(no signing, no signed records). Step 0 runs the plugin's real install-integrity check against this checkout,
 which you can write (or which runs as root), so every call is blocked and
 Guardian is never asked. Steps 1-5 then use
 `GUARDIAN_OPENCLAW_ALLOW_WRITABLE_INSTALL=1` (the opt-out) to show the
@@ -97,7 +97,7 @@ the container with `HOME=/data`, or they write config the Gateway never reads.
    until you fix the environment; if it says "the install is not
    protected", every call is blocked until you redo step 5.
 
-7. **Prove it** (keep the receipt digests):
+7. **Prove it** (keep the record digests):
 
    ```bash
    # Send the agent each of these as a chat message:
@@ -108,7 +108,7 @@ the container with `HOME=/data`, or they write config the Gateway never reads.
 
    With Composio connected (`HOME=/data openclaw mcp set composio …`, then
    restart), `composio__GMAIL_SEND_EMAIL` waits for a
-   person in the same way. Verify the receipts offline with
+   person in the same way. Verify the signed records offline with
    `examples/verify-receipt.mjs`.
 
 The approval is made in Guardian, not with OpenClaw's `/approve`. Guardian's

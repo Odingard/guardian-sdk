@@ -15,7 +15,7 @@ Guardian and check that an Ask waits for approval.
 npm install @odingard/guardian-openai-agents @odingard/guardian-sdk @openai/agents zod
 ```
 
-`@openai/agents` (0.21.x) and `@odingard/guardian-sdk` are peer
+`@openai/agents` (0.21.x and 0.22.x) and `@odingard/guardian-sdk` are peer
 dependencies.
 
 ## Usage

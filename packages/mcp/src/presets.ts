@@ -189,7 +189,7 @@ export function renderSuggestions(
     `${"Tool".padEnd(width)}  Suggested     Why`,
     ...rows.map(
       (r) =>
-        `${r.name.padEnd(width)}  ${(r.suggestedMode === "ask" ? "Ask me first" : "Allow").padEnd(12)}  ${r.why}${r.governable ? "" : "  ⚠ name not accepted by Guardian"}`,
+        `${r.name.padEnd(width)}  ${(r.suggestedMode === "ask" ? "Ask me" : "Allow").padEnd(12)}  ${r.why}${r.governable ? "" : "  ⚠ name not accepted by Guardian"}`,
     ),
     "",
     "Register these in the Guardian console (Connections → Register a tool server →",

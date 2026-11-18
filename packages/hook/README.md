@@ -28,15 +28,15 @@ Shell commands are routed by consequence. That routing is what lets you put depl
 
 **How a command is routed.** The hook parses the command line and routes it by the riskiest command inside it. It removes quotes and escapes, splits on `;`, `&&`, `||`, `|`, newlines and subshells, and looks inside `$( )`, backticks, `<( )`, `sh -c` / `bash -c` strings, `eval`, `su -c`, `env -S` and `find -exec`. It looks past wrappers (`sudo`, `doas`, `env`, `xargs`, `nice`, `nohup`, `time`, `timeout`, `stdbuf`, `exec`, `command`, `watch`, `npx`), git global options (`-C`, `-c`, `--git-dir`, `--work-tree`) and git aliases set with `-c alias.*`. So `find . | xargs rm -rf`, `git -C repo push -f`, `"git" push --force` and `r\m -rf ~` are all `shell_destructive`. When the hook cannot follow a command, it sends it to the Ask tier: an unterminated quote, a command name known only at run time (`$CMD -rf x`), `eval` or `sh -c` of run-time text (`sh -c "$(echo … | base64 -d)"`, `eval "$(tool init)"`), or a `case` statement.
 
-**It is still not a security boundary.** The hook cannot see inside scripts (`bash deploy.sh`, `make clean`), code run by other interpreters (`python -c`, `node -e`, PowerShell), shell functions and aliases, or git aliases and hooks already in the git config. Under prompt injection, treat the Ask tier as advisory. Where that matters, set the everyday connection to **Ask me first** as well, or deny `shell` outright.
+**It is still not a security boundary.** The hook cannot see inside scripts (`bash deploy.sh`, `make clean`), code run by other interpreters (`python -c`, `node -e`, PowerShell), shell functions and aliases, or git aliases and hooks already in the git config. Under prompt injection, treat the Ask tier as advisory. Where that matters, set the everyday connection to **Ask me** as well, or deny `shell` outright.
 
 | Guardian tool         | Suggested mode | Covers                                                                                                                                             |
 | --------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shell`               | Allow          | Ordinary commands (build, test, inspect)                                                                                                           |
-| `shell_deploy`        | Ask me first   | terraform/tofu apply and destroy, pulumi up, kubectl apply and delete, helm install and upgrade, cloud deploy CLIs, package publish, `gh pr merge` |
-| `shell_destructive`   | Ask me first   | See the list below, [sensitive files](#sensitive-files) (`.env`, keys, cloud credentials) and [the agent's environment](#the-agents-environment)   |
-| `git_push`            | Ask me first   | Pushing commits                                                                                                                                    |
-| `shell_session`       | Ask me first   | Starting an interactive shell, interpreter, database client or remote session (`bash`, `python3`, `ssh host`, `docker exec -it`, `psql app`)       |
+| `shell_deploy`        | Ask me         | terraform/tofu apply and destroy, pulumi up, kubectl apply and delete, helm install and upgrade, cloud deploy CLIs, package publish, `gh pr merge` |
+| `shell_destructive`   | Ask me         | See the list below, [sensitive files](#sensitive-files) (`.env`, keys, cloud credentials) and [the agent's environment](#the-agents-environment)   |
+| `git_push`            | Ask me         | Pushing commits                                                                                                                                    |
+| `shell_session`       | Ask me         | Starting an interactive shell, interpreter, database client or remote session (`bash`, `python3`, `ssh host`, `docker exec -it`, `psql app`)       |
 | `file_write`          | Allow          | Write and edit (the approver sees the path, size and a SHA-256 of the content; the content itself is not sent)                                     |
 | `web_fetch`           | Allow          | Fetching a URL, and web searches (`WebSearch`; the approver sees the query)                                                                        |
 | `mcp.<server>.<tool>` | your choice    | Any MCP tool, e.g. `mcp.github.create_pull_request`                                                                                                |
@@ -95,7 +95,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
    - **"Coding agent — everyday"** with `shell`, `file_write` and `web_fetch`.
    - **"Coding agent — needs approval"** with `shell_deploy`, `shell_destructive`, `git_push`, `shell_session`, and any MCP tools you use. List `shell_session` and each MCP tool (`mcp.<server>.<tool>`) on this connection, when you register it or later with **Add tools** on its card. A name that is not on the connection, or not allowed by name, is refused (`INVALID_REQUEST`), which fails closed. `npx @odingard/guardian-mcp tools -- <server>` lists them.
 2. Under **Agents**, open your coding agent:
-   - set **Allow** on the first connection and **Ask me first** on the second;
+   - set **Allow** on the everyday connection and **Ask me** on the needs-approval one;
    - on each connection's card, type every tool name into **"Allow a tool by name"** and press **Allow tool**, once per tool.
 
    Without this, every call is denied as `INVALID_REQUEST`.
@@ -311,6 +311,14 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - Shell commands are not pinned. The command text is bound; files it names (`bash deploy.sh`, `curl -F file=@x`, globs, `$VAR`) are not.
 - Pinning is supported on Linux and macOS. On Windows an Edit-type call is denied (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
 - **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.
+
+## Watch mode (unreleased, opt-in)
+
+While the agent is in watch mode (the console's **Start watching**), Guardian records what it would have decided for each call and blocks nothing at that step. For a call it would have asked about or denied, it issues no capability, so there is nothing to approve or redeem.
+
+By default the hook denies such a call (`WATCHED_NOT_RUN`): nothing runs, and the console counts it as not run. With `GUARDIAN_HOOK_WATCH_MODE=on`, the hook asks Guardian for the watched answer and, for such a call, gives no permission decision: the agent's own permissions apply, as they would without the hook. In Claude Code the person sees a note naming the request; in Codex and DeepSeek Harness the hook prints nothing. An Edit-type call's target is still checked against its pin. Every other answer is unchanged: allowed calls are redeemed as before, and anything Guardian does not confirm is denied.
+
+Watch mode needs `@odingard/guardian-sdk` with watch mode support next to the hook; with an older SDK such a call is denied as above.
 
 ## Limits (read these)
 

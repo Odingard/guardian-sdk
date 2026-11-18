@@ -1,20 +1,14 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Odingard/guardian-mcp",
-  "description": "Routes agent tool calls through Guardian for ALLOW/ASK/DENY before execution.",
-  "version": "0.5.0",
-  "tools": [
+  "title": "Guardian by Odingard",
+  "description": "Puts Guardian in front of MCP tool calls: allow, ask a person, or deny before the call runs.",
+  "websiteUrl": "https://odingard.com/guardian",
+  "icons": [
     {
-      "name": "guardian_invoke_tool",
-      "description": "Propose a tool call for authority evaluation. ALLOW executes and returns the receipt; ASK returns a requestId held for human approval; DENY refuses with a reason code."
-    },
-    {
-      "name": "guardian_claim",
-      "description": "Claim an approved ASK by requestId, execute it, and return the receipt."
-    },
-    {
-      "name": "guardian_receipt",
-      "description": "Fetch the machine-readable evidence receipts for a request."
+      "src": "https://raw.githubusercontent.com/Odingard/guardian-sdk/main/assets/guardian-mark.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": ["any"]
     }
   ],
   "repository": {
@@ -22,35 +16,43 @@
     "source": "github",
     "subfolder": "packages/mcp"
   },
+  "version": "0.5.2",
   "packages": [
     {
       "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@odingard/guardian-mcp",
-      "version": "0.5.0",
+      "version": "0.5.2",
+      "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "GUARDIAN_BASE_URL",
-          "description": "Guardian control-plane base URL",
-          "isRequired": true
+          "description": "Guardian API base URL, e.g. https://guardian-api.odingard.com",
+          "isRequired": true,
+          "format": "string",
+          "default": "https://guardian-api.odingard.com"
         },
         {
           "name": "GUARDIAN_AGENT_CREDENTIAL",
-          "description": "Agent credential (gak_…)",
+          "description": "Agent credential (gak_…) from the Guardian console",
           "isRequired": true,
-          "isSecret": true
+          "isSecret": true,
+          "format": "string"
         },
         {
           "name": "GUARDIAN_CONNECTION_ID",
-          "description": "Default tool connection id for invocations",
-          "isRequired": true
+          "description": "Tool connection id (pcn_…); required for proxy mode",
+          "isRequired": false,
+          "format": "string"
         },
         {
           "name": "GUARDIAN_ADAPTER_ID",
           "description": "Optional adapter override",
-          "isRequired": false
+          "isRequired": false,
+          "format": "string"
         }
       ]
     }

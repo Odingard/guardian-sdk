@@ -73,6 +73,19 @@ export function formatVerdict(
   if (verdict === null) {
     return { stdout: "", stderr: "", exitCode: 0, verdict };
   }
+  if (verdict.decision === "watched") {
+    // Watch mode: no permission decision, so the agent's own permissions
+    // apply. Claude Code shows the reason to the person.
+    return {
+      stdout:
+        dialect === "claude-code"
+          ? JSON.stringify({ systemMessage: verdict.reason })
+          : "",
+      stderr: "",
+      exitCode: 0,
+      verdict,
+    };
+  }
   if (dialect === "claude-code") {
     return {
       stdout: claudeCodeOutput(verdict),
@@ -104,7 +117,8 @@ export function claudeCodeOutput(verdict: HookVerdict): string {
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: verdict.decision,
+      // Only an allow allows; anything else given here denies.
+      permissionDecision: verdict.decision === "allow" ? "allow" : "deny",
       permissionDecisionReason: verdict.reason,
     },
   });
@@ -179,6 +193,15 @@ export const DSH_HOOKS_SNIPPET = {
   },
 };
 
+/**
+ * Watch mode (opt-in): GUARDIAN_HOOK_WATCH_MODE=on. Anything else is off,
+ * and a call Guardian would have held or denied while the agent is
+ * watched is denied (WATCHED_NOT_RUN).
+ */
+export function watchModeFromEnv(env: Env): boolean {
+  return env.GUARDIAN_HOOK_WATCH_MODE?.trim() === "on";
+}
+
 /** Which connection a tool's request goes to (modes are per connection). */
 export function connectionFor(
   toolName: HookToolName,
@@ -206,7 +229,7 @@ export function setupText(dialect: Dialect = "claude-code"): string {
     "      (`npx @odingard/guardian-mcp tools -- <server>` lists them).",
     "",
     "2. Agents → your coding agent:",
-    "   - set Allow on (a) and Ask me first on (b);",
+    "   - set Allow on (a) and Ask me on (b);",
     "   - on each of the two connection cards, type every tool name above into",
     '     "Allow a tool by name" and press Allow tool (once per tool).',
     "     Without this step every call is denied as INVALID_REQUEST.",
@@ -474,6 +497,10 @@ async function evaluate(
     approvalTimeoutMs,
     requestTtlMs: REQUEST_TTL_MS,
     pollIntervalMs: 2_000,
+    // Watch mode is opt-in: with GUARDIAN_HOOK_WATCH_MODE=on, a call
+    // Guardian would have held or denied while the agent is watched is left
+    // to the agent's own permissions (the agent runs every call itself).
+    watchAware: watchModeFromEnv(env),
     ...(deps.wait ? { wait: deps.wait } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.log ? { log: deps.log } : {}),

@@ -12,8 +12,8 @@ every tool call, and its deny holds in that mode:
 - everyday commands (`ls`, `npm test`, reading files) run;
 - deploys, destructive commands and pushes (`terraform apply`, `rm -rf`,
   `git push`) wait until a person approves that exact action;
-- anything Guardian denies, or that nobody approves in time, does not run;
-- every allowed call leaves a receipt you can verify offline.
+- anything Guardian denies, or that no one approves in time, does not run;
+- every allowed call leaves a signed record you can verify offline.
 
 The Guardian part is one line in the Agent SDK call:
 

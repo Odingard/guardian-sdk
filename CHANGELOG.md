@@ -1,5 +1,43 @@
 # Changelog
 
+## guardian-mcp 0.6.0, unreleased
+
+### Added: list and withdraw held requests
+
+- **`@odingard/guardian-mcp`**: two tools, in `guardian-mcp` and in `guardian-mcp proxy`.
+  - `guardian_pending` ("List my held requests") lists this agent's own requests that Guardian holds for a person's approval (ASK), from newest to oldest: `requestId`, `action`, `toolName`, `purpose`, `createdAtEpochMs` and `expiresAtEpochMs`, paged with `limit` (1 to 100, default 20) and `before`. It never shows other agents' requests or anything about the person or the account. In the proxy, each entry also says whether this proxy holds the call (`heldByThisProxy`). Annotations: `readOnlyHint`, `idempotentHint`.
+  - `guardian_cancel` ("Withdraw a held request") withdraws one of this agent's own held requests: the person no longer sees it, and it can never be approved, claimed or run. It takes authority away and runs nothing. Calling it again gives the same `withdrawn` answer. A request the person already decided, or one that expired, answers `ALREADY_DECIDED` with its state, and nothing changes (an approved request can still be claimed); an unknown request, or another agent's, answers `NOT_FOUND`. If the person approves at the same moment, exactly one of the two takes effect. In the proxy it also drops the held call, so a later `guardian_claim` forwards nothing. Annotations: `destructiveHint` (it cannot be undone), `idempotentHint`.
+  - An upstream tool named `guardian_pending` or `guardian_cancel` is hidden by the proxy, like the other governance tool names.
+- **`@odingard/guardian-sdk`**: `client.pending({ limit?, before? })` and `client.withdraw(requestId)`, with the types `GuardianHeldRequest`, `GuardianPendingResult` and `GuardianWithdrawResult`. Both are optional members of the `GuardianClient` interface, so a custom client written for an earlier version still type-checks. A listing with an entry the client cannot read, or a withdrawal answer that is not a clear `withdrawn`, is reported as `MALFORMED_RESPONSE`.
+- **Python**: `GuardianClient.pending(limit=None, before=None)` and `GuardianClient.withdraw(request_id)`, and the same on `AsyncGuardianClient`, with `HeldRequest`, `PendingResult` and `WithdrawResult`.
+- guardian-mcp 0.6.0 needs the `@odingard/guardian-sdk` release that adds these methods; with an earlier SDK both tools answer `NOT_SUPPORTED` and change nothing.
+
+## guardian-mcp 0.5.2, released 2026-11-18
+
+### Changed: clearer tool definitions
+
+- **`@odingard/guardian-mcp`**: `guardian_invoke_tool`, `guardian_claim` and `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`, describe what they do, what they return, their errors, whether calling them again is safe, and how they fit together (invoke; on ASK, wait for the person to approve; claim; record).
+  - Every parameter has a description, including `requestId` on `guardian_claim` and `guardian_record`. `toolName` and `connectionId` on `guardian_invoke_tool` also list the format Guardian accepts (`pattern`, `maxLength`), and `purpose` its maximum length.
+  - Each tool has a `title` and MCP tool annotations: `guardian_invoke_tool` and `guardian_claim` set `destructiveHint` and `openWorldHint`; `guardian_record` sets `readOnlyHint` and `idempotentHint`.
+  - Unchanged: the tool names, the hidden earlier name of `guardian_record`, and the JSON the tools return.
+
+### Fixed: claiming before the person approves stays held
+
+- **`@odingard/guardian-mcp`**: in `guardian-mcp`, a `guardian_claim` made before the person approves (`APPROVAL_PENDING`) answers ASK with the `requestId`, so it can be claimed again after approval. Before, it was reported as DENY with "Do not retry the same call". Nothing runs in either case. `guardian-mcp proxy` already kept such a call held.
+
+### Changed: the Ask mode label matches the console
+
+- **`@odingard/guardian-mcp`**: `guardian-mcp tools` prints the suggested Ask mode as "Ask me", as in the console. The `--json` output is unchanged (`"suggestedMode": "ask"`).
+
+## guardian-mcp 0.5.1, released 2026-11-18
+
+### Changed: the records tool is listed as `guardian_record`
+
+- **`@odingard/guardian-mcp`**: the tool that fetches the evidence records for a request id is listed as `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`. The old name, `guardian_receipt`, is no longer listed but still works and gives the same answer, so existing clients keep running. Tool descriptions and messages say "record", and name `guardian_record` where they named the old tool.
+  - In `proxy`, an upstream tool named `guardian_record` is hidden, like `guardian_claim` and `guardian_receipt`.
+  - Unchanged: the JSON the tools return, including its field names.
+- The package description and the MCP Registry entry (`packages/mcp/server.json`) are updated. The entry uses the current registry schema and adds a title, website and icon.
+
 ## guardian-hook 0.4.4, released 2026-11-18
 
 ### Added: reads of sensitive files are governed
@@ -50,6 +88,10 @@
 
 ## Docs (unreleased)
 
+- **Ask mode label.** `guardian-hook setup` and `python -m odingard_guardian.hermes` print the Ask mode as "Ask me", as in the console, and the guardian-hook, guardian-openclaw and Hermes READMEs say the same. Mode values are unchanged. They ship with each package's next release.
+- **"Signed record" in the READMEs.** The guardian-ap2 README, the agent and payment example READMEs and CONTRIBUTING say "signed record" for what Guardian signs, and "result" for AP2 merchant and processor results. Identifiers, API paths, JSON fields, file names and the `greceipt.v1` format are unchanged.
+- **Package descriptions.** The descriptions of `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-steel` and `odingard-guardian` say "record". They ship with each package's next release.
+- **Listings.** `glama.json` names the maintainers of the Glama listing. `.github/workflows/publish-mcp.yml` publishes `packages/mcp/server.json` to the MCP Registry when an `mcp-v<version>` tag is pushed.
 - **Dependency maintenance.** Dependabot checks npm workspaces, the Python package and GitHub Actions weekly, grouping minor/patch updates per ecosystem with a five-PR limit each.
 - **Sample decision record.** `examples/receipts/sample.greceipt.json`, a signed `greceipt.v1` record from Guardian, replaces the earlier sample. `examples/verify-receipt.mjs` now verifies it by default against the keys published by `https://guardian-api.odingard.com`. The Python receipt fixtures are regenerated from it. No code change.
 - **SDK test fixtures.** The TypeScript SDK's receipt tests use the same sample record and its published verification key. Tests only; no code change.

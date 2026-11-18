@@ -867,3 +867,9 @@ def test_real_client_definitive_refusal_is_not_looked_up():
     out = hook(client)(**terminal("ls"))
     assert out["action"] == "block" and "(CAPABILITY_REVOKED)" in out["message"]
     assert not any(c.startswith("/v1/agent/receipts/") for c in calls)
+
+
+def test_setup_text_uses_the_console_mode_labels():
+    text = hermes.setup_text()
+    assert "Allow on (a), Ask me on (b)" in text
+    assert "Ask me first" not in text

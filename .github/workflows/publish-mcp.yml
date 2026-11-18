@@ -1,0 +1,107 @@
+# Publishes packages/mcp/server.json to the official MCP Registry when a
+# guardian-mcp release tag (mcp-v<version>, e.g. mcp-v0.5.1) is pushed.
+# It runs on tag pushes and never on pull requests.
+#
+# Push the tag after @odingard/guardian-mcp@<version> is on npm; the registry
+# checks the npm package's mcpName. Login uses GitHub OIDC, so no secret is
+# needed. Steps follow the registry's GitHub Actions guide
+# (github.com/modelcontextprotocol/registry, docs/modelcontextprotocol-io/github-actions.mdx).
+name: Publish to MCP Registry
+
+on:
+  push:
+    tags: ["mcp-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-mcp
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC login to the MCP Registry
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Tag, package.json and server.json name the same version
+        working-directory: packages/mcp
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const version = process.argv[1];
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const server = JSON.parse(fs.readFileSync("server.json", "utf8"));
+            const found = [pkg.version, server.version, ...server.packages.map((p) => p.version)];
+            if (found.some((v) => v !== version)) {
+              console.error(`Tag version ${version}; package.json and server.json have ${found.join(", ")}.`);
+              process.exit(1);
+            }
+            if (pkg.mcpName !== server.name) {
+              console.error(`package.json mcpName ${pkg.mcpName} differs from server.json name ${server.name}.`);
+              process.exit(1);
+            }
+          ' "${TAG#mcp-v}"
+
+      - name: The npm package is published with the same mcpName
+        working-directory: packages/mcp
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="$(node -p 'require("./server.json").name')"
+          published="$(npm view "@odingard/guardian-mcp@${TAG#mcp-v}" mcpName 2>/dev/null || true)"
+          if [ "$published" != "$expected" ]; then
+            echo "@odingard/guardian-mcp@${TAG#mcp-v} is not on npm with mcpName $expected. Publish it to npm, then re-run this workflow." >&2
+            exit 1
+          fi
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Download and verify mcp-publisher
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          rm -f "$archive" "$archive.sigstore.json"
+
+      - name: Authenticate to MCP Registry
+        working-directory: packages/mcp
+        run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc'
+
+      - name: Publish server to MCP Registry
+        working-directory: packages/mcp
+        run: '"$RUNNER_TEMP/mcp-publisher" publish'
