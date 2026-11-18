@@ -1,5 +1,17 @@
 # Changelog
 
+## guardian-hook (unreleased)
+
+### Added: reads of sensitive files are governed
+
+- **`@odingard/guardian-hook`**: the Claude Code matcher now also sends `Read`, `NotebookRead`, `Grep`, `Glob`, `LS` and `WebSearch` to the hook, and the DeepSeek Harness matcher sends `read`, `read_image`, `grep`, `glob` and `web_search`. Update the matcher in your settings to get this.
+  - A read of a sensitive file goes to `shell_destructive` (Ask tier) with `touches: "sensitive-file"`, the path and the pattern it matched. So does a shell command that names one (`cat .env`, `cp ~/.ssh/id_rsa …`, `base64 .env`, `sh -c 'cat .env'`, a glob or brace form such as `.en?` or `.{e,x}nv`, a symlink to one), under Claude Code, Codex and DeepSeek Harness. A read of an ordinary file gets no opinion and nothing is sent to Guardian.
+  - Default patterns include `.env*` (except `.env.example`, `.env.sample`, `.env.template`), `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `*secret*`, `.npmrc`, `.netrc` and `.git-credentials`; the README lists them all. Paths are checked as written, as absolute paths (`..` resolved) and with symlinks followed, ignoring case.
+  - `GUARDIAN_HOOK_SENSITIVE_PATHS` adds patterns or exempts files (`!pattern`); `GUARDIAN_HOOK_SENSITIVE_MODE=deny` makes the hook refuse sensitive reads itself. Invalid settings, a read without a path, and an error while checking a call deny the call.
+  - `WebSearch` (and dsh `web_search`) is `web_fetch`, with the query.
+  - Grep (and dsh `grep`) checks the files under the searched folder that its filter selects, or every file there when it has no filter; a Grep over a folder that holds a sensitive file goes to the Ask tier.
+  - Not seen: a shell search over a folder (`grep -r`, `rg`) can read a sensitive file inside it, and a path built at run time is not checked.
+
 ## guardian-hook 0.4.3, released 2026-11-18
 
 ### Fixed: a hook that fails to start or crashes blocks the action

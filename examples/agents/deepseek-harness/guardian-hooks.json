@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch)$|^mcp__.*",
+        "matcher": "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|web_search|read|read_image|grep|glob|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read|NotebookRead|Grep|Glob|LS)$|^mcp__.*",
         "hooks": [
           {
             "type": "command",
