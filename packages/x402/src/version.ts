@@ -3,12 +3,12 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 /**
- * The x402 releases this guard was built and tested against: 2.30.x, the
- * same range as the peer dependencies (`~2.30.0`).
+ * The x402 releases this guard was built and tested against: 2.30.x and
+ * 2.31.x, the same range as the peer dependencies.
  */
 export const TESTED_X402_MAJOR = 2;
-export const TESTED_X402_MINOR = 30;
-export const TESTED_X402_RANGE = "~2.30.0";
+export const TESTED_X402_MINORS = [30, 31] as const;
+export const TESTED_X402_RANGE = ">=2.30.0 <2.32.0";
 
 const require = createRequire(import.meta.url);
 const checked = new Map<string, string>();
@@ -43,12 +43,14 @@ function installedVersion(name: string): string | null {
 export function isSupportedX402Version(version: string | null | undefined): boolean {
   const parts = typeof version === "string" ? version.match(/^(\d+)\.(\d+)\.(\d+)$/) : null;
   if (!parts) return false;
-  return Number(parts[1]) === TESTED_X402_MAJOR && Number(parts[2]) === TESTED_X402_MINOR;
+  return Number(parts[1]) === TESTED_X402_MAJOR &&
+    TESTED_X402_MINORS.some((minor) => Number(parts[2]) === minor);
 }
 
 /**
  * Refuses an x402 package outside the tested range (another major or minor
- * line, a prerelease, or none installed). Throws; the guard is not built.
+ * line, a prerelease, or none installed), or on a different minor line
+ * from core. Throws; the guard is not built.
  */
 export function assertSupportedX402(
   name: string,
@@ -61,6 +63,14 @@ export function assertSupportedX402(
     throw new Error(
       `guardian-x402 supports ${name} ${TESTED_X402_RANGE}; found ${version ?? "none"}.`,
     );
+  }
+  if (name !== "@x402/core") {
+    const coreVersion = assertSupportedX402("@x402/core", readVersion);
+    if (version!.split(".").slice(0, 2).join(".") !== coreVersion.split(".").slice(0, 2).join(".")) {
+      throw new Error(
+        `guardian-x402 requires ${name} and @x402/core on the same major.minor line; found ${name} ${version} and @x402/core ${coreVersion}.`,
+      );
+    }
   }
   if (readVersion === installedVersion) checked.set(name, version!);
   return version!;

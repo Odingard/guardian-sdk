@@ -135,9 +135,17 @@ describe("DeepSeek Harness tool names", () => {
     expect(governedCall({ tool, input })?.toolName).toBe(expected);
   });
 
-  it("leaves read-only dsh tools to the agent", () => {
-    for (const tool of ["read", "glob", "grep", "web_search", "read_image"]) {
-      expect(governedCall({ tool, input: {} })).toBeNull();
+  it("leaves ordinary dsh reads to the agent", () => {
+    expect(
+      governedCall({ tool: "read", input: { file_path: "/w/src/a.ts" } }),
+    ).toBeNull();
+    expect(
+      governedCall({ tool: "read_image", input: { file_path: "/w/a.png" } }),
+    ).toBeNull();
+    for (const tool of ["glob", "grep"]) {
+      expect(
+        governedCall({ tool, input: { pattern: "x", path: "/w/src" } }),
+      ).toBeNull();
     }
     expect(
       governedCall({
@@ -380,7 +388,10 @@ describe.each<Dialect>(["codex", "dsh"])("%s hook decisions", (dialect) => {
   it("no opinion on read-only tools", async () => {
     const r = await runHookAs(
       dialect,
-      stdin(dialect === "codex" ? "update_plan" : "read", {}),
+      stdin(
+        dialect === "codex" ? "update_plan" : "read",
+        dialect === "codex" ? {} : { file_path: "/w/src/a.ts" },
+      ),
       ENV,
     );
     expect(r).toMatchObject({ stdout: "", stderr: "", exitCode: 0 });
@@ -428,7 +439,7 @@ describe("setup and config", () => {
     expect(setupText("codex")).toContain("--dangerously-bypass-hook-trust");
   });
 
-  it("dsh matcher covers its write tools and MCP, not read-only tools", () => {
+  it("dsh matcher covers its write and read tools and MCP", () => {
     const group = DSH_HOOKS_SNIPPET.hooks.PreToolUse[0]!;
     const re = new RegExp(group.matcher);
     for (const t of [
@@ -443,7 +454,10 @@ describe("setup and config", () => {
     ]) {
       expect(re.test(t)).toBe(true);
     }
-    for (const t of ["read", "grep", "glob", "bashful"]) {
+    for (const t of ["read", "read_image", "grep", "glob", "web_search"]) {
+      expect(re.test(t)).toBe(true);
+    }
+    for (const t of ["bashful", "reader", "subagent", "run_code"]) {
       expect(re.test(t)).toBe(false);
     }
     expect(setupText("dsh")).toContain("dsh-hooks-claude-code");

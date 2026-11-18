@@ -1,7 +1,7 @@
 {
   "name": "@odingard/guardian-hook",
-  "version": "0.4.1",
-  "description": "Guardian for coding agents: a Claude Code PreToolUse hook (also for OpenAI Codex CLI, DeepSeek Harness and Claude Agent SDK agents) that sends shell commands, file writes and MCP calls to Guardian for a deterministic ALLOW/ASK/DENY decision. Deploys and destructive commands wait for a human approval in the Guardian console; every allowed call carries a verifiable receipt.",
+  "version": "0.4.4",
+  "description": "Guardian for coding agents: a Claude Code PreToolUse hook (also for OpenAI Codex CLI, DeepSeek Harness and Claude Agent SDK agents) that sends shell commands, file writes and MCP calls to Guardian for a deterministic ALLOW/ASK/DENY decision. Deploys and destructive commands wait for a human approval in the Guardian console; every allowed call carries a verifiable record.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
   "type": "module",
@@ -15,7 +15,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "guardian-hook": "dist/index.js"
+    "guardian-hook": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -26,7 +26,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/index.js && esbuild src/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/agent-sdk.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/index.js && esbuild src/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/agent-sdk.js && esbuild src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:./index.js --outfile=dist/cli.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build && npm test"
@@ -37,8 +37,8 @@
   "devDependencies": {
     "@types/node": "^22",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.3",
-    "vitest": "^5.1.0"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
   },
   "publishConfig": {
     "access": "public"

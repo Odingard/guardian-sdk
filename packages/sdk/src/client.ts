@@ -154,7 +154,18 @@ export type GuardianInvocation = (
      * refused before a request is sent.
      */
     ttlMs?: number;
+    /**
+     * Watch mode: say that this caller handles the watched answer
+     * (`decision: "DENY"`, reasonCode `WATCHED`, with `watched`). Sent as
+     * a request header, never as part of the proposal. The guard sets it,
+     * with `watchMode: true`, for tools that run in your own process; leave
+     * it unset otherwise. A claim never asks for it.
+     */
+    watchAware?: boolean;
   }>;
+
+/** The request header that marks a watch-aware request. */
+const WATCH_AWARE_HEADER = "x-guardian-watch-aware";
 
 /** Longest request window the gateway accepts (5 minutes). */
 export const GUARDIAN_MAX_REQUEST_TTL_MS = 300_000;
@@ -167,12 +178,73 @@ export type GuardianRequestResult =
       decision: "ALLOW" | "ASK" | "DENY";
       capabilityToken?: string;
       reasonCode?: string;
+      /**
+       * Watch mode, for a request sent with `watchAware: true`: the agent
+       * is in watch mode and Guardian would have asked (`"ASK"`) or denied
+       * (`"DENY"`) this call under the current rules. It comes with
+       * `decision: "DENY"` and reasonCode `WATCHED`: Guardian issued no
+       * capability and performs nothing for the call. With `watchMode: true`
+       * the guard runs a tool that runs in your own process anyway, because
+       * watch mode lets the agent's own tools run while Guardian watches.
+       * Set only on an answer to a request sent with `watchAware: true`.
+       */
+      watched?: "ASK" | "DENY";
     }
   | {
       ok: false;
       reasonCode: string;
       /** The proposal's request id — needed to `claim` after an ASK. */
       requestId?: string;
+    };
+
+/** One of the agent's own requests that is waiting for a person (ASK). */
+export type GuardianHeldRequest = Readonly<{
+  requestId: string;
+  /** The action requested, e.g. "tool.invoke". */
+  action: string;
+  /** The tool named in the request (tool.invoke, mcp.enable); else null. */
+  toolName: string | null;
+  /** The purpose the agent gave with the request. */
+  purpose: string;
+  createdAtEpochMs: number;
+  expiresAtEpochMs: number;
+}>;
+
+export type GuardianPendingResult =
+  | {
+      ok: true;
+      /** From newest to oldest. */
+      requests: readonly GuardianHeldRequest[];
+      /** Pass as `before` for the next page; null on the last page. */
+      next: string | null;
+    }
+  | { ok: false; reasonCode: string };
+
+export type GuardianWithdrawResult =
+  | {
+      ok: true;
+      requestId: string;
+      state: "withdrawn";
+      withdrawnAtEpochMs: number;
+    }
+  | {
+      ok: false;
+      /**
+       * NOT_FOUND (no held request of this agent with that id),
+       * ALREADY_DECIDED (with `state`: approved, denied, expired …),
+       * SERVICE_UNAVAILABLE (with `outcomeUnknown`), and others.
+       */
+      reasonCode: string;
+      requestId?: string;
+      state?: string;
+      /**
+       * Set when no clear answer came back: the connection failed, Guardian
+       * answered 5xx, or an answer could not be read. The request may or may
+       * not have been withdrawn; withdrawing it again with the same
+       * requestId is safe and gives a clear answer. Without it, the failure
+       * is Guardian's refusal and nothing changed.
+       */
+      outcomeUnknown?: true;
     };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -192,6 +264,44 @@ const LenientExecutionReceiptSchema =
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** The refusal code of an answer: reasonCode, then code, then the status. */
+function refusalCode(
+  data: Record<string, unknown> | null,
+  status: number,
+): string {
+  return typeof data?.reasonCode === "string"
+    ? data.reasonCode
+    : typeof data?.code === "string"
+      ? data.code
+      : `HTTP_${status}`;
+}
+
+/** One listed held request, every field checked; null when one is off. */
+function heldRequest(value: unknown): GuardianHeldRequest | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  if (
+    typeof entry.requestId !== "string" ||
+    typeof entry.action !== "string" ||
+    !(entry.toolName === null || typeof entry.toolName === "string") ||
+    typeof entry.purpose !== "string" ||
+    !Number.isSafeInteger(entry.createdAtEpochMs) ||
+    !Number.isSafeInteger(entry.expiresAtEpochMs)
+  ) {
+    return null;
+  }
+  return {
+    requestId: entry.requestId,
+    action: entry.action,
+    toolName: entry.toolName as string | null,
+    purpose: entry.purpose,
+    createdAtEpochMs: entry.createdAtEpochMs as number,
+    expiresAtEpochMs: entry.expiresAtEpochMs as number,
+  };
 }
 
 function randomId(prefix: "req" | "cor"): string {
@@ -240,6 +350,27 @@ export interface GuardianClient {
     | { ok: true; requestId: string; receipts: readonly unknown[] }
     | { ok: false; reasonCode: string }
   >;
+  /**
+   * This agent's own requests still waiting for a person (held as ASK),
+   * from newest to oldest, at most `limit` (1 to 100, default 20) per page.
+   * It reads and changes nothing, and never returns another agent's
+   * requests. Present on clients from `createGuardianClient`; optional so a
+   * custom client still type-checks.
+   */
+  pending?(options?: {
+    limit?: number;
+    before?: string;
+  }): Promise<GuardianPendingResult>;
+  /**
+   * Withdraw one of this agent's own held requests: the person no longer
+   * sees it and it can never be claimed. It takes authority away and runs
+   * nothing. Withdrawing again answers "withdrawn" again; a request the
+   * person already decided answers ALREADY_DECIDED and nothing changes.
+   * A failure with `outcomeUnknown: true` (no clear answer came back) may
+   * or may not have withdrawn it; retrying with the same requestId is safe.
+   * Present on clients from `createGuardianClient`.
+   */
+  withdraw?(requestId: string): Promise<GuardianWithdrawResult>;
 }
 
 function materialParametersFor(
@@ -306,6 +437,22 @@ const DEFAULT_ADAPTER: Record<string, string> = {
   "agent.transfer_capability": "adp_00000007",
 };
 
+/**
+ * Watch mode: a watched answer carries `watch: { wouldDecision }`, what
+ * Guardian would have decided under the current rules. Only an exact
+ * "ASK" or "DENY" is kept; anything else (absent, "ALLOW", malformed)
+ * leaves an ordinary DENY.
+ */
+function watchedDecision(value: unknown): "ASK" | "DENY" | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const wouldDecision = (value as { wouldDecision?: unknown }).wouldDecision;
+  return wouldDecision === "ASK" || wouldDecision === "DENY"
+    ? wouldDecision
+    : undefined;
+}
+
 export function createGuardianClient(
   config: GuardianClientConfig,
 ): GuardianClient {
@@ -315,12 +462,14 @@ export function createGuardianClient(
     path: string,
     body?: unknown,
     method: "GET" | "POST" = "POST",
+    extraHeaders: Readonly<Record<string, string>> = {},
   ) => {
     const init: RequestInit = {
       method,
       headers: {
         authorization: `Bearer ${config.credential}`,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...extraHeaders,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     };
@@ -344,8 +493,11 @@ export function createGuardianClient(
   const requestCapability = async (
     path: "/v1/agent/requests" | "/v1/agent/claims",
     body: unknown,
+    extraHeaders: Readonly<Record<string, string>> = {},
   ): Promise<GuardianRequestResult> => {
-    const response = await call(path, body);
+    const response = await call(path, body, "POST", extraHeaders);
+    // A watched answer counts only when this call asked for it.
+    const askedForWatch = extraHeaders[WATCH_AWARE_HEADER] === "1";
     const data = response.body;
     const requestId = (body as { requestId?: unknown }).requestId;
     if (!data || data.ok !== true) {
@@ -367,11 +519,16 @@ export function createGuardianClient(
     const reasonCode =
       typeof data.reasonCode === "string" ? data.reasonCode : undefined;
     if (data.decision === "ASK" || data.decision === "DENY") {
+      const watched =
+        askedForWatch && data.decision === "DENY" && reasonCode === "WATCHED"
+          ? watchedDecision(data.watch)
+          : undefined;
       return {
         ok: true,
         requestId: answeredRequestId,
         decision: data.decision,
         ...(reasonCode === undefined ? {} : { reasonCode }),
+        ...(watched === undefined ? {} : { watched }),
       };
     }
     // An ALLOW needs a capability token. The hosted gateway answers an ALLOW
@@ -454,7 +611,11 @@ export function createGuardianClient(
           ? { sourceEffectId: invocation.sourceEffectId }
           : {}),
       });
-      return requestCapability("/v1/agent/requests", proposal);
+      return requestCapability(
+        "/v1/agent/requests",
+        proposal,
+        invocation.watchAware === true ? { [WATCH_AWARE_HEADER]: "1" } : {},
+      );
     },
 
     claim(requestId) {
@@ -519,6 +680,79 @@ export function createGuardianClient(
         };
       }
       return { ok: true, receipt: data.receipt };
+    },
+
+    async pending(options = {}) {
+      const query = new URLSearchParams({ status: "pending" });
+      if (options.limit !== undefined)
+        query.set("limit", String(options.limit));
+      if (options.before !== undefined) query.set("before", options.before);
+      const response = await call(
+        `/v1/agent/requests?${query.toString()}`,
+        undefined,
+        "GET",
+      );
+      const data = response.body;
+      if (!data || data.ok !== true || !Array.isArray(data.requests)) {
+        return { ok: false, reasonCode: refusalCode(data, response.status) };
+      }
+      const requests: GuardianHeldRequest[] = [];
+      for (const entry of data.requests as unknown[]) {
+        const held = heldRequest(entry);
+        // An entry this SDK cannot read fails the whole answer closed.
+        if (held === null) {
+          return { ok: false, reasonCode: "MALFORMED_RESPONSE" };
+        }
+        requests.push(held);
+      }
+      return {
+        ok: true,
+        requests,
+        next: typeof data.next === "string" ? data.next : null,
+      };
+    },
+
+    async withdraw(requestId) {
+      const response = await call(
+        `/v1/agent/requests/${encodeURIComponent(requestId)}/withdraw`,
+        {},
+        "POST",
+      );
+      const data = response.body;
+      if (
+        data?.ok === true &&
+        data.state === "withdrawn" &&
+        typeof data.requestId === "string" &&
+        typeof data.withdrawnAtEpochMs === "number"
+      ) {
+        return {
+          ok: true,
+          requestId: data.requestId,
+          state: "withdrawn",
+          withdrawnAtEpochMs: data.withdrawnAtEpochMs,
+        };
+      }
+      // Anything else is not a confirmed withdrawal, whatever `ok` says.
+      // A readable refusal (a 2xx to 4xx answer with `ok: false`) says
+      // nothing changed; without one (no answer, a 5xx, an unreadable
+      // answer) Guardian may have withdrawn the request.
+      const definitiveRefusal =
+        response.status >= 200 &&
+        response.status < 500 &&
+        data !== null &&
+        data.ok === false;
+      return {
+        ok: false,
+        reasonCode:
+          data?.ok === true
+            ? "MALFORMED_RESPONSE"
+            : refusalCode(data, response.status),
+        ...(typeof data?.requestId === "string"
+          ? { requestId: data.requestId }
+          : {}),
+        ...(typeof data?.state === "string" ? { state: data.state } : {}),
+        ...(definitiveRefusal ? {} : { outcomeUnknown: true as const }),
+      };
     },
 
     async receipts(requestId) {

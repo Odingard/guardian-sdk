@@ -11,7 +11,9 @@
  *   guardian-hook classify CMD  show which Guardian tool a shell command maps to
  *
  * For codex and dsh a deny also exits 2 with the reason on stderr, because
- * both agents let a call run when a hook fails in any other way.
+ * both agents let a call run when a hook fails in any other way. A hook that
+ * fails to load or crashes exits 2 with the reason on stderr for every
+ * agent (the `guardian-hook` command is dist/cli.js; see fail-closed.ts).
  *
  * Environment (same names as guardian-mcp):
  *   GUARDIAN_BASE_URL          default https://guardian-api.odingard.com
@@ -28,6 +30,14 @@
  *                              subcommand
  *   GUARDIAN_HOOK_DEADLINE_MS  the hook's own hard deadline (default and
  *                              maximum 540000); past it the hook denies
+ *   GUARDIAN_HOOK_SENSITIVE_PATHS  extra sensitive-file patterns, comma
+ *                              separated, after the defaults; `!pattern`
+ *                              exempts (see sensitive.ts)
+ *   GUARDIAN_HOOK_SENSITIVE_MODE  ask (default: sensitive files go to the
+ *                              Ask tier) | deny (the hook refuses them)
+ *   GUARDIAN_HOOK_WATCH_MODE   on: while the agent is in watch mode, a call
+ *                              Guardian would have held or denied is left to
+ *                              the agent's own permissions (default: denied)
  *   GUARDIAN_HOOK_APPROVAL_TIMEOUT_MS  how long ASK waits (default and
  *                              maximum 300000: the hook asks Guardian to keep
  *                              the request open that long, the gateway's
@@ -37,10 +47,14 @@
  *
  * Fails closed: if Guardian cannot confirm a governed call, the call is denied.
  */
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { classifyCommand } from "./classify.js";
+import { runFailClosed } from "./fail-closed.js";
+import { sensitiveConfigFromEnv } from "./sensitive.js";
 import {
   DIALECTS,
-  formatVerdict,
   runHookAs,
   setupText,
   type Dialect,
@@ -93,40 +107,36 @@ export function parseArgs(
   };
 }
 
-let dialect: Dialect = "claude-code";
 let answered = false;
+
+/** True once this process has written the hook's answer. */
+export function hookAnswered(): boolean {
+  return answered;
+}
 
 function emit(result: HookResult): void {
   if (answered) return;
-  answered = true;
   if (result.stdout) process.stdout.write(`${result.stdout}\n`);
   if (result.stderr) process.stderr.write(`${result.stderr}\n`);
   process.exitCode = result.exitCode;
+  answered = true;
 }
 
-/** Last line of defense: still fail closed in the agent's format. */
-function crashed(): void {
-  emit(
-    formatVerdict(dialect, {
-      decision: "deny",
-      reason: "Guardian hook crashed. Nothing ran.",
-    }),
-  );
-  // Exit now: whatever crashed may keep the process alive past the
-  // agent's hook timeout, where the call would run.
-  process.exit(process.exitCode ?? 2);
-}
-
-async function main(argv: readonly string[]): Promise<void> {
+/**
+ * The command. Run it through `runFailClosed` (the `guardian-hook` command,
+ * dist/cli.js, does), which turns a crash into a block.
+ */
+export async function main(argv: readonly string[]): Promise<void> {
   const parsed = parseArgs(argv, process.env);
-  dialect = parsed.dialect;
+  const dialect = parsed.dialect;
   const [command, ...rest] = parsed.rest;
   if (command === "setup") {
     process.stdout.write(`${setupText(dialect)}\n`);
     return;
   }
   if (command === "classify") {
-    process.stdout.write(`${classifyCommand(rest.join(" "))}\n`);
+    const sensitive = sensitiveConfigFromEnv(process.env);
+    process.stdout.write(`${classifyCommand(rest.join(" "), { sensitive })}\n`);
     return;
   }
   if (command === "--help" || command === "-h") {
@@ -145,11 +155,19 @@ async function main(argv: readonly string[]): Promise<void> {
   setTimeout(() => process.exit(process.exitCode ?? 0), 250).unref();
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  /guardian-hook|hook[\\/]dist[\\/]index\.js$/.test(process.argv[1]);
-if (invokedDirectly) {
-  process.on("uncaughtException", crashed);
-  process.on("unhandledRejection", crashed);
-  main(process.argv.slice(2)).catch(crashed);
+/** Run as `node …/dist/index.js` (older setups): this file is the program. */
+function isProgram(): boolean {
+  try {
+    return (
+      process.argv[1] !== undefined &&
+      realpathSync(process.argv[1]) ===
+        realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isProgram()) {
+  runFailClosed(async () => ({ main, hookAnswered }));
 }

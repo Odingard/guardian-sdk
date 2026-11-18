@@ -1,56 +1,152 @@
 import type { GuardianClient } from "@odingard/guardian-sdk";
 
+import {
+  CANCEL_TOOL,
+  PENDING_TOOL,
+  cancelHeld,
+  heldRequestTools,
+  listHeld,
+} from "./held.js";
+
+/** The tool that fetches Guardian's records for a request id. */
+export const RECORD_TOOL = "guardian_record";
+/**
+ * Earlier name of {@link RECORD_TOOL}. Not listed, still callable, so
+ * clients that call it keep working.
+ */
+export const LEGACY_RECORD_TOOL = "guardian_receipt";
+
+/** Description of a `requestId` argument, shared by the tools that take one. */
+const REQUEST_ID_FORMAT = "Starts with req_.";
+
 export const TOOLS = [
   {
     name: "guardian_invoke_tool",
+    title: "Run a tool through Guardian",
     description:
-      "Propose a tool invocation to Guardian. ALLOW executes immediately and " +
-      "returns the execution receipt; ASK is held for human approval (call " +
-      "guardian_claim with the returned requestId after the human approves); " +
-      "DENY refuses the action with a reason code.",
+      "Run a tool registered on a Guardian connection, instead of calling it " +
+      "directly. Guardian's rules decide ALLOW, ASK or DENY before anything " +
+      "runs. ALLOW runs the tool at once (it can change the target system) " +
+      "and returns the decision, requestId and execution record. ASK runs " +
+      "nothing and returns a requestId: wait for the person to approve it in " +
+      "Guardian, then call guardian_claim. DENY, or Guardian unreachable " +
+      "(reasonCode SERVICE_UNAVAILABLE), runs nothing; each call is a new " +
+      "request, so after an unknown outcome check guardian_record before " +
+      "calling again.",
     inputSchema: {
       type: "object",
       properties: {
-        toolName: { type: "string", description: "Registered tool name." },
+        toolName: {
+          type: "string",
+          description:
+            "Name of the tool as registered on the Guardian connection, for " +
+            'example "send_email". Lowercase letters and digits joined by ' +
+            ". _ or -, at most 64 characters.",
+          minLength: 1,
+          maxLength: 64,
+          pattern: "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+        },
         arguments: {
           type: "object",
-          description: "Arguments the tool would run with.",
+          description:
+            "The tool's own input, as the JSON object the tool takes " +
+            "(at most 16,384 bytes of JSON, UTF-8). Guardian decides on these exact " +
+            "arguments, and an approved call runs with them unchanged. " +
+            "Defaults to {}.",
           additionalProperties: true,
         },
         connectionId: {
           type: "string",
           description:
-            "Tool connection id. Defaults to GUARDIAN_CONNECTION_ID.",
+            "Id of the Guardian connection the tool is registered on " +
+            "(starts with pcn_), as shown in the Guardian console. Optional " +
+            "when the server sets GUARDIAN_CONNECTION_ID; required otherwise.",
+          pattern: "^pcn_[A-Za-z0-9][A-Za-z0-9_-]{7,119}$",
         },
         purpose: {
           type: "string",
-          description: "Human-readable reason for this action.",
+          description:
+            "Short plain-language reason for this action, recorded with the " +
+            "request. At most 1,024 characters.",
+          maxLength: 1024,
         },
       },
       required: ["toolName"],
     },
+    annotations: {
+      title: "Run a tool through Guardian",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
   },
   {
     name: "guardian_claim",
+    title: "Run an approved request",
     description:
-      "Collect the capability for a request that was held as ASK and approved " +
-      "by the human, then execute it and return the receipt.",
+      "Run a request that guardian_invoke_tool held as ASK, once the person " +
+      "has approved it in Guardian. Guardian issues the capability and runs " +
+      "the approved call with its original arguments (it can change the " +
+      "target system), then returns ALLOW with the execution record. Before " +
+      "approval it returns ASK again and runs nothing; a denied, expired or " +
+      "unknown requestId returns DENY with a reasonCode; Guardian unreachable " +
+      "fails closed (SERVICE_UNAVAILABLE) and can be retried. An approval is " +
+      "used once: claiming the same requestId again does not run the call a " +
+      "second time.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId that guardian_invoke_tool returned with decision " +
+            `ASK. ${REQUEST_ID_FORMAT}`,
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
+    },
+    annotations: {
+      title: "Run an approved request",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
     },
   },
   {
-    name: "guardian_receipt",
+    name: RECORD_TOOL,
+    title: "Get the records for a request",
     description:
-      "Fetch the machine-readable evidence receipts for a request id.",
+      "Look up the evidence records Guardian holds for one request, to see " +
+      "what was decided and whether the call ran. It changes nothing and " +
+      "runs no tool, so calling it again is safe. Returns the requestId and its " +
+      "list of records; an unknown requestId, or Guardian unreachable, " +
+      "returns ok: false with a reasonCode. Use it after an unknown or " +
+      "unclear outcome, before trying a call again.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId of an earlier call, from guardian_invoke_tool or " +
+            `guardian_claim. ${REQUEST_ID_FORMAT}`,
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
     },
+    annotations: {
+      title: "Get the records for a request",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
+  ...heldRequestTools("dispatch"),
 ];
 
 export type DispatchOptions = Readonly<{
@@ -79,8 +175,7 @@ function jsonError(payload: unknown): ToolResult {
   return { ...jsonResult(payload), isError: true };
 }
 
-const CHECK_FIRST =
-  "Call guardian_receipt with this requestId, or check the target system, before retrying.";
+const CHECK_FIRST = `Call ${RECORD_TOOL} with this requestId, or check the target system, before retrying.`;
 
 function denied(
   reasonCode: string | undefined,
@@ -104,10 +199,12 @@ async function requestAndExecute(
 ): Promise<ToolResult> {
   if (!result.ok) {
     // A held ASK is reported as APPROVAL_REQUIRED with its requestId
-    // (guardian-sdk >= 0.2.0); keep it resumable. Anything else is DENY.
+    // (guardian-sdk >= 0.2.0), and a claim made before the person approves
+    // as APPROVAL_PENDING; keep both resumable. Anything else is DENY.
     const heldRequestId = (result as { requestId?: unknown }).requestId;
     if (
-      result.reasonCode === "APPROVAL_REQUIRED" &&
+      (result.reasonCode === "APPROVAL_REQUIRED" ||
+        result.reasonCode === "APPROVAL_PENDING") &&
       typeof heldRequestId === "string" &&
       heldRequestId.length > 0
     ) {
@@ -157,7 +254,7 @@ async function requestAndExecute(
         outcome: "not-done",
         receipt: executed.receipt,
         message:
-          "Guardian did not send the call (receipt status not-sent). It was not done.",
+          "Guardian did not send the call (record status not-sent). It was not done.",
       });
     }
     return jsonError({
@@ -165,7 +262,7 @@ async function requestAndExecute(
       requestId: result.requestId,
       outcome: "unknown",
       receipt: executed.receipt,
-      message: `The outcome is unknown (receipt status ${typeof status === "string" ? status : "missing"}). The call may have been done. ${CHECK_FIRST}`,
+      message: `The outcome is unknown (record status ${typeof status === "string" ? status : "missing"}). The call may have been done. ${CHECK_FIRST}`,
     });
   }
   if (result.decision === "ASK") {
@@ -233,7 +330,7 @@ export async function handleToolCall(
     return requestAndExecute(client, result);
   }
 
-  if (name === "guardian_receipt") {
+  if (name === RECORD_TOOL || name === LEGACY_RECORD_TOOL) {
     const requestId = arguments_.requestId;
     if (typeof requestId !== "string" || requestId.length === 0) {
       return errorResult("requestId is required");
@@ -245,6 +342,10 @@ export async function handleToolCall(
         : { ok: false, reasonCode: result.reasonCode },
     );
   }
+
+  if (name === PENDING_TOOL) return listHeld(client, arguments_);
+
+  if (name === CANCEL_TOOL) return cancelHeld(client, arguments_);
 
   return errorResult(`unknown tool: ${name}`);
 }

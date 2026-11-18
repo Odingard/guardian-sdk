@@ -6,7 +6,6 @@
 import { createGuardianClient } from "@odingard/guardian-sdk";
 
 import {
-  classifyCommand,
   EditPinRefused,
   governedCall,
   HOOK_TOOLS,
@@ -15,6 +14,11 @@ import {
   type HookToolName,
 } from "./classify.js";
 import { decide, type HookVerdict } from "./decide.js";
+import {
+  SensitiveConfigError,
+  sensitiveConfigFromEnv,
+  type SensitiveConfig,
+} from "./sensitive.js";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -69,6 +73,19 @@ export function formatVerdict(
   if (verdict === null) {
     return { stdout: "", stderr: "", exitCode: 0, verdict };
   }
+  if (verdict.decision === "watched") {
+    // Watch mode: no permission decision, so the agent's own permissions
+    // apply. Claude Code shows the reason to the person.
+    return {
+      stdout:
+        dialect === "claude-code"
+          ? JSON.stringify({ systemMessage: verdict.reason })
+          : "",
+      stderr: "",
+      exitCode: 0,
+      verdict,
+    };
+  }
   if (dialect === "claude-code") {
     return {
       stdout: claudeCodeOutput(verdict),
@@ -100,7 +117,8 @@ export function claudeCodeOutput(verdict: HookVerdict): string {
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: verdict.decision,
+      // Only an allow allows; anything else given here denies.
+      permissionDecision: verdict.decision === "allow" ? "allow" : "deny",
       permissionDecisionReason: verdict.reason,
     },
   });
@@ -110,12 +128,16 @@ export const SETTINGS_SNIPPET = {
   hooks: {
     PreToolUse: [
       {
-        matcher: "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*",
+        matcher:
+          "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read|NotebookRead|Grep|Glob|LS|mcp__.*",
         hooks: [
           {
             type: "command",
             command: "npx -y @odingard/guardian-hook",
             timeout: 600,
+            // Claude Code v2.1.295+: a hook that cannot start or times out
+            // blocks the call too (without it, the call runs).
+            onFailure: "block",
           },
         ],
       },
@@ -164,12 +186,21 @@ export const DSH_HOOKS_SNIPPET = {
     PreToolUse: [
       {
         matcher:
-          "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch)$|^mcp__.*",
+          "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|web_search|read|read_image|grep|glob|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read|NotebookRead|Grep|Glob|LS)$|^mcp__.*",
         hooks: [{ type: "command", command: DSH_HOOK_COMMAND, timeout: 600 }],
       },
     ],
   },
 };
+
+/**
+ * Watch mode (opt-in): GUARDIAN_HOOK_WATCH_MODE=on. Anything else is off,
+ * and a call Guardian would have held or denied while the agent is
+ * watched is denied (WATCHED_NOT_RUN).
+ */
+export function watchModeFromEnv(env: Env): boolean {
+  return env.GUARDIAN_HOOK_WATCH_MODE?.trim() === "on";
+}
 
 /** Which connection a tool's request goes to (modes are per connection). */
 export function connectionFor(
@@ -198,7 +229,7 @@ export function setupText(dialect: Dialect = "claude-code"): string {
     "      (`npx @odingard/guardian-mcp tools -- <server>` lists them).",
     "",
     "2. Agents → your coding agent:",
-    "   - set Allow on (a) and Ask me first on (b);",
+    "   - set Allow on (a) and Ask me on (b);",
     "   - on each of the two connection cards, type every tool name above into",
     '     "Allow a tool by name" and press Allow tool (once per tool).',
     "     Without this step every call is denied as INVALID_REQUEST.",
@@ -221,6 +252,8 @@ function agentSteps(dialect: Dialect): string[] {
       "   `codex exec --dangerously-bypass-hook-trust ...`. Untrusted hooks are skipped.",
       "",
       "Governed: Bash (shell and unified exec_command), apply_patch file edits, MCP tools.",
+      "Codex reads files through Bash: a command that names a sensitive file (.env,",
+      "keys, cloud credentials) goes to shell_destructive (Ask).",
       "NOT governed: write_stdin. Codex runs no hook when it types into an open",
       "exec_command session, so anything typed there skips Guardian. Starting an",
       "interactive shell, interpreter or ssh session is routed to shell_session (Ask);",
@@ -245,13 +278,16 @@ function agentSteps(dialect: Dialect): string[] {
       "         name: '@deepseek-ai/dsh-hooks-claude-code'",
       "         config: { configPath: /data/.dsh/guardian-hooks.json, defaultTimeoutMs: 600000 }",
       "",
-      "Governed: bash, pwsh, terminal_send, write, edit, apply_patch, str_replace_editor",
-      "(not view), web_fetch, MCP tools. The matcher decides whether the hook runs at",
-      "all: a tool it does not name is not governed. NOT governed: every other dsh tool,",
-      "including run_code itself, subagent, workflow, plugin_manager and",
-      "load_workspace_dependencies (install packages), stagehand_act/stagehand_navigate",
-      "(browser actions), send_message, spawn_teammate, team_task_*, job_*, schedule_*,",
-      "skill, lsp, propose_action, terminal_open, web_search, read/glob/grep.",
+      "Governed: bash, pwsh, terminal_send, write, edit, apply_patch, str_replace_editor,",
+      "web_fetch, web_search, MCP tools. read, read_image, grep, glob and",
+      "str_replace_editor view of a sensitive file (.env, keys, cloud credentials) go",
+      "to shell_destructive (Ask); other reads get no opinion. The matcher decides",
+      "whether the hook runs at all: a tool it does not name is not governed. NOT",
+      "governed: every other dsh tool, including run_code itself, subagent, workflow,",
+      "plugin_manager and load_workspace_dependencies (install packages),",
+      "stagehand_act/stagehand_navigate (browser actions), send_message,",
+      "spawn_teammate, team_task_*, job_*, schedule_*, skill, lsp, propose_action,",
+      "terminal_open.",
       "A missing or unparseable hooks file: the bridge registers no hooks and nothing",
       "is governed. The bridge lets a call run if the hook crashes; the || above and",
       "the hook's own 540 s deadline turn those cases into a deny.",
@@ -261,7 +297,14 @@ function agentSteps(dialect: Dialect): string[] {
     "4. Add this to .claude/settings.json (project) or ~/.claude/settings.json (all projects):",
     JSON.stringify(SETTINGS_SNIPPET, null, 2),
     "",
-    "Read-only tools (Read, Grep, Glob, LS, WebSearch) are not routed through Guardian.",
+    'onFailure "block" (Claude Code v2.1.295 or later) blocks the call when the hook',
+    "cannot start at all (no Node, npx cannot fetch the package) or times out. A hook",
+    "that starts but fails to load or crashes blocks the call either way (exit 2).",
+    "",
+    "Read, NotebookRead, Grep, Glob and LS of a sensitive file (.env, keys, cloud",
+    "credentials; GUARDIAN_HOOK_SENSITIVE_PATHS adds patterns) go to shell_destructive",
+    "(Ask); other reads get no opinion and are not sent to Guardian. WebSearch is",
+    "web_fetch.",
   ];
 }
 
@@ -366,9 +409,42 @@ async function evaluate(
         : {},
     ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
   };
-  const classified = governedCall(toolCall);
+  // The owner's sensitive-file settings. Invalid settings deny every call.
+  let sensitive: SensitiveConfig;
+  try {
+    sensitive = sensitiveConfigFromEnv(env);
+  } catch (err) {
+    const detail =
+      err instanceof SensitiveConfigError
+        ? err.message
+        : "the sensitive-file settings could not be read";
+    return failClosed(`${detail}. Nothing ran.`);
+  }
+  let classified: ReturnType<typeof governedCall>;
+  try {
+    classified = governedCall(toolCall, { sensitive });
+  } catch {
+    // Fail closed: a call the hook cannot classify does not run.
+    return failClosed(
+      `could not check ${toolCall.tool} against the sensitive-file patterns. Nothing ran.`,
+    );
+  }
   // Not a governed tool: no opinion; the agent's own permissions apply.
   if (classified === null) return null;
+  if (sensitive.mode === "deny") {
+    const hit = classified.sensitive?.[0];
+    if (hit) {
+      return failClosed(
+        `${hit.path} is a sensitive file (${hit.pattern}), and GUARDIAN_HOOK_SENSITIVE_MODE=deny blocks it. Nothing ran.`,
+      );
+    }
+    const env = classified.sensitiveEnv?.[0];
+    if (env) {
+      return failClosed(
+        `${env.text} can print the agent's environment (${env.reason}), and GUARDIAN_HOOK_SENSITIVE_MODE=deny blocks it. Nothing ran.`,
+      );
+    }
+  }
   // Edit-type tools: pin the target's current contents before anything is
   // proposed. A failure denies the call (fail closed).
   let call: typeof classified;
@@ -421,6 +497,10 @@ async function evaluate(
     approvalTimeoutMs,
     requestTtlMs: REQUEST_TTL_MS,
     pollIntervalMs: 2_000,
+    // Watch mode is opt-in: with GUARDIAN_HOOK_WATCH_MODE=on, a call
+    // Guardian would have held or denied while the agent is watched is left
+    // to the agent's own permissions (the agent runs every call itself).
+    watchAware: watchModeFromEnv(env),
     ...(deps.wait ? { wait: deps.wait } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.log ? { log: deps.log } : {}),

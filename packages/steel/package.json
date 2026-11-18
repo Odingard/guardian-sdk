@@ -1,7 +1,7 @@
 {
   "name": "@odingard/guardian-steel",
   "version": "0.1.2",
-  "description": "Guardian for Steel — govern a Steel browser agent's checkout through Guardian: ALLOW/ASK/DENY before the order is placed, a portable receipt after.",
+  "description": "Guardian for Steel — govern a Steel browser agent's checkout through Guardian: ALLOW/ASK/DENY before the order is placed, a portable record after.",
   "license": "Apache-2.0",
   "author": "Odingard Security LLC",
   "type": "module",
@@ -33,8 +33,8 @@
   "devDependencies": {
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.3",
-    "vitest": "^5.1.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1",
     "zod": "^4.6.7"
   },
   "engines": {

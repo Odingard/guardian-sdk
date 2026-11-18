@@ -394,7 +394,7 @@ describe("proxy: a second claim of the same requestId", () => {
     });
     expect((r as { isError?: boolean }).isError).toBe(true);
     expect(text(r).error).toMatch(/this claim forwarded nothing/);
-    expect(text(r).error).toMatch(/guardian_receipt/);
+    expect(text(r).error).toMatch(/guardian_record/);
   });
 
   it("remembers a bounded number of claims", () => {

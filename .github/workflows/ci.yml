@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -25,6 +25,8 @@ jobs:
         run: |
           node scripts/check-skill.mjs
           node --test scripts/check-skill.test.mjs
+      - name: SDK types check in a TypeScript 5 project (skipLibCheck off)
+        run: node scripts/check-sdk-types.mjs
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |
@@ -50,5 +52,12 @@ jobs:
         if: matrix.python-version == '3.13'
         run: pip install "agent-framework-core==1.26.0" "semantic-kernel==1.47.0"
       - run: python -m pytest -q
+      - name: Build and check Python distributions
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m pip install build
+          python -m unittest discover -s scripts -p 'test_*.py'
+          python -m build
+          python scripts/check-dist.py
       - name: Python example runs (local demo policy)
         run: python ../../examples/python/invoice_agent.py > /dev/null

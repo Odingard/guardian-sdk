@@ -1,6 +1,70 @@
 # Changelog
 
-## Python odingard-guardian (unreleased)
+## guardian-mcp 0.6.0, unreleased
+
+### Added: list and withdraw held requests
+
+- **`@odingard/guardian-mcp`**: two tools, in `guardian-mcp` and in `guardian-mcp proxy`.
+  - `guardian_pending` ("List my held requests") lists this agent's own requests that Guardian holds for a person's approval (ASK), from newest to oldest: `requestId`, `action`, `toolName`, `purpose`, `createdAtEpochMs` and `expiresAtEpochMs`, paged with `limit` (1 to 100, default 20) and `before`. It never shows other agents' requests or anything about the person or the account. In the proxy, each entry also says whether this proxy holds the call (`heldByThisProxy`). Annotations: `readOnlyHint`, `idempotentHint`.
+  - `guardian_cancel` ("Withdraw a held request") withdraws one of this agent's own held requests: the person no longer sees it, and it can never be approved, claimed or run. It takes authority away and runs nothing. Calling it again gives the same `withdrawn` answer. A request the person already decided, or one that expired, answers `ALREADY_DECIDED` with its state, and nothing changes (an approved request can still be claimed); an unknown request, or another agent's, answers `NOT_FOUND`. If the person approves at the same moment, exactly one of the two takes effect. In the proxy it also drops the held call, so a later `guardian_claim` forwards nothing, and the same call made again is proposed as a new request. If Guardian cannot be reached or its answer is lost, it answers `SERVICE_UNAVAILABLE` with `outcomeUnknown: true`: the request may or may not have been withdrawn, and calling it again with the same `requestId` is safe; the proxy keeps the held call until Guardian confirms the withdrawal. Annotations: `destructiveHint` (it cannot be undone), `idempotentHint`.
+  - An upstream tool named `guardian_pending` or `guardian_cancel` is hidden by the proxy, like the other governance tool names.
+- **`@odingard/guardian-sdk`**: `client.pending({ limit?, before? })` and `client.withdraw(requestId)`, with the types `GuardianHeldRequest`, `GuardianPendingResult` and `GuardianWithdrawResult`. Both are optional members of the `GuardianClient` interface, so a custom client written for an earlier version still type-checks. A listing with an entry the client cannot read, or a withdrawal answer that is not a clear `withdrawn`, is reported as `MALFORMED_RESPONSE`. When no clear answer to a withdrawal comes back (no answer, a 5xx, an unreadable answer), the result has `outcomeUnknown: true`: the request may or may not have been withdrawn, and withdrawing it again with the same `requestId` is safe. A refusal Guardian answers (such as `NOT_FOUND` or `ALREADY_DECIDED`) means nothing changed.
+- **Python**: `GuardianClient.pending(limit=None, before=None)` and `GuardianClient.withdraw(request_id)`, and the same on `AsyncGuardianClient`, with `HeldRequest`, `PendingResult` and `WithdrawResult` (`outcome_unknown=True` when no clear answer to a withdrawal comes back, as in TypeScript).
+- guardian-mcp 0.6.0 needs the `@odingard/guardian-sdk` release that adds these methods; with an earlier SDK both tools answer `NOT_SUPPORTED` and change nothing.
+
+## guardian-mcp 0.5.2, released 2026-11-18
+
+### Changed: clearer tool definitions
+
+- **`@odingard/guardian-mcp`**: `guardian_invoke_tool`, `guardian_claim` and `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`, describe what they do, what they return, their errors, whether calling them again is safe, and how they fit together (invoke; on ASK, wait for the person to approve; claim; record).
+  - Every parameter has a description, including `requestId` on `guardian_claim` and `guardian_record`. `toolName` and `connectionId` on `guardian_invoke_tool` also list the format Guardian accepts (`pattern`, `maxLength`), and `purpose` its maximum length.
+  - Each tool has a `title` and MCP tool annotations: `guardian_invoke_tool` and `guardian_claim` set `destructiveHint` and `openWorldHint`; `guardian_record` sets `readOnlyHint` and `idempotentHint`.
+  - Unchanged: the tool names, the hidden earlier name of `guardian_record`, and the JSON the tools return.
+
+### Fixed: claiming before the person approves stays held
+
+- **`@odingard/guardian-mcp`**: in `guardian-mcp`, a `guardian_claim` made before the person approves (`APPROVAL_PENDING`) answers ASK with the `requestId`, so it can be claimed again after approval. Before, it was reported as DENY with "Do not retry the same call". Nothing runs in either case. `guardian-mcp proxy` already kept such a call held.
+
+### Changed: the Ask mode label matches the console
+
+- **`@odingard/guardian-mcp`**: `guardian-mcp tools` prints the suggested Ask mode as "Ask me", as in the console. The `--json` output is unchanged (`"suggestedMode": "ask"`).
+
+## guardian-mcp 0.5.1, released 2026-11-18
+
+### Changed: the records tool is listed as `guardian_record`
+
+- **`@odingard/guardian-mcp`**: the tool that fetches the evidence records for a request id is listed as `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`. The old name, `guardian_receipt`, is no longer listed but still works and gives the same answer, so existing clients keep running. Tool descriptions and messages say "record", and name `guardian_record` where they named the old tool.
+  - In `proxy`, an upstream tool named `guardian_record` is hidden, like `guardian_claim` and `guardian_receipt`.
+  - Unchanged: the JSON the tools return, including its field names.
+- The package description and the MCP Registry entry (`packages/mcp/server.json`) are updated. The entry uses the current registry schema and adds a title, website and icon.
+
+## guardian-hook 0.4.4, released 2026-11-18
+
+### Added: reads of sensitive files are governed
+
+- **`@odingard/guardian-hook`**: the Claude Code matcher now also sends `Read`, `NotebookRead`, `Grep`, `Glob`, `LS` and `WebSearch` to the hook, and the DeepSeek Harness matcher sends `read`, `read_image`, `grep`, `glob` and `web_search`. Update the matcher in your settings to get this.
+  - A read of a sensitive file goes to `shell_destructive` (Ask tier) with `touches: "sensitive-file"`, the path and the pattern it matched. So does a shell command that names one (`cat .env`, `cp ~/.ssh/id_rsa …`, `base64 .env`, `sh -c 'cat .env'`, a glob or brace form such as `.en?` or `.{e,x}nv`, a symlink to one), under Claude Code, Codex and DeepSeek Harness. A read of an ordinary file gets no opinion and nothing is sent to Guardian.
+  - Default patterns include `.env*` (except `.env.example`, `.env.sample`, `.env.template`), `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `*secret*`, `.npmrc`, `.netrc` and `.git-credentials`; the README lists them all. Paths are checked as written, as absolute paths (`..` resolved) and with symlinks followed, ignoring case.
+  - `GUARDIAN_HOOK_SENSITIVE_PATHS` adds patterns or exempts files (`!pattern`); `GUARDIAN_HOOK_SENSITIVE_MODE=deny` makes the hook refuse sensitive reads itself. Invalid settings, a read without a path, and an error while checking a call deny the call.
+  - `WebSearch` (and dsh `web_search`) is `web_fetch`, with the query.
+  - Grep (and dsh `grep`) checks the files under the searched folder that its filter selects, or every file there when it has no filter; a Grep over a folder that holds a sensitive file goes to the Ask tier.
+  - Not seen: a shell search over a folder (`grep -r`, `rg`) can read a sensitive file inside it, and a path built at run time is not checked.
+
+### Fixed: commands that can print the agent's environment ask first
+
+- **`@odingard/guardian-hook`**: a shell command that can print the agent's environment, which holds `GUARDIAN_AGENT_CREDENTIAL`, goes to `shell_destructive` (Ask tier) with `touches: "sensitive-env"` and what it reads, and `GUARDIAN_HOOK_SENSITIVE_MODE=deny` refuses it: `env` and `printenv` with nothing to run, `export -p`, `set`, `declare -x`, `ps e`, `/proc/<pid>/environ`, the PowerShell `env:` drive, any expansion of a `GUARDIAN_*` variable, a secret variable (`*_TOKEN`, `*_SECRET`, `*_KEY`, `*_PASSWORD`, `AWS_*`) expanded in `echo`, `printf`, `cat`, a here-document, `sh -c` or interpreter code, and interpreter code that reads the environment (`python -c 'import os;print(os.environ)'`, `node -e 'console.log(process.env)'`). Setting a variable to run a command (`env FOO=bar cmd`) stays `shell`.
+
+## guardian-hook 0.4.3, released 2026-11-18
+
+### Fixed: a hook that fails to start or crashes blocks the action
+
+- **`@odingard/guardian-hook`**: guardian-hook now blocks the action if the hook fails to start or crashes. Before, a hook that could not load (for example a missing or unbuilt `@odingard/guardian-sdk`) exited with code 1, which Claude Code treats as a non-blocking error, so the action ran. (The documented Codex and DeepSeek Harness commands already turned that exit into a block with `|| … exit 2`.)
+  - The `guardian-hook` command is now `dist/cli.js`, an entry with no dependencies that loads the hook with a dynamic import. A load failure (missing module, syntax error, a module that throws), an uncaught exception, an unhandled rejection, a hook that ends without an answer, an early `process.exit` and SIGTERM/SIGINT/SIGHUP all end the same way for every agent: the reason on stderr (`Guardian hook failed to start (…)` or `Guardian hook crashed (…)`, then `Nothing ran.`), the deny JSON on stdout, exit code 2. An answer already given is kept.
+  - The Claude Code settings the hook prints (`guardian-hook setup`) and the README add `"onFailure": "block"` (Claude Code v2.1.295 or later), so Claude Code also blocks the action when the hook cannot start at all or times out.
+  - New exports `main` and `hookAnswered`. Running `node …/dist/index.js` directly still works; use `guardian-hook` so that a hook that cannot load still blocks.
+  - Unchanged: an unreachable Guardian, a Guardian that does not answer before the hook's deadline, and missing configuration are denied, as before.
+
+## Python odingard-guardian 0.5.0, released 2026-11-18
 
 ### Added: Microsoft Agent Framework and Semantic Kernel; dollar amounts on tools
 
@@ -17,13 +81,17 @@
   - Before signing, the guard reads the open checkout mandate again and refuses (`TERMS_CHANGED`) if a `constraintDigest` or the mandate differs from what was approved. More than 64 acceptable items in all is refused (`TOO_MANY_ITEMS`).
   - A request outside Guardian's request limits, or one the Guardian SDK refuses before sending, is refused as `REQUEST_INVALID` with the reason. Before, it was reported as `GUARDIAN_UNREACHABLE`, which now means only that Guardian could not be reached.
 
-## Messages (unreleased)
+## guardian-hook 0.4.2 / guardian-openclaw 0.1.3 / Python 0.5.0, released 2026-11-18
 
 - **`@odingard/guardian-hook`**, **`@odingard/guardian-openclaw`** (which uses the hook's decision code) and the **Python Hermes plugin**: a held call now logs `… is held for approval (request req_…). Approve it in the Guardian console.`
 - **Python `odingard-guardian`**: the missing-credential error names the current prefix, `gak_…`.
 
 ## Docs (unreleased)
 
+- **Ask mode label.** `guardian-hook setup` and `python -m odingard_guardian.hermes` print the Ask mode as "Ask me", as in the console, and the guardian-hook, guardian-openclaw and Hermes READMEs say the same. Mode values are unchanged. They ship with each package's next release.
+- **"Signed record" in the READMEs.** The guardian-ap2 README, the agent and payment example READMEs and CONTRIBUTING say "signed record" for what Guardian signs, and "result" for AP2 merchant and processor results. Identifiers, API paths, JSON fields, file names and the `greceipt.v1` format are unchanged.
+- **Package descriptions.** The descriptions of `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-steel` and `odingard-guardian` say "record". They ship with each package's next release.
+- **Listings.** `glama.json` names the maintainers of the Glama listing. `.github/workflows/publish-mcp.yml` publishes `packages/mcp/server.json` to the MCP Registry when an `mcp-v<version>` tag is pushed.
 - **Dependency maintenance.** Dependabot checks npm workspaces, the Python package and GitHub Actions weekly, grouping minor/patch updates per ecosystem with a five-PR limit each.
 - **Sample decision record.** `examples/receipts/sample.greceipt.json`, a signed `greceipt.v1` record from Guardian, replaces the earlier sample. `examples/verify-receipt.mjs` now verifies it by default against the keys published by `https://guardian-api.odingard.com`. The Python receipt fixtures are regenerated from it. No code change.
 - **SDK test fixtures.** The TypeScript SDK's receipt tests use the same sample record and its published verification key. Tests only; no code change.

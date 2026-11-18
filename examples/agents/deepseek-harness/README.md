@@ -10,7 +10,7 @@ tools the matcher in `guardian-hooks.json` names, so keep it as shipped:
 - everyday commands and file edits run under **Allow**;
 - deploys, destructive commands and pushes wait until a person approves;
 - anything denied, or not approved within 5 minutes, does not run;
-- every allowed call leaves a receipt you can verify offline.
+- every allowed call leaves a signed record you can verify offline.
 
 ## See what dsh would receive (no account needed)
 
@@ -54,9 +54,13 @@ names unchanged; the matcher also lists Claude Code's), that the hook's environm
   confirmed live), `subagent`, `workflow`, `ralph`, `plugin_manager` and
   `load_workspace_dependencies` (package installs), `stagehand_act` and
   `stagehand_navigate` (browser actions), `send_message`, `spawn_teammate`,
-  `team_task_*`, `job_*`, `schedule_*`, `skill`, `lsp`, `propose_action`,
-  `terminal_open`, `web_search`, read-only tools. Turn off the ones you do not
-  want in your dsh profile.
+  `team_task_*`, `job_*`, `schedule_*`, `skill`, `lsp`, `propose_action` and
+  `terminal_open`. Turn off the ones you do not want in your dsh profile.
+- Reads of ordinary files: `read`, `read_image`, `grep`, `glob` and
+  `str_replace_editor` `view` reach the hook, which sends a read of a
+  sensitive file (`.env`, keys, cloud credentials) to the Ask tier and has
+  no opinion on other reads. A `grep` over a folder can still read a
+  sensitive file inside it.
 - A missing or unparseable `guardian-hooks.json`: the bridge registers no
   hooks and nothing is governed. Check with a deny after every change.
 - An Allow-tier `write`/`edit`/`apply_patch` can rewrite

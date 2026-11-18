@@ -33,6 +33,14 @@ import {
   type GuardianAdapterOptions,
 } from "@odingard/guardian-sdk";
 
+import {
+  CANCEL_TOOL,
+  PENDING_TOOL,
+  cancelHeld,
+  heldRequestTools,
+  listHeld,
+} from "./held.js";
+
 export type UpstreamTool = {
   name: string;
   description?: string;
@@ -147,12 +155,14 @@ type ToolResult = {
 };
 
 const CLAIM_TOOL = "guardian_claim";
-const RECEIPT_TOOL = "guardian_receipt";
+const RECORD_TOOL = "guardian_record";
+/** Earlier name of RECORD_TOOL: not listed, still callable. */
+const LEGACY_RECORD_TOOL = "guardian_receipt";
 
 /**
  * `_meta` key under which an allowed call's result carries Guardian's
- * requestId (`{ requestId }`), so the client can fetch the receipt with
- * `guardian_receipt`. The upstream's `content` is left untouched.
+ * requestId (`{ requestId }`), so the client can fetch the record with
+ * `guardian_record`. The upstream's `content` is left untouched.
  */
 export const GUARDIAN_RESULT_META = "com.odingard/guardian";
 
@@ -178,27 +188,80 @@ function unreachableResult(toolName: string, requestId?: string): ToolResult {
 export const PROXY_GOVERNANCE_TOOLS: UpstreamTool[] = [
   {
     name: CLAIM_TOOL,
+    title: "Forward an approved call",
     description:
-      "After a human approves a held (ASK) tool call, pass its requestId " +
-      "here. Guardian issues the capability and the proxy forwards exactly " +
-      "the held call — same tool, same arguments — then returns its result.",
+      "Forward a tool call that this proxy held as ASK, once the person has " +
+      "approved it in Guardian. The proxy sends exactly the held call (same " +
+      "tool, same arguments) to the upstream server and returns that " +
+      "server's result; this can change the target system. Before approval " +
+      "it returns ASK and sends nothing; a denied or expired approval returns " +
+      "DENY; a requestId this proxy does not hold (unknown, or from before a " +
+      "proxy restart) sends nothing. Guardian unreachable fails closed " +
+      "(SERVICE_UNAVAILABLE) and keeps the call held for a retry. Claiming " +
+      "the same requestId again does not forward the call a second time; " +
+      "for a held setup step (registering or switching on a tool) it " +
+      "completes the step, then retry the original call.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId from a governed tool call that returned decision " +
+            "ASK in this proxy session. Starts with req_.",
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
+    },
+    annotations: {
+      title: "Forward an approved call",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
     },
   },
   {
-    name: RECEIPT_TOOL,
+    name: RECORD_TOOL,
+    title: "Get the records for a request",
     description:
-      "Fetch the machine-readable evidence receipts for a request id.",
+      "Look up the evidence records Guardian holds for one request, to see " +
+      "what was decided and whether the call ran. It changes nothing and " +
+      "forwards no call, so calling it again is safe. Returns the requestId and its " +
+      "list of records; an unknown requestId, or Guardian unreachable, " +
+      "returns ok: false with a reasonCode. Use it after an unknown or " +
+      "unclear outcome, before calling a tool again.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId of an earlier governed call: from a held (ASK) or " +
+            'refused result, or from _meta["com.odingard/guardian"] of an allowed result. ' +
+            "Starts with req_.",
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
     },
+    annotations: {
+      title: "Get the records for a request",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
+  ...heldRequestTools("proxy"),
 ];
+
+/** Names of the proxy's own tools; an upstream tool with one is hidden. */
+const GOVERNANCE_TOOL_NAMES = new Set([
+  ...PROXY_GOVERNANCE_TOOLS.map((tool) => tool.name),
+  LEGACY_RECORD_TOOL,
+]);
 
 function jsonResult(payload: unknown, isError = false): ToolResult {
   return {
@@ -401,8 +464,8 @@ function failure(
         ...(err.outcomeUnknown ? { outcomeUnknown: true } : {}),
         message: err.outcomeUnknown
           ? err.localEffectRan
-            ? `The upstream call ran, but Guardian could not confirm that it was recorded. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
-            : `Guardian could not confirm whether the call completed. It may have run. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
+            ? `The upstream call ran, but Guardian could not confirm that it was recorded. Do not call it again; check this requestId with ${RECORD_TOOL}.`
+            : `Guardian could not confirm whether the call completed. It may have run. Do not call it again; check this requestId with ${RECORD_TOOL}.`
           : err.localEffectRan
             ? "The upstream call ran but Guardian refused to redeem the capability. Do not call it again. Treat this as an incident, not a success."
             : "Guardian could not redeem the capability; the call was not completed.",
@@ -595,7 +658,7 @@ export function createGovernedProxy(
     if (upstreamTools) return upstreamTools;
     const tools = new Map<string, UpstreamTool>();
     for (const tool of await upstream.listTools()) {
-      if (tool.name === CLAIM_TOOL || tool.name === RECEIPT_TOOL) {
+      if (GOVERNANCE_TOOL_NAMES.has(tool.name)) {
         log(
           `guardian-mcp proxy: upstream tool "${tool.name}" collides with a Guardian tool name and is hidden`,
         );
@@ -687,7 +750,7 @@ export function createGovernedProxy(
           toolName: seen.toolName,
           requestId,
           alreadyClaimed: true,
-          message: `This approved call is already being forwarded by an earlier ${CLAIM_TOOL}. Do not propose ${seen.toolName} again; wait, then call ${RECEIPT_TOOL} with this requestId to see what happened.`,
+          message: `This approved call is already being forwarded by an earlier ${CLAIM_TOOL}. Do not propose ${seen.toolName} again; wait, then call ${RECORD_TOOL} with this requestId to see what happened.`,
         },
         true,
       );
@@ -709,6 +772,48 @@ export function createGovernedProxy(
     };
   }
 
+  /** Requests withdrawn through this proxy (bounded, oldest forgotten). */
+  const withdrawnRequests = new Set<string>();
+
+  /**
+   * Forget the SDK's memory of any held call whose request was withdrawn.
+   * Runs on a confirmed withdrawal and again after every governed call, so a
+   * claim that was already waiting when the withdrawal landed cannot put the
+   * withdrawn request back.
+   */
+  function forgetWithdrawnHeld(): void {
+    if (!ctx.heldInvocations || withdrawnRequests.size === 0) return;
+    for (const [key, held] of [...ctx.heldInvocations]) {
+      if (withdrawnRequests.has(held)) ctx.heldInvocations.delete(key);
+    }
+  }
+
+  /**
+   * Guardian confirmed the withdrawal: forget the held call (or held setup
+   * step) and any capability kept for it, so no claim here forwards it, and
+   * the SDK's memory of the held call, so the same call proposed again
+   * becomes a new request instead of claiming the withdrawn one.
+   */
+  function dropHeld(requestId: string): void {
+    withdrawnRequests.add(requestId);
+    while (withdrawnRequests.size > CLAIMED_REQUESTS_LIMIT) {
+      withdrawnRequests.delete(
+        withdrawnRequests.values().next().value as string,
+      );
+    }
+    pendingCalls.delete(requestId);
+    claimedCapabilities.delete(requestId);
+    forgetWithdrawnHeld();
+    const installFor = pendingInstalls.get(requestId);
+    if (installFor !== undefined) {
+      pendingInstalls.delete(requestId);
+      const key = `${options.connectionId}:${installFor}`;
+      if (ctx.heldSetup?.get(key)?.requestId === requestId) {
+        ctx.heldSetup.delete(key);
+      }
+    }
+  }
+
   async function claim(
     requestId: string,
     signal?: AbortSignal,
@@ -726,7 +831,10 @@ export function createGovernedProxy(
       pendingCalls.delete(requestId);
       const putBack = () => {
         claimedRequests.delete(requestId);
-        pendingCalls.set(requestId, held);
+        // Withdrawn while this claim waited: it stays dropped.
+        if (!withdrawnRequests.has(requestId)) {
+          pendingCalls.set(requestId, held);
+        }
       };
       rememberClaim(requestId, { toolName: held.name, state: "forwarding" });
       let claimed: GuardianRequestResult;
@@ -911,7 +1019,7 @@ export function createGovernedProxy(
         requestId,
         error:
           "This proxy holds no call with this requestId, so this claim forwarded nothing. " +
-          `If it was claimed before (in this or an earlier proxy session), the call may already have been forwarded: call ${RECEIPT_TOOL} with this requestId before proposing it again.`,
+          `If it was claimed before (in this or an earlier proxy session), the call may already have been forwarded: call ${RECORD_TOOL} with this requestId before proposing it again.`,
       },
       true,
     );
@@ -950,7 +1058,7 @@ export function createGovernedProxy(
         }
         return claim(requestId, signal);
       }
-      if (name === RECEIPT_TOOL) {
+      if (name === RECORD_TOOL || name === LEGACY_RECORD_TOOL) {
         const requestId = args.requestId;
         if (typeof requestId !== "string" || requestId.length === 0) {
           return jsonResult({ error: "requestId is required" }, true);
@@ -962,6 +1070,17 @@ export function createGovernedProxy(
             : { ok: false, reasonCode: result.reasonCode },
           !result.ok,
         );
+      }
+      if (name === PENDING_TOOL) {
+        return listHeld(
+          options.client,
+          args,
+          (requestId) =>
+            pendingCalls.has(requestId) || pendingInstalls.has(requestId),
+        );
+      }
+      if (name === CANCEL_TOOL) {
+        return cancelHeld(options.client, args, dropHeld);
       }
       let tools: Map<string, UpstreamTool>;
       try {
@@ -994,6 +1113,8 @@ export function createGovernedProxy(
         return toCallResult(name, args, output, call.allowedRequestId());
       } catch (err) {
         return failure(err, name, forwarding);
+      } finally {
+        forgetWithdrawnHeld();
       }
     },
   };

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.24; python_version < '3.10'", "hatchling>=1.33.0; python_version >= '3.10'"]
 build-backend = "hatchling.build"
 
 [project]
 name = "odingard-guardian"
-version = "0.4.0"
-description = "Guardian SDK for Python — Human Authority Infrastructure for Autonomous AI. Deterministic ALLOW/ASK/DENY before your agent's actions run, human approval for ASK, and offline-verifiable receipts."
+version = "0.5.0"
+description = "Guardian SDK for Python — Human Authority Infrastructure for Autonomous AI. Deterministic ALLOW/ASK/DENY before your agent's actions run, human approval for ASK, and offline-verifiable records."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -21,12 +21,12 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "httpx>=0.25,<1",
-  "cryptography>=41",
+  "httpx>=0.28.1,<1",
+  "cryptography>=50.0.2",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-asyncio>=0.23"]
+test = ["pytest>=8; python_version < '3.10'", "pytest>=9.2.0; python_version >= '3.10'", "pytest-asyncio>=0.23; python_version < '3.10'", "pytest-asyncio>=1.5.0; python_version >= '3.10'"]
 # Python 3.11+ (the frameworks' own minimum). Tested with agent-framework-core
 # 1.26.0 and semantic-kernel 1.47.0.
 agent-framework = ["agent-framework-core>=1.26,<2"]
@@ -46,7 +46,7 @@ Issues = "https://github.com/Odingard/guardian-sdk/issues"
 packages = ["src/odingard_guardian"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

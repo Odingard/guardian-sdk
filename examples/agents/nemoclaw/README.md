@@ -8,11 +8,11 @@
 
 **NemoClaw contains the agent. Guardian decides each action.**
 
-| NemoClaw and OpenShell                                                                                                        | Guardian                                                                                                                                                                                |
-| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run the agent in a sandbox, with filesystem and process limits.                                                               | Sees each consequential tool call the OpenClaw plugin is shown (shell commands, file writes, messages, MCP tools…) before it runs.                                                      |
-| Deny network access by default: the sandbox reaches only the hosts its policy lists, and only from the binaries it names.     | Decides it: allow, ask a person, or deny. A person approves in the Guardian console.                                                                                                    |
-| Keep provider credentials outside the sandbox: the agent sees a placeholder, and the proxy swaps in the real value at egress. | Binds the decision to the exact arguments. While the plugin is in place, an allowed call runs once, with the parameters Guardian saw. Each decision leaves a receipt anyone can verify. |
+| NemoClaw and OpenShell                                                                                                        | Guardian                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run the agent in a sandbox, with filesystem and process limits.                                                               | Sees each consequential tool call the OpenClaw plugin is shown (shell commands, file writes, messages, MCP tools…) before it runs.                                                            |
+| Deny network access by default: the sandbox reaches only the hosts its policy lists, and only from the binaries it names.     | Decides it: allow, ask a person, or deny. A person approves in the Guardian console.                                                                                                          |
+| Keep provider credentials outside the sandbox: the agent sees a placeholder, and the proxy swaps in the real value at egress. | Binds the decision to the exact arguments. While the plugin is in place, an allowed call runs once, with the parameters Guardian saw. Each decision leaves a signed record anyone can verify. |
 
 The sandbox decides **where** the agent can connect. Guardian decides **whether** a given action should happen, and leaves a record of who allowed it.
 
@@ -269,9 +269,9 @@ Approve in Guardian, not with OpenClaw's `/approve`. Guardian's decision is the 
 - **Ask for shell commands by name.** OpenClaw's own tools, such as its `ls` tool, reach Guardian as `openclaw.<tool>` names and are denied (`INVALID_REQUEST`) until you add them with **Add tools** and **Allow a tool by name**.
 - **The agent may add a path on its own.** Even when asked for a bare `ls -la`, the agent sometimes adds a path under `/sandbox`, and that call waits for a person. Deny it and ask again; in testing the bare command was allowed on a later try.
 - **Each new request is decided on its own.** After an approved command runs, the agent may retry or check its own work with another command. That is a new request: it can ask you again, and you approve or deny it separately.
-- **The agent's summary can be wrong.** For example, after a follow-up check is denied, the agent may report that the approved command was blocked, even though it ran. It may also call Guardian by another name. The Activity page and the receipt are the record.
+- **The agent's summary can be wrong.** For example, after a follow-up check is denied, the agent may report that the approved command was blocked, even though it ran. It may also call Guardian by another name. The Activity page and the signed record are what count.
 
-### Watch the network and verify receipts
+### Watch the network and verify records
 
 Watch the network side with `openshell logs my-agent --source sandbox`. A Guardian call shows lines like these (each line starts with a timestamp and `[sandbox] [OCSF ] [ocsf]`):
 
@@ -292,13 +292,13 @@ nemoclaw my-agent exec -- node -e 'fetch("https://example.com").then(r=>console.
 
 Each shows as a `DENIED` line in the OpenShell log.
 
-Download a receipt from the console's Activity page and verify it with [`examples/verify-receipt.mjs`](../../verify-receipt.mjs), from a checkout of this repository after `npm ci && npm run build`:
+Download a signed record from the console's Activity page and verify it with [`examples/verify-receipt.mjs`](../../verify-receipt.mjs), from a checkout of this repository after `npm ci && npm run build`:
 
 ```bash
 node examples/verify-receipt.mjs ./receipt.greceipt.json https://guardian-api.odingard.com
 ```
 
-It fetches Guardian's published verification keys from that host, then checks the receipt's signature locally (`"valid":true`) and shows that a copy with one field changed fails (`SIGNATURE_INVALID`). Use the host your receipts came from. A refused call has a receipt too, with decision `DENY` and no execution.
+It fetches Guardian's published verification keys from that host, then checks the record's signature locally (`"valid":true`) and shows that a copy with one field changed fails (`SIGNATURE_INVALID`). Use the host your records came from. A refused call has a signed record too, with decision `DENY` and no execution.
 
 ## Messages you can ignore
 

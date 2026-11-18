@@ -51,7 +51,8 @@ export type GuardianMcpConfig = {
 export const USAGE = `guardian-mcp — route an agent's tool calls through Guardian (ALLOW / ASK / DENY).
 
 Usage:
-  guardian-mcp                               Guardian tools (guardian_invoke_tool, guardian_claim, guardian_receipt)
+  guardian-mcp                               Guardian tools (guardian_invoke_tool, guardian_claim, guardian_record,
+                                             guardian_pending, guardian_cancel)
   guardian-mcp proxy -- <command> [args...]  Govern every tool of an existing stdio MCP server
   guardian-mcp proxy --pin-file <tool>:<arg> [--pin-file ...] -- <command> [args...]
                                              Also pin the file a path argument names: its SHA-256

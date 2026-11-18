@@ -37,7 +37,7 @@ Then grant **only** the wrapped servers through `mcp_bundles`. ZeroClaw
 connects an agent to nothing it was not granted.
 
 Tools appear as `<server>__<tool>`, plus `<server>__guardian_claim` and
-`<server>__guardian_receipt`. When Guardian answers ASK, the result carries a
+`<server>__guardian_record`. When Guardian answers ASK, the result carries a
 `requestId`. After a person approves it in the Guardian console, the model
 calls `<server>__guardian_claim` with that id, and exactly the held call runs
 once. Held calls live in the guardian-mcp process; if ZeroClaw restarts the

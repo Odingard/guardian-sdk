@@ -8,6 +8,8 @@
  * while `terraform apply` waits for a human approval.
  */
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute } from "node:path";
 
 import {
   CONTENT_PIN_INVALID_ARGUMENT,
@@ -16,6 +18,16 @@ import {
   type FileDigest,
 } from "@odingard/guardian-sdk";
 
+import {
+  checkPath,
+  DEFAULT_SENSITIVE,
+  sensitiveInCommand,
+  filterPieces,
+  sensitiveInFilter,
+  sensitiveInSearch,
+  type SensitiveConfig,
+  type SensitiveHit,
+} from "./sensitive.js";
 import { parseShell, type Parsed, type Word } from "./shell.js";
 
 /** Tool names the hook proposes. Register these once in the console. */
@@ -35,7 +47,7 @@ export const HOOK_TOOLS = [
     name: "shell_destructive",
     suggestedMode: "ask",
     description:
-      "Destructive commands: rm -rf (also through xargs or find -exec), git reset --hard, git clean, force pushes and remote branch deletes, dropping databases, disk formatting, piping a download into a shell. Also changes to the agent's own MCP servers, hooks or permissions (claude mcp add, writes to .mcp.json or .claude/settings.json), and commands the hook cannot parse.",
+      "Destructive commands: rm -rf (also through xargs or find -exec), git reset --hard, git clean, force pushes and remote branch deletes, dropping databases, disk formatting, piping a download into a shell. Also changes to the agent's own MCP servers, hooks or permissions (claude mcp add, writes to .mcp.json or .claude/settings.json), reads of sensitive files (.env, keys, cloud credentials), commands that can print the agent's environment (env, printenv, secret variables), and commands the hook cannot parse.",
   },
   {
     name: "git_push",
@@ -56,7 +68,7 @@ export const HOOK_TOOLS = [
   {
     name: "web_fetch",
     suggestedMode: "allow",
-    description: "Fetching a URL.",
+    description: "Fetching a URL or searching the web.",
   },
 ] as const;
 
@@ -76,6 +88,16 @@ export type GovernedCall = Readonly<{
    * against it again just before the approved call is released.
    */
   contentPin?: Readonly<{ path: string; pin: FileDigest }>;
+  /** The sensitive files the call names (routed to the Ask tier). */
+  sensitive?: readonly SensitiveHit[];
+  /** How the command can print the agent's environment (routed to the Ask tier). */
+  sensitiveEnv?: readonly EnvHit[];
+}>;
+
+/** How a call is classified: the sensitive-file patterns and where it runs. */
+export type ClassifyOptions = Readonly<{
+  sensitive?: SensitiveConfig;
+  cwd?: string;
 }>;
 
 const MAX_COMMAND = 2_000;
@@ -966,7 +988,432 @@ function rankAgentCli(base: string, args: readonly string[]): number {
   return ASK;
 }
 
-export function classifyCommand(command: string): HookToolName {
+/* -------------------------------------------------------------------------
+ * The agent's environment
+ *
+ * The agent's environment holds GUARDIAN_AGENT_CREDENTIAL and often other
+ * secrets. A command that can print it (`env`, `printenv`, `export -p`,
+ * `set`, `declare -x`, /proc/<pid>/environ, `os.environ`, `process.env`)
+ * or a secret variable in it is routed to the Ask tier, like a read of a
+ * sensitive file. Setting a variable to run a command (`env FOO=bar cmd`)
+ * prints nothing and is not flagged.
+ * ---------------------------------------------------------------------- */
+
+/** A way a command can print the agent's environment, or a secret in it. */
+export type EnvHit = Readonly<{ text: string; reason: string }>;
+
+const MAX_ENV_HITS = 10;
+const PRINTS_ENV = "prints the environment";
+const READS_ENV = "reads the whole environment";
+
+/** The hook's own settings and credential: any expansion of them counts. */
+const GUARDIAN_VAR = /^GUARDIAN_\w*$/i;
+/** Common secret variable names, with the pattern shown to the approver. */
+const SECRET_VARS: readonly (readonly [RegExp, string])[] = [
+  [GUARDIAN_VAR, "GUARDIAN_*"],
+  [/^AWS_\w*$/i, "AWS_*"],
+  [/^\w+_TOKEN$/i, "*_TOKEN"],
+  [/^\w+_SECRET$/i, "*_SECRET"],
+  [/^\w+_KEY$/i, "*_KEY"],
+  [/^\w+_PASSWORD$/i, "*_PASSWORD"],
+];
+
+function secretVar(name: string): string | undefined {
+  return SECRET_VARS.find(([re]) => re.test(name))?.[1];
+}
+
+/** `$NAME`, `${NAME…}`, `${!NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`. */
+const EXPANSION =
+  /\$\{?env:([A-Za-z_]\w*)|\$\{([!#]?)([A-Za-z_]\w*)(\}?)|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi;
+
+type Expansion = { name: string; shown: string; indirect: boolean };
+
+function expansions(text: string): Expansion[] {
+  const out: Expansion[] = [];
+  for (const m of text.matchAll(EXPANSION)) {
+    const name = m[1] ?? m[3] ?? m[5] ?? m[6]!;
+    const indirect = m[2] === "!" && m[4] === "}";
+    out.push({ name, shown: m[0], indirect });
+  }
+  return out;
+}
+
+/** /proc/<pid>/environ, also reached through `cd /proc/self`. */
+const PROC_ENVIRON =
+  /\/proc\/[^\s/'"`;|&<>]+(?:\/task\/[^\s/'"`;|&<>]+)?\/environ(?![\w.-])/;
+const PROC = /\/proc(?![\w.-])/;
+const ENVIRON_WORD = /(?<![\w.-])environ(?![\w.-])/;
+/** .NET, from PowerShell or C#. */
+const DOTNET_ALL = /\bGetEnvironmentVariables\s*\(/i;
+const DOTNET_ONE = /\bGetEnvironmentVariable\s*\(\s*(?:(['"])(\w+)\1)?/gi;
+/** The PowerShell environment drive: `Get-ChildItem env:`, `gc env:NAME`. */
+const ENV_DRIVE = /^env:[\\/]?([\w*?]*)$/i;
+
+/** Commands that print their arguments or what is fed to them. */
+const PRINTERS = new Set(
+  (
+    "echo printf print cat tee base64 xxd od hexdump write-output " +
+    "write-host write-information out-host"
+  ).split(" "),
+);
+/** Shells whose code arguments are commands (`sh -c`, `su -c`). */
+const ENV_CODE_RUNNERS = new Set([
+  ...SHELLS,
+  "su",
+  "runuser",
+  "pwsh",
+  "powershell",
+]);
+
+type Family =
+  | "python"
+  | "node"
+  | "ruby"
+  | "perl"
+  | "php"
+  | "awk"
+  | "jq"
+  | "lua";
+const FAMILY: readonly (readonly [RegExp, Family])[] = [
+  [/^(?:i?python[0-9.]*|pypy[0-9.]*)$/, "python"],
+  [/^(?:node|nodejs|deno|bun)$/, "node"],
+  [/^(?:ruby|irb)$/, "ruby"],
+  [/^perl[0-9.]*$/, "perl"],
+  [/^php[0-9.]*$/, "php"],
+  [/^(?:awk|gawk|mawk|nawk)$/, "awk"],
+  [/^(?:jq|gojq|jaq)$/, "jq"],
+  [/^(?:lua|luajit)[0-9.]*$/, "lua"],
+];
+/** How each interpreter reads the environment. */
+const ACCESSORS: Readonly<Record<Family, RegExp>> = {
+  python:
+    /(?<![\w/])(?:(?:os|posix)\s*\.\s*)?(?:environb?\b|getenvb?(?=\s*\())/g,
+  node: /\bprocess\s*(?:\.\s*env\b|\[\s*(['"`])env\1\s*\])|\b(?:Deno|Bun)\s*\.\s*env\b/g,
+  ruby: /(?<![\w$.:])ENV\b/g,
+  perl: /%ENV\b|\$ENV\b(?=\s*\{)/g,
+  php: /\bgetenv(?=\s*\()|\$_(?:ENV|SERVER)\b/g,
+  awk: /\bENVIRON\b/g,
+  jq: /(?<![\w.$])env\b|\$ENV\b/g,
+  lua: /\bgetenv(?=\s*\()/g,
+};
+/** Methods that read one variable by name: `.get("X")`, `.fetch("X")`. */
+const ONE_VAR_METHODS = new Set(
+  "get fetch pop setdefault has delete".split(" "),
+);
+const QUOTED_NAME = String.raw`\s*(?<q>['"\x60])([A-Za-z_]\w*)\k<q>\s*`;
+const BY_INDEX = new RegExp(String.raw`^\s*\[${QUOTED_NAME}\]`);
+const BY_CALL = new RegExp(String.raw`^\s*\(${QUOTED_NAME}[,)]`);
+const BY_PERL_KEY = /^\s*\{\s*(['"]?)([A-Za-z_]\w*)\1\s*\}/;
+const BY_MEMBER = /^\s*\.\s*([A-Za-z_]\w*)/;
+const BY_METHOD = new RegExp(
+  String.raw`^\s*\.\s*([A-Za-z_]\w*)\s*\(${QUOTED_NAME}[,)]`,
+);
+/** Ruby and JavaScript members that are the whole environment, not a variable. */
+const WHOLE_MEMBERS = new Set(
+  (
+    "to_h to_hash to_a to_s each each_pair keys values inspect items copy " +
+    "toObject entries dup clone select filter map reject sort"
+  ).split(" "),
+);
+
+/**
+ * What one environment access in interpreter code reads: a variable by
+ * name, or (`print(os.environ)`, `os.environ[k]`) the whole environment.
+ */
+function accessed(rest: string): { name?: string; assign?: boolean } {
+  const assigns = (after: string) => /^\s*=(?!=)/.test(after);
+  if (assigns(rest)) return { assign: true };
+  const named = (m: RegExpExecArray, name: string) =>
+    assigns(rest.slice(m[0].length)) ? { assign: true } : { name };
+  const byName =
+    BY_INDEX.exec(rest) ?? BY_CALL.exec(rest) ?? BY_PERL_KEY.exec(rest);
+  if (byName) return named(byName, byName[2]!);
+  const method = BY_METHOD.exec(rest);
+  if (method && ONE_VAR_METHODS.has(method[1]!)) return { name: method[3]! };
+  const member = BY_MEMBER.exec(rest);
+  if (
+    member &&
+    !WHOLE_MEMBERS.has(member[1]!) &&
+    !ONE_VAR_METHODS.has(member[1]!) &&
+    !/^\s*\(/.test(rest.slice(member[0].length))
+  ) {
+    return named(member, member[1]!);
+  }
+  return {};
+}
+
+function familyOf(base: string): Family | undefined {
+  return FAMILY.find(([re]) => re.test(base))?.[1];
+}
+
+/**
+ * Where a command can print the agent's environment or a secret variable
+ * in it: `env` or `printenv` with nothing to run, `export -p`, `set`,
+ * `declare -x`, `ps e`, /proc/<pid>/environ, the PowerShell `env:` drive,
+ * any expansion of a GUARDIAN_* variable, a secret variable (`*_TOKEN`,
+ * `*_SECRET`, `*_KEY`, `*_PASSWORD`, `AWS_*`) expanded in `echo`,
+ * `printf`, `cat`, a here-document, `sh -c` or interpreter code, and
+ * interpreter code that reads the environment (`os.environ`,
+ * `process.env`). A variable name built at run time and commands run by
+ * scripts are not seen.
+ */
+export function envInCommand(command: string): EnvHit[] {
+  const hits: EnvHit[] = [];
+  const add = (text: string, reason: string) => {
+    const shown = bounded(text, 200);
+    if (
+      hits.length < MAX_ENV_HITS &&
+      !hits.some((h) => h.text === shown && h.reason === reason)
+    ) {
+      hits.push({ text: shown, reason });
+    }
+  };
+  const secrets = (text: string) => {
+    for (const e of expansions(text)) {
+      const pattern = e.indirect ? undefined : secretVar(e.name);
+      if (pattern) add(e.shown, pattern);
+    }
+  };
+  const code = (family: Family, text: string) => {
+    const re = new RegExp(ACCESSORS[family].source, "g");
+    for (const m of text.matchAll(re)) {
+      // `from os import environ` names it; reading it comes later.
+      if (/\bimport\s+(?:[\w\s,]*,\s*)?$/.test(text.slice(0, m.index)))
+        continue;
+      const got = accessed(text.slice(m.index + m[0].length));
+      if (got.assign) continue;
+      if (got.name === undefined) add(m[0], READS_ENV);
+      else {
+        const pattern = secretVar(got.name);
+        if (pattern) add(`${m[0]} ${got.name}`, pattern);
+      }
+    }
+  };
+
+  // 1. Anywhere in the text.
+  for (const e of expansions(command)) {
+    if (e.indirect) add(e.shown, "indirect expansion");
+    else if (GUARDIAN_VAR.test(e.name)) add(e.shown, "GUARDIAN_*");
+  }
+  const proc = PROC_ENVIRON.exec(command);
+  if (proc) add(proc[0], "the process environment");
+  else if (PROC.test(command) && ENVIRON_WORD.test(command)) {
+    add("environ", "the process environment");
+  }
+  const all = DOTNET_ALL.exec(command);
+  if (all) add(all[0], PRINTS_ENV);
+  for (const m of command.matchAll(DOTNET_ONE)) {
+    const pattern = m[2] === undefined ? READS_ENV : secretVar(m[2]);
+    if (pattern) add(m[0], pattern);
+  }
+  // A here-document or here-string prints what it expands.
+  if (command.includes("<<")) secrets(command);
+
+  // 2. Command by command.
+  const argv = (
+    words: readonly Word[],
+    depth: number,
+    inCode: boolean,
+    stage: number,
+  ) => {
+    if (depth > MAX_DEPTH) return;
+    // Code given to a shell or interpreter: an expansion there counts.
+    if (inCode) for (const w of words) if (w.dynamic) secrets(w.value);
+    const values = words.map((w) => w.value);
+    for (const v of values) {
+      const drive = ENV_DRIVE.exec(v);
+      if (!drive) continue;
+      const name = drive[1]!;
+      // `env:`, `env:*`, `env:AWS*`: every variable, or every one that matches.
+      if (name === "" || /[*?]/.test(name)) add(v, PRINTS_ENV);
+      else {
+        const pattern = secretVar(name);
+        if (pattern) add(v, pattern);
+      }
+    }
+    // Interpreter code (`python3 -c`, `uv run python -c`, `node -e`, a
+    // here-document or a pipe into one).
+    const bases = values.map(baseName);
+    bases.forEach((b, k) => {
+      const family = familyOf(b);
+      if (!family) return;
+      const rest = words.slice(k + 1);
+      code(family, rest.map((w) => w.value).join("\n"));
+      for (const w of rest) if (w.dynamic) secrets(w.value);
+      if (command.includes("<<") || stage > 0) code(family, command);
+    });
+
+    let i = 0;
+    while (
+      i < words.length &&
+      (ASSIGNMENT.test(words[i]!.value) || RESERVED.has(words[i]!.value))
+    ) {
+      i++;
+    }
+    if (i >= words.length) return;
+    // `$AWS_SECRET_ACCESS_KEY` as the command: the shell prints the value
+    // in its "command not found" error (PowerShell prints it as output).
+    if (words[i]!.dynamic) secrets(words[i]!.value);
+    const base = baseName(words[i]!.value);
+    const argWords = words.slice(i + 1);
+    const args = argWords.map((w) => w.value);
+    const operands = args.filter((a) => !/^[-+]/.test(a));
+    const options = args.filter((a) => /^[-+]/.test(a)).join("");
+    const shown = [base, ...args].join(" ");
+    const text = (t: string) => walk(parseShell(t), depth + 1, true);
+
+    if (PRINTERS.has(base)) {
+      for (const w of argWords) if (w.dynamic) secrets(w.value);
+      return;
+    }
+    switch (base) {
+      case "env": {
+        let k = 0;
+        while (k < argWords.length) {
+          const a = argWords[k]!.value;
+          if (a === "--") {
+            k++;
+            break;
+          }
+          if (a === "-S" || a === "--split-string") {
+            text(args.slice(k + 1).join(" "));
+            return;
+          }
+          if (a.startsWith("--split-string=") || /^-S./.test(a)) {
+            const first = a.startsWith("--") ? a.slice(15) : a.slice(2);
+            text([first, ...args.slice(k + 1)].join(" "));
+            return;
+          }
+          if (/^(-u|-C|-P|--unset|--chdir)$/.test(a)) k += 2;
+          else if (a.startsWith("-") && a.length > 1) k++;
+          else break;
+        }
+        while (k < argWords.length && ASSIGNMENT.test(argWords[k]!.value)) {
+          k++;
+        }
+        // Nothing to run: env prints the environment.
+        if (k >= argWords.length) add(shown, PRINTS_ENV);
+        else argv(argWords.slice(k), depth + 1, inCode, stage);
+        return;
+      }
+      case "printenv": {
+        if (operands.length === 0) add(shown, PRINTS_ENV);
+        for (const name of operands) {
+          const pattern = secretVar(name);
+          if (pattern) add(`printenv ${name}`, pattern);
+        }
+        return;
+      }
+      case "export": {
+        if (operands.length === 0 && !/[fn]/.test(options)) {
+          add(shown, PRINTS_ENV);
+        }
+        return;
+      }
+      case "declare":
+      case "typeset": {
+        if (operands.length === 0 && !/[fF]/.test(options)) {
+          add(shown, PRINTS_ENV);
+        } else if (/p/.test(options)) {
+          for (const name of operands) {
+            const pattern = secretVar(name);
+            if (pattern) add(`${base} -p ${name}`, pattern);
+          }
+        }
+        return;
+      }
+      case "set": {
+        if (args.length === 0) add(shown, PRINTS_ENV);
+        return;
+      }
+      case "ps": {
+        // BSD-style `e` (no dash) shows each process's environment.
+        args.forEach((a, k) => {
+          const prev = k > 0 ? args[k - 1]! : "";
+          if (
+            /^[aAcCefgGhjlLmMnNoOpqrsStTuUvVwxXZ]*e[aAcCefgGhjlLmMnNoOpqrsStTuUvVwxXZ]*$/.test(
+              a,
+            ) &&
+            !prev.startsWith("-")
+          ) {
+            add(shown, "prints process environments");
+          }
+        });
+        return;
+      }
+      case "find": {
+        for (let k = 0; k < args.length; k++) {
+          if (!/^-(exec|execdir|ok|okdir)$/.test(args[k]!)) continue;
+          let end = k + 1;
+          while (end < args.length && args[end] !== ";" && args[end] !== "+") {
+            end++;
+          }
+          argv(argWords.slice(k + 1, end), depth + 1, inCode, stage);
+          k = end;
+        }
+        return;
+      }
+      case "watch": {
+        const { start } = skipOptions(argWords, {
+          value: ["-n", "--interval", "-d", "-q", "--equexit"],
+        });
+        text(args.slice(start).join(" "));
+        return;
+      }
+    }
+    if (Object.hasOwn(WRAPPER_SPECS, base)) {
+      if (base === "command" && /[vV]/.test(options)) return; // lookup only
+      if (base === "flock") {
+        const c = args.findIndex((a) => a === "-c" || a === "--command");
+        if (c >= 0) text(args[c + 1] ?? "");
+      }
+      const { start, unknown } = skipOptions(argWords, WRAPPER_SPECS[base]!);
+      argv(argWords.slice(start), depth + 1, inCode, stage);
+      if (unknown) argv(argWords.slice(start + 1), depth + 1, inCode, stage);
+      return;
+    }
+    // `eval …` runs its arguments joined; `sh -c '…'` and `su -c …` run
+    // their code argument. Either way a secret expanded there counts.
+    if (EVALUATORS.has(base)) text(args.join(" "));
+    else if (ENV_CODE_RUNNERS.has(base)) {
+      for (const a of args) if (!a.startsWith("-")) text(a);
+    }
+  };
+  const walk = (parsed: Parsed, depth: number, inCode: boolean) => {
+    for (const cmd of parsed.commands) {
+      argv(cmd.words, depth, inCode, cmd.stage);
+      for (const w of [...cmd.words, ...cmd.writes]) {
+        for (const sub of w.subs) walk(sub, depth + 1, inCode);
+      }
+      for (const sub of cmd.subs) walk(sub, depth + 1, inCode);
+    }
+  };
+  walk(parseShell(command), 0, false);
+  return hits;
+}
+
+function shownEnv(hits: readonly EnvHit[]): string[] {
+  return hits.map((h) => `${h.text} (${h.reason})`);
+}
+
+/**
+ * The Guardian tool a shell command is routed to. With `options.sensitive`
+ * (as the hook passes it), a command that names a sensitive file (see
+ * sensitive.ts) or can print the agent's environment goes to the Ask tier.
+ */
+export function classifyCommand(
+  command: string,
+  options: ClassifyOptions = {},
+): HookToolName {
+  const sensitive =
+    options.sensitive !== undefined &&
+    (sensitiveInCommand(command, options.sensitive, options.cwd).length > 0 ||
+      envInCommand(command).length > 0);
+  return routeCommand(command, sensitive);
+}
+
+function routeCommand(command: string, sensitive: boolean): HookToolName {
+  if (sensitive) return "shell_destructive";
   let rank = 0;
   if (DESTRUCTIVE.some((re) => re.test(command))) rank = ASK;
   else if (DEPLOY.some((re) => re.test(command))) rank = RANK.shell_deploy!;
@@ -1011,10 +1458,12 @@ function str(value: unknown): string {
 /**
  * Agent-neutral view of one tool call. `tool` is the name the agent's hook
  * reports: Claude Code's (Bash, Write, Edit, MultiEdit, NotebookEdit,
- * WebFetch, mcp__server__tool), Codex's (Bash, apply_patch, mcp__…) or
- * DeepSeek Harness's (bash, pwsh, write, edit, apply_patch,
- * str_replace_editor, terminal_send, web_fetch, mcp__…). All are recognised whichever agent
- * runs the hook; a name none of them uses is left to the agent.
+ * WebFetch, WebSearch, Read, NotebookRead, Grep, Glob, LS,
+ * mcp__server__tool), Codex's (Bash, apply_patch, mcp__…) or DeepSeek
+ * Harness's (bash, pwsh, write, edit, apply_patch, str_replace_editor,
+ * terminal_send, web_fetch, web_search, read, read_image, grep, glob,
+ * mcp__…). All are recognised whichever agent runs the hook; a name none
+ * of them uses is left to the agent.
  */
 export type ToolCall = Readonly<{
   tool: string;
@@ -1179,24 +1628,169 @@ function fileWrite(
   };
 }
 
-/** `null` = not governed (read-only tools are left to the agent). */
-export function governedCall(call: ToolCall): GovernedCall | null {
+const SENSITIVE_NOTE = "(sensitive file)";
+const SENSITIVE_ENV_NOTE = "(the agent's environment)";
+
+function shownHits(hits: readonly SensitiveHit[]): string[] {
+  return hits.map((h) => `${bounded(h.path, 200)} matches ${h.pattern}`);
+}
+
+/** Read-type tools: the field holding the file or folder each one reads. */
+const READ_TOOLS: Readonly<
+  Record<
+    string,
+    Readonly<{
+      path: readonly string[];
+      /** The path may be left out: the tool then reads the working directory. */
+      optional?: boolean;
+      filter?: string;
+      /** The filter selects files whose contents are read (Grep). */
+      searches?: boolean;
+    }>
+  >
+> = {
+  Read: { path: ["file_path"] }, // Claude Code
+  NotebookRead: { path: ["notebook_path"] },
+  Grep: { path: ["path"], optional: true, filter: "glob", searches: true },
+  Glob: { path: ["path"], optional: true, filter: "pattern" },
+  LS: { path: ["path"], optional: true },
+  read: { path: ["file_path"] }, // DeepSeek Harness
+  read_image: { path: ["file_path"] },
+  grep: { path: ["path"], optional: true, filter: "include", searches: true },
+  glob: { path: ["path"], optional: true, filter: "pattern" },
+};
+
+/** `path` as an absolute path (`~` and relative paths resolved). */
+function absoluteIn(path: string, cwd: string | undefined): string {
+  const expanded =
+    path === "~" || path.startsWith("~/") ? homedir() + path.slice(1) : path;
+  return isAbsolute(expanded)
+    ? expanded
+    : `${cwd ?? process.cwd()}/${expanded}`;
+}
+
+/** A read-type call could not be classified; the hook denies it. */
+export class ReadClassifyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReadClassifyError";
+  }
+}
+
+/**
+ * A read of an ordinary path is not governed (no opinion, nothing sent).
+ * A read of a sensitive path goes to the Ask tier with the path, so the
+ * owner's needs-approval connection decides and Guardian records it.
+ */
+function readCall(
+  tool: string,
+  path: unknown,
+  optional: boolean,
+  filter: { name: string; value: unknown; searches?: boolean } | undefined,
+  call: ToolCall,
+  options: ClassifyOptions,
+): GovernedCall | null {
+  const config = options.sensitive ?? DEFAULT_SENSITIVE;
+  const cwd = call.cwd ?? options.cwd;
+  if (path !== undefined && typeof path !== "string") {
+    throw new ReadClassifyError(`${tool}: the path is not a string`);
+  }
+  if (!optional && (typeof path !== "string" || path === "")) {
+    throw new ReadClassifyError(`${tool}: no path`);
+  }
+  if (
+    filter &&
+    filter.value !== undefined &&
+    typeof filter.value !== "string"
+  ) {
+    throw new ReadClassifyError(`${tool}: ${filter.name} is not a string`);
+  }
+  const target = typeof path === "string" && path !== "" ? path : (cwd ?? ".");
+  const hits: SensitiveHit[] = [];
+  const onPath = checkPath(target, config, cwd ? { cwd } : {});
+  if (onPath) hits.push(onPath);
+  const pieces =
+    filter && typeof filter.value === "string"
+      ? filterPieces(filter.value)
+      : [];
+  if (pieces.length > 0) {
+    for (const piece of pieces) {
+      const onFilter =
+        sensitiveInFilter(piece, config) ??
+        (filter!.searches
+          ? sensitiveInSearch(piece, absoluteIn(target, cwd), config)
+          : undefined);
+      if (onFilter) {
+        hits.push(onFilter);
+        break;
+      }
+    }
+  } else if (filter?.searches && hits.length === 0) {
+    // A search with no filter (or a blank one) reads every file under the
+    // folder.
+    const inside = sensitiveInSearch("*", absoluteIn(target, cwd), config);
+    if (inside) hits.push(inside);
+  }
+  if (hits.length === 0) return null;
+  return {
+    toolName: "shell_destructive",
+    arguments: {
+      operation: tool,
+      path: bounded(target, 500),
+      ...(filter && typeof filter.value === "string" && filter.value !== ""
+        ? { [filter.name]: bounded(filter.value, 500) }
+        : {}),
+      touches: "sensitive-file",
+      sensitive: shownHits(hits),
+      ...(cwd ? { cwd } : {}),
+    },
+    summary: `${tool} ${bounded(hits[0]!.path, 160)} ${SENSITIVE_NOTE}`,
+    sensitive: hits,
+  };
+}
+
+/**
+ * `null` = not governed: no opinion, the agent's own permissions apply.
+ * Throws when a read-type call cannot be classified (the hook denies it).
+ */
+export function governedCall(
+  call: ToolCall,
+  options: ClassifyOptions = {},
+): GovernedCall | null {
   const { tool, input } = call;
   const cwd = call.cwd ? { cwd: call.cwd } : {};
+  const config = options.sensitive ?? DEFAULT_SENSITIVE;
   const shellField = Object.hasOwn(SHELL_TOOLS, tool)
     ? SHELL_TOOLS[tool]
     : undefined;
   if (shellField) {
     const command = commandText(input[shellField]);
-    const toolName = classifyCommand(command);
+    // A PTY keeps its folder between calls, so the hook cannot know it.
+    const hits = sensitiveInCommand(
+      command,
+      config,
+      call.cwd ?? options.cwd,
+      tool === "terminal_send",
+    );
+    const env = envInCommand(command);
+    const flagged = hits.length > 0 || env.length > 0;
+    const toolName = routeCommand(command, flagged);
     return {
       toolName,
       arguments: {
         command: bounded(command),
         ...(tool === "Bash" || tool === "shell" ? {} : { agentTool: tool }),
+        ...(flagged
+          ? {
+              touches: env.length > 0 ? "sensitive-env" : "sensitive-file",
+              sensitive: [...shownHits(hits), ...shownEnv(env)],
+            }
+          : {}),
         ...cwd,
       },
-      summary: `Run: ${bounded(command, 160)}`,
+      summary: `Run: ${bounded(command, 160)}${env.length > 0 ? ` ${SENSITIVE_ENV_NOTE}` : hits.length > 0 ? ` ${SENSITIVE_NOTE}` : ""}`,
+      ...(hits.length > 0 ? { sensitive: hits } : {}),
+      ...(env.length > 0 ? { sensitiveEnv: env } : {}),
     };
   }
   if (FILE_TOOLS.has(tool)) {
@@ -1217,7 +1811,16 @@ export function governedCall(call: ToolCall): GovernedCall | null {
   if (tool === "str_replace_editor") {
     // DeepSeek Harness: {command: view|create|str_replace|insert, path, …}.
     // Only `view` is read-only; anything else, known or not, is governed.
-    if (input.command === "view") return null;
+    if (input.command === "view") {
+      return readCall(
+        "str_replace_editor.view",
+        input.path,
+        false,
+        undefined,
+        call,
+        options,
+      );
+    }
     const sub = str(input.command) || "unknown";
     const content = str(input.file_text) || str(input.new_str);
     return fileWrite(
@@ -1260,6 +1863,57 @@ export function governedCall(call: ToolCall): GovernedCall | null {
             ? `Patch ${bounded(paths[0]!, 160)}`
             : `Patch ${paths.length} files: ${bounded(paths.join(", "), 160)}`) +
         (config ? ` ${AGENT_CONFIG_NOTE}` : ""),
+    };
+  }
+  const read = Object.hasOwn(READ_TOOLS, tool) ? READ_TOOLS[tool] : undefined;
+  if (read) {
+    const path = read.path.map((k) => input[k]).find((v) => v !== undefined);
+    return readCall(
+      tool,
+      path,
+      read.optional ?? false,
+      read.filter
+        ? {
+            name: read.filter,
+            value: input[read.filter],
+            searches: read.searches ?? false,
+          }
+        : undefined,
+      call,
+      options,
+    );
+  }
+  if (tool === "WebSearch") {
+    // Claude Code: the query leaves the machine, as a fetched URL does.
+    const query = str(input.query);
+    const domains = (v: unknown) =>
+      Array.isArray(v)
+        ? v.filter((d): d is string => typeof d === "string").slice(0, 20)
+        : undefined;
+    const allowed = domains(input.allowed_domains);
+    const blocked = domains(input.blocked_domains);
+    return {
+      toolName: "web_fetch",
+      arguments: {
+        query: bounded(query, 500),
+        ...(allowed ? { allowedDomains: allowed } : {}),
+        ...(blocked ? { blockedDomains: blocked } : {}),
+      },
+      summary: `Search the web: ${bounded(query, 160)}`,
+    };
+  }
+  if (tool === "web_search") {
+    // DeepSeek Harness: {queries: string[]}.
+    const queries = Array.isArray(input.queries)
+      ? input.queries
+          .filter((q): q is string => typeof q === "string")
+          .slice(0, 10)
+          .map((q) => bounded(q, 500))
+      : [];
+    return {
+      toolName: "web_fetch",
+      arguments: { queries },
+      summary: `Search the web: ${bounded(queries.join(" | "), 160)}`,
     };
   }
   if (tool === "WebFetch" || tool === "web_fetch") {

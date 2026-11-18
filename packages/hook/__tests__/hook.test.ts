@@ -107,7 +107,7 @@ describe("classify", () => {
     }
   });
 
-  it("digests file contents instead of sending them; skips read-only tools", () => {
+  it("digests file contents instead of sending them; skips ordinary reads", () => {
     const call = governedCall({
       tool: "Write",
       input: { file_path: "/repo/.env", content: "SECRET=abc" },
@@ -115,8 +115,13 @@ describe("classify", () => {
     expect(call.toolName).toBe("file_write");
     expect(JSON.stringify(call.arguments)).not.toContain("SECRET=abc");
     expect(call.arguments.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-    for (const tool of ["Read", "Grep", "Glob", "LS", "WebSearch"]) {
-      expect(governedCall({ tool, input: {} })).toBeNull();
+    expect(
+      governedCall({ tool: "Read", input: { file_path: "/repo/src/a.ts" } }),
+    ).toBeNull();
+    for (const tool of ["Grep", "Glob", "LS"]) {
+      expect(
+        governedCall({ tool, input: { pattern: "x", path: "/repo/src" } }),
+      ).toBeNull();
     }
   });
 
@@ -565,6 +570,11 @@ describe("two connections (Guardian modes are per connection)", () => {
 describe("setup completeness", () => {
   it("setup tells the human to allow each tool for the agent", () => {
     expect(setupText()).toMatch(/Allow a tool by name/);
+  });
+
+  it("setup uses the console's mode labels", () => {
+    expect(setupText()).toContain("set Allow on (a) and Ask me on (b);");
+    expect(setupText()).not.toContain("Ask me first");
   });
 
   it("an INVALID_REQUEST denial says how to fix it", async () => {
