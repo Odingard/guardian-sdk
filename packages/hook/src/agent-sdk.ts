@@ -39,9 +39,13 @@ export type GuardianHookInput = Readonly<{
   cwd?: unknown;
 }>;
 
-/** The PreToolUse output the Agent SDK accepts (`{}` = no opinion). */
+/**
+ * The PreToolUse output the Agent SDK accepts (`{}` = no opinion;
+ * `{ systemMessage }` = no opinion, with a note for the person: watch mode).
+ */
 export type GuardianHookOutput =
   | Record<string, never>
+  | { systemMessage: string }
   | {
       hookSpecificOutput: {
         hookEventName: "PreToolUse";

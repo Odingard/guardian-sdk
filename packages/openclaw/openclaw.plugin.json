@@ -33,6 +33,10 @@
         "type": "array",
         "items": { "type": "string" },
         "description": "Extra Guardian tool names (e.g. openclaw.tool_call) to send to the everyday connection."
+      },
+      "watchMode": {
+        "type": "boolean",
+        "description": "While the agent is in watch mode, let a call Guardian would have held or denied run (Guardian approves and redeems nothing). Default false: such a call is blocked. Falls back to GUARDIAN_HOOK_WATCH_MODE=on."
       }
     }
   },

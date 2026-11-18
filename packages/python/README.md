@@ -145,6 +145,21 @@ purchase("mug-1", 2000)  # $20.00
 - An invalid declaration raises `TypeError` when the `Guard` is built.
 - Every tool on a connection needs an amount (or none does); put tools that spend money on their own connection.
 
+### Watch mode (unreleased, opt-in)
+
+While the agent is in watch mode (the console's **Start watching**), Guardian records what it would have decided for each action and blocks nothing at that step. For a call it would have asked about or denied, it issues no capability and performs nothing. With `watch_mode=True`, `Guard` then runs an in-process function anyway: its `file_args` are still checked, and there is nothing to record. `on_watched` tells you when that happened:
+
+```python
+guard = Guard(
+    client,
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    watch_mode=True,
+    on_watched=lambda tool, request_id, decision: print(tool, request_id, decision),
+)
+```
+
+Without `watch_mode`, such a call raises `GuardianDenied` and the function does not run. A `remote` tool is never run this way: Guardian performs nothing for it. Outside watch mode nothing changes.
+
 ### async
 
 ```python

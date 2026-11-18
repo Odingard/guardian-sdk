@@ -63,7 +63,7 @@ const text = (r: unknown) =>
   JSON.parse((r as { content: { text: string }[] }).content[0]!.text);
 
 describe("governed MCP proxy", () => {
-  it("lists upstream tools as governed, hides name collisions, adds guardian_claim/record", async () => {
+  it("lists upstream tools as governed, hides name collisions, adds the governance tools", async () => {
     const { up } = upstream();
     const { client } = guardian({ ok: true, requestId: "r", decision: "DENY" });
     const proxy = createGovernedProxy({
@@ -77,6 +77,8 @@ describe("governed MCP proxy", () => {
       "send_message",
       "guardian_claim",
       "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
     ]);
     expect(tools[0]!.description).toMatch(/Guardian-governed/);
     for (const tool of tools.slice(1)) {
@@ -86,7 +88,22 @@ describe("governed MCP proxy", () => {
           properties: Record<string, { description?: string }>;
         }
       ).properties;
-      expect(properties.requestId!.description).toMatch(/requestId/);
+      for (const [name, schema] of Object.entries(properties)) {
+        expect(schema.description, `${tool.name}.${name}`).toMatch(/\S/);
+      }
+      expect(tool.title).toBe(
+        (tool.annotations as { title?: string } | undefined)?.title,
+      );
+    }
+    for (const tool of tools.filter((t) =>
+      ["guardian_claim", "guardian_record", "guardian_cancel"].includes(t.name),
+    )) {
+      const properties = (
+        tool.inputSchema as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      expect(properties.requestId!.description).toMatch(/requestId|req_/);
     }
     expect(
       Object.fromEntries(tools.slice(1).map((t) => [t.name, t.annotations])),
@@ -105,10 +122,24 @@ describe("governed MCP proxy", () => {
         idempotentHint: true,
         openWorldHint: false,
       },
+      guardian_pending: {
+        title: "List my held requests",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_cancel: {
+        title: "Withdraw a held request",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     });
   });
 
-  it("hides upstream tools named guardian_record or guardian_receipt", async () => {
+  it("hides upstream tools named like a governance tool", async () => {
     const logs: string[] = [];
     const up: Upstream = {
       async listTools() {
@@ -116,6 +147,8 @@ describe("governed MCP proxy", () => {
           { name: "send_message", inputSchema: { type: "object" } },
           { name: "guardian_record", inputSchema: { type: "object" } },
           { name: "guardian_receipt", inputSchema: { type: "object" } },
+          { name: "guardian_pending", inputSchema: { type: "object" } },
+          { name: "guardian_cancel", inputSchema: { type: "object" } },
         ];
       },
       async callTool() {
@@ -134,9 +167,17 @@ describe("governed MCP proxy", () => {
       "send_message",
       "guardian_claim",
       "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
     ]);
-    expect(logs.join("\n")).toMatch(/"guardian_record" collides/);
-    expect(logs.join("\n")).toMatch(/"guardian_receipt" collides/);
+    for (const name of [
+      "guardian_record",
+      "guardian_receipt",
+      "guardian_pending",
+      "guardian_cancel",
+    ]) {
+      expect(logs.join("\n")).toMatch(`"${name}" collides`);
+    }
   });
 
   it.each(["guardian_record", "guardian_receipt"])(
