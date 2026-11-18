@@ -77,6 +77,21 @@ Rules that matter:
 - `ASK` never auto-resolves — surface the requestId to the human layer.
 - No model calls in the decision path. No credentials in tests or commits.
 
+## Releasing the Python package
+
+From `packages/python`, use a virtual environment with `build` and `twine`
+installed. Build, then check the archives before uploading:
+
+```bash
+python -m build
+python scripts/check-dist.py
+python -m twine check dist/*
+```
+
+Only after all checks pass and the release is approved, run
+`python -m twine upload dist/*`. The distribution check restricts archive
+contents and limits each archive to 1 MB; do not upload if it fails.
+
 ## License
 
 Apache-2.0. By contributing you agree your changes ship under it.
