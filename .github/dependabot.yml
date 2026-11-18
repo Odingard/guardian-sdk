@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "@odingard/*"
     open-pull-requests-limit: 5
     groups:
       npm-minor-patch:
