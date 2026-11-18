@@ -35,7 +35,7 @@
     "@types/node": "^22.20.5",
     "ai": "^7.0.176",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^5.1.1"
   },
   "engines": {
