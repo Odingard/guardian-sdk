@@ -508,4 +508,45 @@ describe("guardian-mcp proxy: guardian_pending and guardian_cancel", () => {
     expect(payload(later).error).toMatch(/holds no call/);
     expect(calls).toEqual([]);
   });
+
+  it("a withdrawal while a repeated call's claim is waiting cannot put the withdrawn request back", async () => {
+    const ids = ["req_ask", "req_new"];
+    const request = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: ids.shift()!,
+      }),
+    );
+    let answerClaim!: (value: GuardianRequestResult) => void;
+    const claim = vi.fn(
+      () =>
+        new Promise<GuardianRequestResult>((resolve) => {
+          answerClaim = resolve;
+        }),
+    );
+    const { proxy, hold, calls } = setup({ request, claim });
+    await hold();
+    const message = { to: "+15550100", body: "invoice due" };
+    // The agent repeats the held call: the SDK claims req_ask and waits.
+    const repeated = proxy.callTool("send_message", message);
+    await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(1));
+    expect(
+      payload(
+        await proxy.callTool("guardian_cancel", { requestId: "req_ask" }),
+      ),
+    ).toMatchObject({ state: "withdrawn" });
+    // Guardian answered the claim before the withdrawal landed.
+    answerClaim({ ok: false, reasonCode: "APPROVAL_PENDING" });
+    await repeated;
+    // The same call again is a new request, not a claim of req_ask.
+    const again = await proxy.callTool("send_message", message);
+    expect(payload(again)).toMatchObject({
+      decision: "ASK",
+      requestId: "req_new",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+  });
 });
