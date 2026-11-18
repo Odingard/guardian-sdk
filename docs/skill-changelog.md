@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.11
+
+- Date: 2026-11-18
+- SHA-256: `9fe918b14142c7e04219f6607b7198eaf75a112a20c183b19e261000df22ff90`
+- Pins: `@odingard/guardian-hook` 0.4.2; `@odingard/guardian-openclaw` 0.1.3; `odingard-guardian` 0.5.0. The other pins are unchanged from 1.0.10.
+- Pins the hook and OpenClaw approval-message release and Python's Agent Framework, Semantic Kernel, amount_args and message changes. No other change.
+
 ## 1.0.10
 
 - Date: 2026-11-16

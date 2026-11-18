@@ -68,7 +68,7 @@ from .verify import (
     verify_before_acting,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "CONTENT_CHANGED_SINCE_APPROVAL",
