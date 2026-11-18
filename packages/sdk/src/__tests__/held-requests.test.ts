@@ -149,7 +149,10 @@ describe("held requests: withdraw", () => {
       requestId: "req_0123456789abcdef",
       state: "approved",
     });
-    for (const [answer, reasonCode] of [
+    expect(await withdrawHeld(decided.guardian)).not.toHaveProperty(
+      "outcomeUnknown",
+    );
+    for (const [answer, reasonCode, outcomeUnknown] of [
       [
         json({
           ok: true,
@@ -158,20 +161,50 @@ describe("held requests: withdraw", () => {
           withdrawnAtEpochMs: 1,
         }),
         "MALFORMED_RESPONSE",
+        true,
       ],
-      [json({ ok: true, state: "withdrawn" }), "MALFORMED_RESPONSE"],
-      [json({ ok: false, reasonCode: "NOT_FOUND" }, 404), "NOT_FOUND"],
+      [json({ ok: true, state: "withdrawn" }), "MALFORMED_RESPONSE", true],
+      [json({ ok: false, reasonCode: "NOT_FOUND" }, 404), "NOT_FOUND", false],
+      [
+        json({ ok: false, reasonCode: "RATE_LIMITED" }, 429),
+        "RATE_LIMITED",
+        false,
+      ],
       [
         json({ ok: false, reasonCode: "SERVICE_UNAVAILABLE" }, 503),
         "SERVICE_UNAVAILABLE",
+        true,
       ],
-      [new Response("", { status: 500 }), "HTTP_500"],
+      [new Response("", { status: 500 }), "HTTP_500", true],
+      [new Response("not json", { status: 200 }), "HTTP_200", true],
     ] as const) {
       const { guardian } = client(() => answer.clone());
-      expect(await guardian.withdraw!("req_0123456789abcdef")).toMatchObject({
-        ok: false,
-        reasonCode,
-      });
+      const result = await withdrawHeld(guardian);
+      expect(result).toMatchObject({ ok: false, reasonCode });
+      if (outcomeUnknown) {
+        expect(result).toMatchObject({ outcomeUnknown: true });
+      } else {
+        expect(result).not.toHaveProperty("outcomeUnknown");
+      }
     }
   });
+
+  it("reports a lost answer as unconfirmed: the request may have been withdrawn", async () => {
+    const down = createGuardianClient({
+      baseUrl: "https://api.example.test",
+      credential: "gak_test",
+      fetch: async () => {
+        throw new Error("connection reset");
+      },
+    });
+    expect(await withdrawHeld(down)).toEqual({
+      ok: false,
+      reasonCode: "SERVICE_UNAVAILABLE",
+      outcomeUnknown: true,
+    });
+  });
 });
+
+function withdrawHeld(guardian: ReturnType<typeof createGuardianClient>) {
+  return guardian.withdraw!("req_0123456789abcdef");
+}

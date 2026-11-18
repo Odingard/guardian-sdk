@@ -156,10 +156,13 @@ class WithdrawResult:
     """Outcome of ``withdraw``.
 
     ``ok=True`` means the request is withdrawn (``state="withdrawn"``); a
-    repeat answers the same. Otherwise ``reason_code`` says why nothing
-    changed: ``NOT_FOUND`` (no held request of this agent with that id),
-    ``ALREADY_DECIDED`` (with ``state``: approved, denied, expired …) or
-    ``SERVICE_UNAVAILABLE`` (safe to retry).
+    repeat answers the same. Otherwise ``reason_code`` says why it was not
+    withdrawn: ``NOT_FOUND`` (no held request of this agent with that id),
+    ``ALREADY_DECIDED`` (with ``state``: approved, denied, expired …), and
+    nothing changed. ``outcome_unknown=True`` means no clear answer came back
+    (no answer, a 5xx or an unreadable answer; ``reason_code`` is then, for
+    example, ``SERVICE_UNAVAILABLE``): the request may or may not have been
+    withdrawn, and withdrawing it again with the same request id is safe.
     """
 
     ok: bool
@@ -167,6 +170,7 @@ class WithdrawResult:
     state: Optional[str] = None
     withdrawn_at_epoch_ms: Optional[int] = None
     reason_code: Optional[str] = None
+    outcome_unknown: bool = False
 
 
 def _random_id(prefix: str) -> str:
@@ -417,15 +421,19 @@ def _withdraw_result(status: int, data: Any) -> WithdrawResult:
             state="withdrawn",
             withdrawn_at_epoch_ms=data["withdrawnAtEpochMs"],
         )
-    # Anything else is not a withdrawal, whatever ``ok`` says.
+    # Anything else is not a confirmed withdrawal, whatever ``ok`` says.
     ok_answer = isinstance(data, dict) and data.get("ok") is True
     request_id = data.get("requestId") if isinstance(data, dict) else None
     state = data.get("state") if isinstance(data, dict) else None
+    # A readable refusal (a 2xx to 4xx ``ok: false``) means nothing changed;
+    # otherwise Guardian may have withdrawn the request.
+    definitive = 200 <= status < 500 and isinstance(data, dict) and data.get("ok") is False
     return WithdrawResult(
         ok=False,
         reason_code="MALFORMED_RESPONSE" if ok_answer else _refusal_code(status, data),
         request_id=request_id if isinstance(request_id, str) else None,
         state=state if isinstance(state, str) else None,
+        outcome_unknown=not definitive,
     )
 
 

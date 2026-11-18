@@ -103,9 +103,15 @@ export function heldRequestTools(mode: Mode) {
         "reasonCode ALREADY_DECIDED and the request's state, and nothing " +
         "changes (an approved request can still be claimed with " +
         "guardian_claim). An unknown requestId, or one that belongs to " +
-        "another agent, returns NOT_FOUND. Guardian unreachable returns " +
-        "SERVICE_UNAVAILABLE and nothing changes; try again later. Withdrawing " +
-        "cannot be undone. Use it when the agent no longer needs an action " +
+        "another agent, returns NOT_FOUND. If Guardian cannot be reached or " +
+        "its answer is lost, it returns SERVICE_UNAVAILABLE with " +
+        "outcomeUnknown: true: the request may or may not have been " +
+        "withdrawn, and calling it again with the same requestId is safe" +
+        (mode === "proxy"
+          ? "; this proxy keeps the held call until Guardian confirms the " +
+            "withdrawal"
+          : "") +
+        ". Withdrawing cannot be undone. Use it when the agent no longer needs an action " +
         "it asked for, so the person is not asked to decide on it.",
       inputSchema: {
         type: "object",
@@ -138,10 +144,11 @@ const UNSUPPORTED = {
     "This version of @odingard/guardian-sdk cannot do this. Update it; nothing changed.",
 };
 
+/** No clear answer came back: the withdrawal may have happened. */
+const UNCONFIRMED_MESSAGE =
+  "No clear answer came back from Guardian, so this request may or may not have been withdrawn. Calling guardian_cancel again with the same requestId is safe.";
+
 function refusalMessage(reasonCode: string, state?: string): string {
-  if (reasonCode === "SERVICE_UNAVAILABLE") {
-    return "Guardian could not be reached, so nothing changed. Try again later.";
-  }
   if (reasonCode === "NOT_FOUND") {
     return "This agent has no held request with this requestId. Nothing changed.";
   }
@@ -227,14 +234,15 @@ export async function cancelHeld(
   if (!client.withdraw) return jsonResult(UNSUPPORTED, true);
   const result = await client.withdraw(requestId);
   if (result.ok && result.requestId !== requestId) {
-    // An answer about another request: fail closed, drop nothing.
+    // An answer about another request is unreadable: the withdrawal may
+    // have happened. Report it as unconfirmed and drop nothing.
     return jsonResult(
       {
         ok: false,
         reasonCode: "MALFORMED_RESPONSE",
         requestId,
-        message:
-          "Guardian's answer did not match this requestId. Nothing was dropped.",
+        outcomeUnknown: true,
+        message: UNCONFIRMED_MESSAGE,
       },
       true,
     );
@@ -249,13 +257,25 @@ export async function cancelHeld(
         "Withdrawn. The person no longer sees this request and it can never be claimed. Nothing was run.",
     });
   }
+  // No clear answer (the SDK says so, or an SDK without the flag reports
+  // an outage, a 5xx or an unreadable answer): the withdrawal may have
+  // happened. Keep the held call; a retry with the same requestId gives a
+  // clear answer.
+  const unconfirmed =
+    result.outcomeUnknown === true ||
+    result.reasonCode === "SERVICE_UNAVAILABLE" ||
+    result.reasonCode === "MALFORMED_RESPONSE" ||
+    /^HTTP_5\d\d$/.test(result.reasonCode ?? "");
   return jsonResult(
     {
       ok: false,
       reasonCode: result.reasonCode,
       requestId: result.requestId ?? requestId,
       ...(result.state === undefined ? {} : { state: result.state }),
-      message: refusalMessage(result.reasonCode, result.state),
+      ...(unconfirmed ? { outcomeUnknown: true } : {}),
+      message: unconfirmed
+        ? UNCONFIRMED_MESSAGE
+        : refusalMessage(result.reasonCode, result.state),
     },
     true,
   );
