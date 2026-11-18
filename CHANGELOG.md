@@ -11,6 +11,8 @@
   - `WebSearch` (and dsh `web_search`) is `web_fetch`, with the query.
   - Not seen: a search over a folder (Grep on the repository, `grep -r`) can read a sensitive file inside it, and a path built at run time is not checked.
 
+## guardian-hook 0.4.3, released 2026-11-18
+
 ### Fixed: a hook that fails to start or crashes blocks the action
 
 - **`@odingard/guardian-hook`**: guardian-hook now blocks the action if the hook fails to start or crashes. Before, a hook that could not load (for example a missing or unbuilt `@odingard/guardian-sdk`) exited with code 1, which Claude Code treats as a non-blocking error, so the action ran. (The documented Codex and DeepSeek Harness commands already turned that exit into a block with `|| … exit 2`.)
