@@ -482,14 +482,16 @@ const DOTGLOB = /dotglob|globdots|glob_dots|globignore|\(D/i;
  * Commands that may read files from another folder or machine (`cd`,
  * `ssh`, `docker exec`), and search and archive tools that take a bare
  * name as a filter for files in other folders (`find ~ -name id_rsa`,
- * `grep -r --include=.env`): with one of them, a bare name counts whether
+ * `grep -r --include=.env`), and `xargs` / `parallel`, which join a name
+ * to a folder at run time (`xargs -I{} cat ~/{}`): with one of them, a
+ * bare name counts whether
  * or not it exists here.
  */
 const ELSEWHERE = new Set(
   (
     "cd pushd chdir ssh scp sftp rsync docker podman nerdctl kubectl oc " +
     "find fd fdfind locate mlocate plocate grep egrep fgrep zgrep rg ag ack " +
-    "tar zip 7z cpio"
+    "tar zip 7z cpio xargs parallel"
   ).split(" "),
 );
 /** Options that run a command in another folder (`git -C`, `make -C`). */

@@ -417,6 +417,8 @@ describe("shell commands that read a sensitive file", () => {
       "python3 -c \"import os; os.chdir('/srv/keys'); print(open('server.pem').read())\"",
       "tar -C /srv -cf - .npmrc",
       "env -C /srv cat .npmrc",
+      "echo .npmrc | xargs -I{} cat ~/{}",
+      "parallel cat ~/{} ::: .npmrc",
       "su - postgres -c 'cat .pgpass'",
       "sudo --login -u postgres cat .pgpass",
       "runuser -l postgres -c 'cat .pgpass'",
