@@ -84,9 +84,11 @@ describe("missions", () => {
     ]);
   });
 
-  it("does not fall back on a pause or an outage", () => {
-    expect(MISSION_FALLBACK_REASONS.has("AUTHORITY_PAUSED")).toBe(false);
+  it("falls back on an authorization refusal, not on an outage", () => {
+    expect(MISSION_FALLBACK_REASONS.has("NOT_AUTHORIZED")).toBe(true);
     expect(MISSION_FALLBACK_REASONS.has("SERVICE_UNAVAILABLE")).toBe(false);
+    expect(MISSION_FALLBACK_REASONS.has("INVALID_REQUEST")).toBe(false);
+    expect(MISSION_FALLBACK_REASONS.has("APPROVAL_REQUIRED")).toBe(false);
   });
 
   it("refuses records it cannot read", () => {

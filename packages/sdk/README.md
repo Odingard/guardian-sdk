@@ -392,10 +392,13 @@ const result = await guardian.request({
 - `createMissionClient(config)` has the methods of `createGuardianClient`.
   `request` uses the mission credential. When Guardian refuses because the
   mission does not cover the action (`missionFallsBack`,
-  `MISSION_FALLBACK_REASONS`: a different action or site, over a limit, past
-  the end, or the mission has ended), the same action is sent as a new request
-  with the agent credential, where the person's usual permissions apply. Other
-  refusals are returned as they are. The result names the credential that
+  `MISSION_FALLBACK_REASONS`: an authorization refusal, which hosted Guardian
+  answers as `NOT_AUTHORIZED`, or the mission has ended), the same action is
+  sent as a new request with the agent credential, where the person's usual
+  permissions apply with every check, so a fallback can cost one extra
+  approval request, never an unapproved action. Guardian unreachable, a
+  malformed or conflicting request, or an approval already required are
+  returned as they are. The result names the credential that
   decided (`via`) and, after a fallback, the mission's refusal
   (`missionReasonCode`). `claim`, `execute` and record lookups use the
   credential that made the request; a request id the client did not make is

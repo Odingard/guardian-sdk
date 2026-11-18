@@ -33,11 +33,19 @@ import {
 
 /**
  * Refusals of a mission request that mean "the mission does not cover
- * this", so the action falls back to a normal request. Anything else (for
- * example Guardian unreachable, a paused agent, a malformed request) is
- * returned as it is.
+ * this", so the action falls back to a normal request.
+ *
+ * Hosted Guardian answers every authorization refusal with the public code
+ * `NOT_AUTHORIZED` (the detailed reason is not published), so that code
+ * falls back too. The fallback is decided by the person's usual
+ * permissions with every check still applied, a pause included, so it can
+ * cost one extra approval request, never an unapproved action. Guardian
+ * unreachable, a malformed or conflicting request, or an approval already
+ * required are returned as they are.
  */
 export const MISSION_FALLBACK_REASONS: ReadonlySet<string> = new Set([
+  // Hosted Guardian's public code for any authorization refusal.
+  "NOT_AUTHORIZED",
   "AUTHORITY_CHAIN_MISSING",
   "ACTION_NOT_ALLOWED",
   "RESOURCE_NOT_ALLOWED",
