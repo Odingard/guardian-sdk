@@ -42,7 +42,7 @@ export const TOOLS = [
           type: "object",
           description:
             "The tool's own input, as the JSON object the tool takes " +
-            "(at most 16,384 characters of JSON). Guardian decides on these exact " +
+            "(at most 16,384 bytes of JSON, UTF-8). Guardian decides on these exact " +
             "arguments, and an approved call runs with them unchanged. " +
             "Defaults to {}.",
           additionalProperties: true,
