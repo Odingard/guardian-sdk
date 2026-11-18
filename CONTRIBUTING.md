@@ -65,9 +65,9 @@ npm run test:python      # Python SDK (after: cd packages/python && uv venv && u
 npm run fixtures:python  # regenerate the Python SDK's cross-language golden fixtures
 ```
 
-`packages/sdk/src/contracts/`, `packages/sdk/src/evidence/`, the SDK sources
-`client.ts`, `guard.ts`, `lifecycle.ts`, `receipts.ts` and `embedded.ts`, the
-catalog JSON and the Steel adapter sources are generated. Don't edit them here; open an issue
+`packages/sdk/src/contracts/`, `packages/sdk/src/evidence/`, each
+`packages/sdk/src/*.ts` file that starts with `// Generated file — do not edit.`,
+the catalog JSON and the Steel adapter sources are generated. Don't edit them here; open an issue
 instead.
 
 Rules that matter:
