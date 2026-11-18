@@ -1007,7 +1007,10 @@ class _Run:
                         close()  # a sync guard does not await an async hook
                     value = None
                 elif kind == "watched":
-                    self.guard._notify_watched(self.tool_name, op[1], op[2])
+                    pending_watch = self.guard._notify_watched(self.tool_name, op[1], op[2])
+                    close_watch = getattr(pending_watch, "close", None)
+                    if callable(close_watch):
+                        close_watch()  # a sync guard does not await an async hook
                     value = None
                 else:  # receipt
                     self.receipt = op[2]

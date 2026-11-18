@@ -110,8 +110,8 @@ export const INIT_WORDS = Object.freeze({
     `Test action: waiting for you to approve it in the console (request ${requestId}).`,
   testAllowed: "Test action: allowed and recorded.",
   testApproved: "Test action: approved and recorded.",
-  testDenied: (code: string) =>
-    `Test action: denied (${code}). This is what a refused action looks like.`,
+  testUnknown: (code: string, requestId: string) =>
+    `Test action: Guardian could not confirm that it was recorded (${code}). Do not run it again; check request ${requestId} in the console.`,
   testExpired: "Test action: no one approved it in time.",
   testRefused: (code: string) =>
     `Test action refused (${code}). Check the rules for ${SETUP_TEST_TOOL} in the browser.`,
@@ -165,6 +165,8 @@ function allowedUrl(text: string): string | null {
     return null;
   }
   if (url.username !== "" || url.password !== "") return null;
+  // An IPv6 literal cannot be written to the env file unquoted.
+  if (url.hostname.startsWith("[")) return null;
   return url.origin;
 }
 
@@ -437,14 +439,16 @@ export async function runInit(
       });
       if (outcome.kind === "allowed") io.out(INIT_WORDS.testAllowed);
       else if (outcome.kind === "approved") io.out(INIT_WORDS.testApproved);
-      else if (outcome.kind === "denied") {
-        io.out(INIT_WORDS.testDenied(outcome.reasonCode));
-      } else if (outcome.kind === "expired") io.out(INIT_WORDS.testExpired);
-      else {
+      else if (outcome.kind === "expired") io.out(INIT_WORDS.testExpired);
+      else if (outcome.kind === "unknown") {
+        // It may have been recorded: never sent again.
+        io.err(INIT_WORDS.testUnknown(outcome.reasonCode, outcome.requestId));
+        return 1;
+      } else {
         io.err(INIT_WORDS.testRefused(outcome.reasonCode));
+        if (attempt === 2) return 1;
         const again = await io.prompt(INIT_WORDS.testRetryPrompt);
-        if (again !== null && /^n/i.test(again.trim())) return 1;
-        if (again === null) return 1;
+        if (again === null || /^n/i.test(again.trim())) return 1;
         continue;
       }
       break;
