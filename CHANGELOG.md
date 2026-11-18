@@ -1,6 +1,6 @@
 # Changelog
 
-## guardian-hook (unreleased)
+## guardian-hook 0.4.3, released 2026-11-18
 
 ### Fixed: a hook that fails to start or crashes blocks the action
 
