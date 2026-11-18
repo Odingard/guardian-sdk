@@ -1303,6 +1303,10 @@ function readCall(
         ? sensitiveInSearch(filter.value, absoluteIn(target, cwd), config)
         : undefined);
     if (onFilter) hits.push(onFilter);
+  } else if (filter?.searches && hits.length === 0) {
+    // A search with no filter reads every file under the folder.
+    const inside = sensitiveInSearch("*", absoluteIn(target, cwd), config);
+    if (inside) hits.push(inside);
   }
   if (hits.length === 0) return null;
   return {

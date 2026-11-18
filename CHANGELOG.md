@@ -9,7 +9,8 @@
   - Default patterns include `.env*` (except `.env.example`, `.env.sample`, `.env.template`), `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `*secret*`, `.npmrc`, `.netrc` and `.git-credentials`; the README lists them all. Paths are checked as written, as absolute paths (`..` resolved) and with symlinks followed, ignoring case.
   - `GUARDIAN_HOOK_SENSITIVE_PATHS` adds patterns or exempts files (`!pattern`); `GUARDIAN_HOOK_SENSITIVE_MODE=deny` makes the hook refuse sensitive reads itself. Invalid settings, a read without a path, and an error while checking a call deny the call.
   - `WebSearch` (and dsh `web_search`) is `web_fetch`, with the query.
-  - Not seen: a search over a folder (Grep on the repository, `grep -r`) can read a sensitive file inside it, and a path built at run time is not checked.
+  - Grep (and dsh `grep`) checks the files under the searched folder that its filter selects, or every file there when it has no filter; a Grep over a folder that holds a sensitive file goes to the Ask tier.
+  - Not seen: a shell search over a folder (`grep -r`, `rg`) can read a sensitive file inside it, and a path built at run time is not checked.
 
 ## guardian-hook 0.4.3, released 2026-11-18
 

@@ -638,7 +638,8 @@ const MAX_SEARCH_DIRS = 2_000;
 const MAX_SEARCH_ENTRIES = 50_000;
 
 /**
- * A search filter with wildcards (Grep `glob`, dsh grep `include`), matched
+ * A search filter with wildcards (Grep `glob`, dsh grep `include`; `*`
+ * for a search with no filter), matched
  * like ripgrep's `--glob` against the files under `root`: a filter without
  * `/` matches a file name at any depth. Each file it selects is checked.
  * Folders named in SEARCH_SKIP are not walked. Too many folders or

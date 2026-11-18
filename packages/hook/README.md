@@ -61,7 +61,7 @@ The patterns are checked on your machine, deterministically. The defaults:
 - A pattern without `/` matches the last part of the path (the file name); write `name/**` to cover a folder and everything in it. A pattern with `/` matches the end of the path. `*` and `?` match within a name, `[abc]` one character, `**` any number of folders. Case is ignored.
 - A path is checked as written, as an absolute path (`./`, `..` and `~` resolved against the working directory) and, when it exists, with symlinks followed. A path that exists but cannot be resolved counts as sensitive.
 - In a shell command the hook checks every word after quotes and escapes are removed (a bare name such as `.env` counts when that file exists in the working directory, or when the command changes folder, runs elsewhere, searches or reads git history: `cd`, `git -C`, `ssh`, `docker`, `find`, `grep -r`, `rg`, `tar`, `git show HEAD~1:.env`, `git log -p`), brace and glob expansion as the shell would do it (`.en?`, `.{e,x}nv`, `*` with `dotglob`), code given to `sh -c`, interpreters and here-documents, and redirections (`< .env`).
-- For Grep and Glob, the path and the file filter (`glob`, `pattern`) are checked as written. A Grep filter with wildcards (`glob: ".en?"`) is also matched against the files under the searched folder, the way ripgrep matches it (folders named `.git`, `node_modules`, `.venv` and `__pycache__` are not walked); a folder too large to check goes to the Ask tier.
+- For Grep and Glob, the path and the file filter (`glob`, `pattern`) are checked as written. A Grep filter with wildcards (`glob: ".en?"`) is also matched against the files under the searched folder, the way ripgrep matches it, and a Grep with no filter checks every file under the folder, hidden files included. Folders named `.git`, `node_modules`, `.venv` and `__pycache__` are not walked, and a folder too large to check goes to the Ask tier. So a Grep over a folder that holds a sensitive file (a repository with a `.env`) goes to the Ask tier; exempt the file with `!` if you want those searches to run.
 
 You set:
 
@@ -70,9 +70,9 @@ You set:
 
 Fail closed: invalid settings, a read without a path, or an error while checking a call deny the call. An exemption covers the name it matches, not the file a symlink points to.
 
-What this does not see: a search over a folder (Grep on the repository, `grep -r`, `rg`) can read a sensitive file inside it; the hook checks the path and filter named in the call, not every file the search opens. A path built at run time (`cat "$(…)"`, `cat $F`) and files read by scripts are not seen either. WebSearch is `web_fetch`: the query leaves your machine, so it is governed like a fetched URL.
+What this does not see: a shell search over a folder (`grep -r TOKEN .`, `rg TOKEN`) can read a sensitive file inside it; for shell commands the hook checks the names in the command, not every file the search opens. A path built at run time (`cat "$(…)"`, `cat $F`) and files read by scripts are not seen either. WebSearch is `web_fetch`: the query leaves your machine, so it is governed like a fetched URL.
 
-**Speed.** An ordinary read is decided locally (checking the patterns takes well under a millisecond), but every read now starts the hook process. On our test machine that took about 0.15 s with the package installed globally and about 0.75 s through `npx -y` with a warm cache. To keep reads fast, install it (`npm i -g @odingard/guardian-hook`) and use `"command": "guardian-hook"`.
+**Speed.** An ordinary read is decided locally (checking the patterns takes well under a millisecond; walking a folder for a Grep took about 45 ms for this repository), but every read now starts the hook process. On our test machine that took about 0.15 s with the package installed globally and about 0.75 s through `npx -y` with a warm cache. To keep reads fast, install it (`npm i -g @odingard/guardian-hook`) and use `"command": "guardian-hook"`.
 
 ## Setup
 

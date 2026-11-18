@@ -263,6 +263,19 @@ describe("path tricks", () => {
     expect(
       grep({ path: "/nonexistent-guardian", glob: "*.ts" }),
     ).toBeUndefined();
+    // With no filter, the search reads every file under the folder.
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".aws"), { recursive: true });
+    writeFileSync(join(home, ".aws", "credentials"), "[default]\n");
+    mkdirSync(join(home, "certs"));
+    writeFileSync(join(home, "certs", "server.pem"), "x\n");
+    mkdirSync(join(home, "code"));
+    writeFileSync(join(home, "code", "a.ts"), "x\n");
+    expect(grep({ path: join(home, ".aws") })).toBe("shell_destructive");
+    expect(grep({ path: join(home, "certs") })).toBe("shell_destructive");
+    expect(grep({ path: home }, "grep")).toBe("shell_destructive");
+    expect(grep({ path: join(home, "code") })).toBeUndefined();
+    expect(grep({ path: join(home, "code", "a.ts") })).toBeUndefined();
   });
 
   it("DeepSeek Harness read, read_image, grep, glob and str_replace_editor view", () => {
