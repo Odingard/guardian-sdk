@@ -12,6 +12,10 @@
   - Grep (and dsh `grep`) checks the files under the searched folder that its filter selects, or every file there when it has no filter; a Grep over a folder that holds a sensitive file goes to the Ask tier.
   - Not seen: a shell search over a folder (`grep -r`, `rg`) can read a sensitive file inside it, and a path built at run time is not checked.
 
+### Fixed: commands that can print the agent's environment ask first
+
+- **`@odingard/guardian-hook`**: a shell command that can print the agent's environment, which holds `GUARDIAN_AGENT_CREDENTIAL`, goes to `shell_destructive` (Ask tier) with `touches: "sensitive-env"` and what it reads, and `GUARDIAN_HOOK_SENSITIVE_MODE=deny` refuses it: `env` and `printenv` with nothing to run, `export -p`, `set`, `declare -x`, `ps e`, `/proc/<pid>/environ`, the PowerShell `env:` drive, any expansion of a `GUARDIAN_*` variable, a secret variable (`*_TOKEN`, `*_SECRET`, `*_KEY`, `*_PASSWORD`, `AWS_*`) expanded in `echo`, `printf`, `cat`, a here-document, `sh -c` or interpreter code, and interpreter code that reads the environment (`python -c 'import os;print(os.environ)'`, `node -e 'console.log(process.env)'`). Setting a variable to run a command (`env FOO=bar cmd`) stays `shell`.
+
 ## guardian-hook 0.4.3, released 2026-11-18
 
 ### Fixed: a hook that fails to start or crashes blocks the action
