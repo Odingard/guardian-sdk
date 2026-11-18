@@ -248,6 +248,60 @@ describe("guardian before_tool_call handler", () => {
   });
 });
 
+describe("watch mode", () => {
+  const watchedAnswer = (would: "ASK" | "DENY"): Result => ({
+    ok: true,
+    requestId: "req_w",
+    decision: "DENY",
+    reasonCode: "WATCHED",
+    watched: would,
+  });
+
+  it("a call Guardian would have asked about or denied runs, and nothing is redeemed", async () => {
+    for (const would of ["ASK", "DENY"] as const) {
+      const g = fakeGuardian(watchedAnswer(would));
+      const asked: unknown[] = [];
+      const handler = createGuardianToolHandler({
+        config: CONFIG,
+        client: {
+          ...g.client,
+          request: async (invocation) => {
+            asked.push(invocation);
+            return g.client.request(invocation);
+          },
+        },
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toEqual({ params: { command: "terraform apply" } });
+      expect(g.executed).toEqual([]);
+      expect(asked[0]).toMatchObject({ watchAware: true });
+    }
+  });
+
+  it("a watched call that did not run, or a WATCHED answer without a would-be decision, is blocked", async () => {
+    for (const answer of [
+      {
+        ok: true,
+        requestId: "req_w",
+        decision: "DENY",
+        reasonCode: "WATCHED_NOT_RUN",
+      },
+      { ok: true, requestId: "req_w", decision: "DENY", reasonCode: "WATCHED" },
+    ] as Result[]) {
+      const g = fakeGuardian(answer);
+      const handler = createGuardianToolHandler({
+        config: CONFIG,
+        client: g.client,
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toMatchObject({ block: true });
+      expect(g.executed).toEqual([]);
+    }
+  });
+});
+
 describe("fail closed", () => {
   it("no configuration: every governed call is blocked, Guardian is never called", async () => {
     const fetch = vi.fn();

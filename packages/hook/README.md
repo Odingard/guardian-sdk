@@ -312,6 +312,14 @@ Approval binds the exact arguments. A file path is an argument; for most tools t
 - Pinning is supported on Linux and macOS. On Windows an Edit-type call is denied (`CONTENT_PIN_UNSUPPORTED_PLATFORM`).
 - **Digest privacy:** the SHA-256 of the target is sent to Guardian, shown to the approver and kept in the signed decision record. For a small or low-entropy file, anyone who sees the digest can guess the contents offline by hashing candidates.
 
+## Watch mode (unreleased)
+
+While the agent is in watch mode (the console's **Start watching**), Guardian records what it would have decided for each call and blocks nothing at that step. For a call it would have asked about or denied, it issues no capability, so there is nothing to approve or redeem.
+
+The hook asks Guardian for that watched answer and, for such a call, gives no permission decision: the agent's own permissions apply, as they would without the hook. In Claude Code the person sees a note naming the request; in Codex and DeepSeek Harness the hook prints nothing. An Edit-type call's target is still checked against its pin. Every other answer is unchanged: allowed calls are redeemed as before, and anything Guardian does not confirm is denied.
+
+Watch mode needs `@odingard/guardian-sdk` with watch mode support next to the hook. With an older SDK, or an older hook, a watched call Guardian would have asked about or denied is denied with `WATCHED_NOT_RUN`. Nothing runs, and the console counts it as not run.
+
 ## Limits (read these)
 
 - **Decision-gated.** The agent performs the effect after Guardian authorizes and redeems the call. The signed decision record proves Guardian's authorization of that exact call, not the command's own outcome.

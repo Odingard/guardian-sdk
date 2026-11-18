@@ -413,7 +413,19 @@ export function createGuardianToolHandler(
         wait: abortableWait(baseWait, signal),
         now,
         log: (line) => log.info?.(line),
+        // The agent runs its own tools: in watch mode a call Guardian would
+        // have asked about or denied runs, and Guardian approves nothing.
+        watchAware: true,
       });
+      if (verdict.decision === "watched") {
+        if (isOver()) {
+          return block(
+            `Guardian: the answer for ${toolName} came too late for OpenClaw's hook timeout. Nothing ran.`,
+          );
+        }
+        log.info?.(`Guardian: ${call.summary} — ${verdict.reason}`);
+        return { params };
+      }
       if (verdict.decision !== "allow") return block(verdict.reason);
       if (isOver()) {
         return block(

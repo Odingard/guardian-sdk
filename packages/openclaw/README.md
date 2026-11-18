@@ -40,6 +40,7 @@ tool OpenClaw runs, including MCP tools and tools added by other plugins.
 | `ALLOW`       | `{ params }` after redeeming            | The single-use capability is redeemed and recorded, then the tool runs with exactly the parameters Guardian saw.       |
 | `ASK`         | waits, then `{ params }` or `{ block }` | The handler waits while a person decides in Guardian. Approved: redeemed, then runs. Declined or expired: blocked.     |
 | `DENY`        | `{ block: true, blockReason }`          | Nothing runs. The agent is told why and not to work around it.                                                         |
+| Watched       | `{ params }`                            | Watch mode: Guardian would have asked or denied, and issued no capability. The tool runs; nothing is redeemed.         |
 | Anything else | `{ block: true, blockReason }`          | Missing config, unreachable Guardian, crash, timeout, cancelled call, failed redemption: nothing runs (fail closed).   |
 
 A block reason from Guardian names its request (`Request req_…`). If Guardian's answer to the redemption is lost, the plugin looks the request up: a redemption Guardian recorded as verified runs; anything else is blocked with `EXECUTION_OUTCOME_UNKNOWN` (or `EXECUTION_NOT_SENT`), and nothing runs.

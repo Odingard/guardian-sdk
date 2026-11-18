@@ -73,6 +73,19 @@ export function formatVerdict(
   if (verdict === null) {
     return { stdout: "", stderr: "", exitCode: 0, verdict };
   }
+  if (verdict.decision === "watched") {
+    // Watch mode: no permission decision, so the agent's own permissions
+    // apply. Claude Code shows the reason to the person.
+    return {
+      stdout:
+        dialect === "claude-code"
+          ? JSON.stringify({ systemMessage: verdict.reason })
+          : "",
+      stderr: "",
+      exitCode: 0,
+      verdict,
+    };
+  }
   if (dialect === "claude-code") {
     return {
       stdout: claudeCodeOutput(verdict),
@@ -104,7 +117,8 @@ export function claudeCodeOutput(verdict: HookVerdict): string {
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: verdict.decision,
+      // Only an allow allows; anything else given here denies.
+      permissionDecision: verdict.decision === "allow" ? "allow" : "deny",
       permissionDecisionReason: verdict.reason,
     },
   });
@@ -474,6 +488,9 @@ async function evaluate(
     approvalTimeoutMs,
     requestTtlMs: REQUEST_TTL_MS,
     pollIntervalMs: 2_000,
+    // Every agent the hook serves runs the call itself, so a watched call
+    // is left to the agent's own permissions.
+    watchAware: true,
     ...(deps.wait ? { wait: deps.wait } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.log ? { log: deps.log } : {}),
