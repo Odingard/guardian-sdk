@@ -623,3 +623,83 @@ export function sensitiveInFilter(
   }
   return undefined;
 }
+
+const SEARCH_SKIP = new Set([".git", "node_modules", ".venv", "__pycache__"]);
+const MAX_SEARCH_DIRS = 2_000;
+const MAX_SEARCH_ENTRIES = 50_000;
+
+/**
+ * A search filter with wildcards (Grep `glob`, dsh grep `include`), matched
+ * like ripgrep's `--glob` against the files under `root`: a filter without
+ * `/` matches a file name at any depth. Each file it selects is checked.
+ * Folders named in SEARCH_SKIP are not walked. Too many folders or
+ * entries to check counts as unresolved (fail closed).
+ */
+export function sensitiveInSearch(
+  filter: string,
+  root: string,
+  config: SensitiveConfig = DEFAULT_SENSITIVE,
+): SensitiveHit | undefined {
+  if (!GLOB_CHARS.test(filter)) return undefined;
+  let variants: string[];
+  try {
+    variants = expandBraces(filter);
+  } catch {
+    return { path: filter.slice(0, 200), pattern: UNRESOLVED };
+  }
+  const compiled = variants.map((v) => {
+    const parts = segmentsOf(v);
+    const segments = parts.map((part): Segment => {
+      if (part === "**") return "**";
+      try {
+        return segmentRegex(part, part);
+      } catch {
+        return /^.*$/s; // an unclosed [ : every name (over-approximate)
+      }
+    });
+    // No `/`: the name at any depth.
+    return v.includes("/") ? segments : (["**", ...segments] as Segment[]);
+  });
+  let start: string;
+  try {
+    start = realpathSync.native(root);
+  } catch (err) {
+    if (isMissing(err)) return undefined;
+    return { path: root, pattern: UNRESOLVED };
+  }
+  let dirs = 0;
+  let entries = 0;
+  const pending: string[][] = [[]];
+  while (pending.length > 0) {
+    const rel = pending.pop()!;
+    if (++dirs > MAX_SEARCH_DIRS) {
+      return { path: `${root} (${filter})`, pattern: UNRESOLVED };
+    }
+    let found: Dirent[];
+    try {
+      found = readdirSync([start, ...rel].join("/"), { withFileTypes: true });
+    } catch (err) {
+      if (rel.length === 0 && !isMissing(err)) {
+        return { path: root, pattern: UNRESOLVED };
+      }
+      continue; // the search cannot read it either
+    }
+    entries += found.length;
+    if (entries > MAX_SEARCH_ENTRIES) {
+      return { path: `${root} (${filter})`, pattern: UNRESOLVED };
+    }
+    for (const e of found) {
+      const path = [...rel, e.name];
+      if (e.isDirectory()) {
+        if (!SEARCH_SKIP.has(e.name)) pending.push(path);
+        continue;
+      }
+      if (!compiled.some((segments) => matchFrom(segments, 0, path, 0))) {
+        continue;
+      }
+      const hit = checkPath([start, ...path].join("/"), config);
+      if (hit) return { path: path.join("/"), pattern: hit.pattern };
+    }
+  }
+  return undefined;
+}

@@ -242,6 +242,29 @@ describe("path tricks", () => {
     }
   });
 
+  it("a Grep filter with wildcards is matched against the searched folder", () => {
+    const grep = (input: Record<string, unknown>, tool = "Grep") =>
+      governedCall({ tool, input: { pattern: ".", ...input }, cwd: dir })
+        ?.toolName;
+    expect(grep({ path: dir, glob: ".en?" })).toBe("shell_destructive");
+    expect(grep({ glob: ".en?" })).toBe("shell_destructive"); // the cwd
+    expect(grep({ path: dir, glob: "*.pe?" })).toBe("shell_destructive");
+    expect(grep({ path: dir, glob: "deep/**/*.p?m" })).toBe(
+      "shell_destructive",
+    );
+    expect(grep({ path: dir, include: ".e*" }, "grep")).toBe(
+      "shell_destructive",
+    );
+    // A symlink the filter selects is followed.
+    expect(grep({ path: dir, glob: "notes.t?t" })).toBe("shell_destructive");
+    // Filters that select no sensitive file stay ordinary.
+    expect(grep({ path: dir, glob: "*.ts" })).toBeUndefined();
+    expect(grep({ path: join(dir, "plain"), glob: "*.txt" })).toBeUndefined();
+    expect(
+      grep({ path: "/nonexistent-guardian", glob: "*.ts" }),
+    ).toBeUndefined();
+  });
+
   it("DeepSeek Harness read, read_image, grep, glob and str_replace_editor view", () => {
     for (const [tool, input] of [
       ["read", { file_path: "/w/.env" }],

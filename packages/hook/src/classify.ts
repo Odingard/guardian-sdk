@@ -8,6 +8,8 @@
  * while `terraform apply` waits for a human approval.
  */
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute } from "node:path";
 
 import {
   CONTENT_PIN_INVALID_ARGUMENT,
@@ -21,6 +23,7 @@ import {
   DEFAULT_SENSITIVE,
   sensitiveInCommand,
   sensitiveInFilter,
+  sensitiveInSearch,
   type SensitiveConfig,
   type SensitiveHit,
 } from "./sensitive.js";
@@ -1228,19 +1231,30 @@ const READ_TOOLS: Readonly<
       /** The path may be left out: the tool then reads the working directory. */
       optional?: boolean;
       filter?: string;
+      /** The filter selects files whose contents are read (Grep). */
+      searches?: boolean;
     }>
   >
 > = {
   Read: { path: ["file_path"] }, // Claude Code
   NotebookRead: { path: ["notebook_path"] },
-  Grep: { path: ["path"], optional: true, filter: "glob" },
+  Grep: { path: ["path"], optional: true, filter: "glob", searches: true },
   Glob: { path: ["path"], optional: true, filter: "pattern" },
   LS: { path: ["path"], optional: true },
   read: { path: ["file_path"] }, // DeepSeek Harness
   read_image: { path: ["file_path"] },
-  grep: { path: ["path"], optional: true, filter: "include" },
+  grep: { path: ["path"], optional: true, filter: "include", searches: true },
   glob: { path: ["path"], optional: true, filter: "pattern" },
 };
+
+/** `path` as an absolute path (`~` and relative paths resolved). */
+function absoluteIn(path: string, cwd: string | undefined): string {
+  const expanded =
+    path === "~" || path.startsWith("~/") ? homedir() + path.slice(1) : path;
+  return isAbsolute(expanded)
+    ? expanded
+    : `${cwd ?? process.cwd()}/${expanded}`;
+}
 
 /** A read-type call could not be classified; the hook denies it. */
 export class ReadClassifyError extends Error {
@@ -1259,7 +1273,7 @@ function readCall(
   tool: string,
   path: unknown,
   optional: boolean,
-  filter: { name: string; value: unknown } | undefined,
+  filter: { name: string; value: unknown; searches?: boolean } | undefined,
   call: ToolCall,
   options: ClassifyOptions,
 ): GovernedCall | null {
@@ -1283,7 +1297,11 @@ function readCall(
   const onPath = checkPath(target, config, cwd ? { cwd } : {});
   if (onPath) hits.push(onPath);
   if (filter && typeof filter.value === "string" && filter.value !== "") {
-    const onFilter = sensitiveInFilter(filter.value, config);
+    const onFilter =
+      sensitiveInFilter(filter.value, config) ??
+      (filter.searches
+        ? sensitiveInSearch(filter.value, absoluteIn(target, cwd), config)
+        : undefined);
     if (onFilter) hits.push(onFilter);
   }
   if (hits.length === 0) return null;
@@ -1416,7 +1434,11 @@ export function governedCall(
       path,
       read.optional ?? false,
       read.filter
-        ? { name: read.filter, value: input[read.filter] }
+        ? {
+            name: read.filter,
+            value: input[read.filter],
+            searches: read.searches ?? false,
+          }
         : undefined,
       call,
       options,
