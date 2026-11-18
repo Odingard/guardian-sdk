@@ -8,7 +8,7 @@ Guardian before it runs (input typed into an already open session with
 - everyday commands (`ls`, `npm test`) and file edits run under **Allow**;
 - deploys, destructive commands and pushes (`terraform apply`, `rm -rf`,
   `git push`) wait until a person approves that exact action;
-- anything Guardian denies, or that nobody approves within 5 minutes, does
+- anything Guardian denies, or that no one approves within 5 minutes, does
   not run;
 - every allowed call leaves a signed record you can verify offline.
 

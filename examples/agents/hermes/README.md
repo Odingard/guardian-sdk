@@ -9,7 +9,7 @@ Hermes plugin `guardian`. It asks Guardian before the tool runs:
 - deploys, destructive commands, pushes, `execute_code`, the browser, cron
   changes, sub-agents, MCP tools and changes to Hermes' own settings wait until
   a person approves that exact call;
-- anything Guardian denies, or that nobody approves in time, does not run;
+- anything Guardian denies, or that no one approves in time, does not run;
 - every allowed call leaves a signed record you can verify offline.
 
 ## Try it without Hermes
@@ -58,7 +58,7 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
    `guardian` shows as enabled.
 4. `hermes chat -q "List the files here, then run terraform apply -auto-approve in ./infra"`.
    `ls` runs. `terraform apply` is held: approve it in the Guardian app while
-   the hook waits, and the command runs once. If nobody approves in time, the
+   the hook waits, and the command runs once. If no one approves in time, the
    call is blocked. A retry of the exact same call in the same Hermes process
    picks up the open request; a new `hermes chat -q` run files a new request.
 
