@@ -368,7 +368,7 @@ install -o root -g root -m 0444 /root/openclaw.json.new "$S/openclaw.json.bak"
 # registry's integrity), compare that integrity with the one in the Guardian
 # release notes, unpack it and swap it in. The plugin is one self-contained
 # directory (dist is bundled), so nothing else changes.
-V=0.1.2
+V=0.1.3
 mkdir -p /root/guardian && cd /root/guardian
 npm pack "@odingard/guardian-openclaw@$V" --registry https://registry.npmjs.org/ --json > "pack-$V.json"
 grep '"integrity"' "pack-$V.json"

@@ -1,6 +1,6 @@
 # Changelog
 
-## Python odingard-guardian (unreleased)
+## Python odingard-guardian 0.5.0, released 2026-11-18
 
 ### Added: Microsoft Agent Framework and Semantic Kernel; dollar amounts on tools
 
@@ -17,7 +17,7 @@
   - Before signing, the guard reads the open checkout mandate again and refuses (`TERMS_CHANGED`) if a `constraintDigest` or the mandate differs from what was approved. More than 64 acceptable items in all is refused (`TOO_MANY_ITEMS`).
   - A request outside Guardian's request limits, or one the Guardian SDK refuses before sending, is refused as `REQUEST_INVALID` with the reason. Before, it was reported as `GUARDIAN_UNREACHABLE`, which now means only that Guardian could not be reached.
 
-## Messages (unreleased)
+## guardian-hook 0.4.2 / guardian-openclaw 0.1.3 / Python 0.5.0, released 2026-11-18
 
 - **`@odingard/guardian-hook`**, **`@odingard/guardian-openclaw`** (which uses the hook's decision code) and the **Python Hermes plugin**: a held call now logs `… is held for approval (request req_…). Approve it in the Guardian console.`
 - **Python `odingard-guardian`**: the missing-credential error names the current prefix, `gak_…`.
