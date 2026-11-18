@@ -19,7 +19,7 @@
   "dependencies": {
     "@odingard/guardian-sdk": "^0.6.0",
     "@odingard/guardian-steel": "^0.1.1",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.325",
     "@odingard/guardian-hook": "^0.4.0",
     "@odingard/guardian-mcp": "^0.5.0",
     "@modelcontextprotocol/sdk": "^1.32.2"
