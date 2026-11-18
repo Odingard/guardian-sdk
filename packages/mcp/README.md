@@ -271,9 +271,9 @@ npx -y @odingard/guardian-mcp tools -- npx -y @modelcontextprotocol/server-files
 ```text
 Tool            Suggested     Why
 read_file       Allow         server marks it read-only
-write_file      Ask me first  "write" may change something
-delete_branch   Ask me first  server marks it destructive
-createIssue     Ask me first  "create" may change something  ⚠ name not accepted by Guardian
+write_file      Ask me        "write" may change something
+delete_branch   Ask me        server marks it destructive
+createIssue     Ask me        "create" may change something  ⚠ name not accepted by Guardian
 ```
 
 How the suggestions are made:

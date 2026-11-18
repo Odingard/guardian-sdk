@@ -1,6 +1,6 @@
 # Changelog
 
-## guardian-mcp 0.5.2, unreleased
+## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions
 
@@ -12,6 +12,10 @@
 ### Fixed: claiming before the person approves stays held
 
 - **`@odingard/guardian-mcp`**: in `guardian-mcp`, a `guardian_claim` made before the person approves (`APPROVAL_PENDING`) answers ASK with the `requestId`, so it can be claimed again after approval. Before, it was reported as DENY with "Do not retry the same call". Nothing runs in either case. `guardian-mcp proxy` already kept such a call held.
+
+### Changed: the Ask mode label matches the console
+
+- **`@odingard/guardian-mcp`**: `guardian-mcp tools` prints the suggested Ask mode as "Ask me", as in the console. The `--json` output is unchanged (`"suggestedMode": "ask"`).
 
 ## guardian-mcp 0.5.1, released 2026-11-18
 

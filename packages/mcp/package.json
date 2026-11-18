@@ -1,6 +1,6 @@
 {
   "name": "@odingard/guardian-mcp",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "mcpName": "io.github.Odingard/guardian-mcp",
   "description": "Puts Guardian in front of MCP tool calls: allow, ask a person, or deny before the call runs.",
   "license": "Apache-2.0",
