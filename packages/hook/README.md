@@ -84,7 +84,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @odingard/guardian-hook@0.4.1",
+            "command": "npx -y @odingard/guardian-hook@0.4.2",
             "timeout": 600,
             "onFailure": "block"
           }
