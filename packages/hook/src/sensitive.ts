@@ -650,6 +650,8 @@ export function sensitiveInSearch(
   root: string,
   config: SensitiveConfig = DEFAULT_SENSITIVE,
 ): SensitiveHit | undefined {
+  // `!pattern` excludes files: the search reads all the others.
+  if (filter.startsWith("!")) filter = "*";
   let variants: string[];
   try {
     variants = expandBraces(filter);

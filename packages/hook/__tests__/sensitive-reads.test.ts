@@ -281,6 +281,8 @@ describe("path tricks", () => {
     );
     expect(grep({ path: home, glob: "server.pem" })).toBe("shell_destructive");
     expect(grep({ path: home, glob: "a.ts" })).toBeUndefined();
+    // An exclusion filter searches everything else.
+    expect(grep({ path: home, glob: "!*.ts" })).toBe("shell_destructive");
     expect(grep({ path: join(home, "code", "a.ts") })).toBeUndefined();
   });
 
