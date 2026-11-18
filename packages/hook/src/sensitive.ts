@@ -285,8 +285,8 @@ export function checkPath(
   const absolute = isAbsolute(expanded)
     ? normalize(expanded)
     : resolve(options.cwd ?? process.cwd(), expanded);
-  // As the operating system reads it: a symlink before `..` is followed
-  // first (`normalize` would drop it).
+  // As the operating system reads it: `..` applies after a symlink before
+  // it is followed (`normalize` would drop the symlink).
   const asOpened = isAbsolute(expanded)
     ? expanded
     : `${options.cwd ?? process.cwd()}/${expanded}`;
