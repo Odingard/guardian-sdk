@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.12
+
+- Date: 2026-11-18
+- SHA-256: `ed11dbb8fdcd74895e1fac1f3f84865ff50f60af70ce49bb1eef796c44ef313e`
+- Pins: `@odingard/guardian-hook` 0.4.3. The other pins are unchanged from 1.0.11.
+- Pins the hook release that blocks the action when the hook fails to start or crashes. The Claude Code hook settings in 4A add `"onFailure": "block"`. No other change.
+
 ## 1.0.11
 
 - Date: 2026-11-18
