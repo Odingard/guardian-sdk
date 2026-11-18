@@ -22,6 +22,7 @@ import {
   checkPath,
   DEFAULT_SENSITIVE,
   sensitiveInCommand,
+  filterPieces,
   sensitiveInFilter,
   sensitiveInSearch,
   type SensitiveConfig,
@@ -1297,12 +1298,17 @@ function readCall(
   const onPath = checkPath(target, config, cwd ? { cwd } : {});
   if (onPath) hits.push(onPath);
   if (filter && typeof filter.value === "string" && filter.value !== "") {
-    const onFilter =
-      sensitiveInFilter(filter.value, config) ??
-      (filter.searches
-        ? sensitiveInSearch(filter.value, absoluteIn(target, cwd), config)
-        : undefined);
-    if (onFilter) hits.push(onFilter);
+    for (const piece of filterPieces(filter.value)) {
+      const onFilter =
+        sensitiveInFilter(piece, config) ??
+        (filter.searches
+          ? sensitiveInSearch(piece, absoluteIn(target, cwd), config)
+          : undefined);
+      if (onFilter) {
+        hits.push(onFilter);
+        break;
+      }
+    }
   } else if (filter?.searches && hits.length === 0) {
     // A search with no filter reads every file under the folder.
     const inside = sensitiveInSearch("*", absoluteIn(target, cwd), config);

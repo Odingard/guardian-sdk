@@ -286,6 +286,14 @@ describe("path tricks", () => {
     expect(grep({ path: join(home, ".aws"), glob: "!*.ts" })).toBe(
       "shell_destructive",
     );
+    // Several pieces, as Claude Code passes them to ripgrep.
+    expect(grep({ path: dir, glob: "*.md .env" })).toBe("shell_destructive");
+    expect(grep({ path: dir, glob: "*.md,.env" })).toBe("shell_destructive");
+    expect(grep({ path: home, glob: "*.ts !x" })).toBe("shell_destructive");
+    expect(grep({ path: dir, glob: "*.{md,txt}" })).toBe("shell_destructive"); // notes.txt
+    expect(
+      grep({ path: join(home, "code"), glob: "*.md *.ts" }),
+    ).toBeUndefined();
     expect(grep({ path: home, include: "!*.md" }, "grep")).toBe(
       "shell_destructive",
     );
@@ -404,8 +412,14 @@ describe("shell commands that read a sensitive file", () => {
       "ls | xargs grep -l .npmrc",
       "bash -c 'cd /srv && cat .npmrc'",
       "bash <<'EOF'\ncd /srv\ncat .npmrc\nEOF",
+      "bash <<'EOF'\nfind / -name server.pem\nEOF",
+      "bash -c 'find . -name server.pem'",
+      "python3 -c \"import os; os.chdir('/srv/keys'); print(open('server.pem').read())\"",
       "tar -C /srv -cf - .npmrc",
       "env -C /srv cat .npmrc",
+      "python3 -c \"import os; os.chdir(os.path.expanduser('~')); print(open('.git-credentials').read())\"",
+      "node -e \"process.chdir(require('os').homedir()); console.log(require('fs').readFileSync('.npmrc','utf8'))\"",
+      "python3 -c \"import os; print(open(os.path.join(os.environ['HOME'], '.pgpass')).read())\"",
     ]) {
       ask(command, src);
     }

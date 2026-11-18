@@ -523,7 +523,10 @@ const baseOf = (word: string) =>
  * commit message is not a command. A here-document fed to a shell or
  * interpreter cannot be read here, so then the raw text decides.
  */
-function runsElsewhere(command: string): boolean {
+function runsElsewhere(command: string): {
+  elsewhere: boolean;
+  interpreter: boolean;
+} {
   const parsed = parseShell(command);
   let interpreter = false;
   const visit = (p: Parsed, depth: number): boolean => {
@@ -553,10 +556,20 @@ function runsElsewhere(command: string): boolean {
     }
     return false;
   };
-  if (visit(parsed, 0)) return true;
-  // `bash <<EOF … EOF`: the body is code the parser does not read.
-  return interpreter && command.includes("<<") && RAW_ELSEWHERE.test(command);
+  if (visit(parsed, 0)) return { elsewhere: true, interpreter };
+  return {
+    elsewhere:
+      interpreter &&
+      // `bash <<EOF … EOF`: the body is code the parser does not read.
+      ((command.includes("<<") && RAW_ELSEWHERE.test(command)) ||
+        // Inline code that changes folder (`os.chdir`, `process.chdir`).
+        CODE_CHDIR.test(command)),
+    interpreter,
+  };
 }
+
+const CODE_CHDIR =
+  /\bchdir\b|\bSet-Location\b|\bPush-Location\b|(?:^|[\s;'"(])cd\s/i;
 
 const RAW_ELSEWHERE =
   /(?:^|[\s;&|(`/])(?:cd|pushd|chdir|ssh|scp|sftp|rsync|docker|podman|nerdctl|kubectl|oc|find|fd|fdfind|locate|grep|egrep|fgrep|rg|ag|ack|tar|zip|7z|cpio|git)(?=$|[\s;&|)`])/;
@@ -580,7 +593,7 @@ export function sensitiveInCommand(
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
-  const elsewhere = runsElsewhere(command);
+  const { elsewhere, interpreter } = runsElsewhere(command);
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
@@ -589,6 +602,9 @@ export function sensitiveInCommand(
    */
   const counts = (token: string): boolean => {
     if (elsewhere || /[/\\]/.test(token) || GLOB_CHARS.test(token)) return true;
+    // Interpreter code can build the folder (`path.join(home, ".npmrc")`):
+    // a dot-file name counts there (`obj.key` does not).
+    if (interpreter && token.startsWith(".")) return true;
     if (++bareChecks > MAX_BARE_CHECKS) return true;
     try {
       lstatSync(resolve(cwd, token));
@@ -774,4 +790,15 @@ export function sensitiveInSearch(
     }
   }
   return undefined;
+}
+
+/**
+ * The pieces of a search filter, as Claude Code's Grep passes them to
+ * ripgrep: split on whitespace, and on commas outside braces.
+ */
+export function filterPieces(filter: string): string[] {
+  return filter
+    .split(/\s+/)
+    .flatMap((piece) => (piece.includes("{") ? [piece] : piece.split(",")))
+    .filter((piece) => piece !== "");
 }
