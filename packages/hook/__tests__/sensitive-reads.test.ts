@@ -275,6 +275,12 @@ describe("path tricks", () => {
     expect(grep({ path: join(home, "certs") })).toBe("shell_destructive");
     expect(grep({ path: home }, "grep")).toBe("shell_destructive");
     expect(grep({ path: join(home, "code") })).toBeUndefined();
+    // A filter without wildcards is a name at any depth, as in ripgrep.
+    expect(grep({ path: join(home, ".aws"), glob: "credentials" })).toBe(
+      "shell_destructive",
+    );
+    expect(grep({ path: home, glob: "server.pem" })).toBe("shell_destructive");
+    expect(grep({ path: home, glob: "a.ts" })).toBeUndefined();
     expect(grep({ path: join(home, "code", "a.ts") })).toBeUndefined();
   });
 
