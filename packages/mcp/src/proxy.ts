@@ -180,24 +180,70 @@ function unreachableResult(toolName: string, requestId?: string): ToolResult {
 export const PROXY_GOVERNANCE_TOOLS: UpstreamTool[] = [
   {
     name: CLAIM_TOOL,
+    title: "Forward an approved call",
     description:
-      "After a human approves a held (ASK) tool call, pass its requestId " +
-      "here. Guardian issues the capability and the proxy forwards exactly " +
-      "the held call — same tool, same arguments — then returns its result.",
+      "Forward a tool call that this proxy held as ASK, once the person has " +
+      "approved it in Guardian. The proxy sends exactly the held call (same " +
+      "tool, same arguments) to the upstream server and returns that " +
+      "server's result; this can change the target system. Before approval " +
+      "it returns ASK and sends nothing; a denied or expired approval returns " +
+      "DENY; a requestId this proxy does not hold (unknown, or from before a " +
+      "proxy restart) sends nothing. Guardian unreachable fails closed " +
+      "(SERVICE_UNAVAILABLE) and keeps the call held for a retry. Claiming " +
+      "the same requestId again does not forward the call a second time; " +
+      "for a held setup step (registering or switching on a tool) it " +
+      "completes the step, then retry the original call.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId from a governed tool call that returned decision " +
+            "ASK in this proxy session. Starts with req_.",
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
+    },
+    annotations: {
+      title: "Forward an approved call",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
     },
   },
   {
     name: RECORD_TOOL,
+    title: "Get the records for a request",
     description:
-      "Fetch the machine-readable evidence records for a request id.",
+      "Look up the evidence records Guardian holds for one request, to see " +
+      "what was decided and whether the call ran. It changes nothing and " +
+      "forwards no call, so calling it again is safe. Returns the requestId and its " +
+      "list of records; an unknown requestId, or Guardian unreachable, " +
+      "returns ok: false with a reasonCode. Use it after an unknown or " +
+      "unclear outcome, before calling a tool again.",
     inputSchema: {
       type: "object",
-      properties: { requestId: { type: "string" } },
+      properties: {
+        requestId: {
+          type: "string",
+          description:
+            "The requestId of an earlier governed call: from a held (ASK) or " +
+            'refused result, or from _meta["com.odingard/guardian"] of an allowed result. ' +
+            "Starts with req_.",
+          minLength: 1,
+        },
+      },
       required: ["requestId"],
+    },
+    annotations: {
+      title: "Get the records for a request",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
   },
 ];

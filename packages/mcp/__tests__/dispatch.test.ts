@@ -36,6 +36,47 @@ describe("guardian-mcp dispatch", () => {
     }
   });
 
+  it("describes every parameter and sets truthful annotations", () => {
+    for (const tool of TOOLS) {
+      for (const [name, schema] of Object.entries(
+        tool.inputSchema.properties,
+      )) {
+        expect(
+          (schema as { description?: string } | undefined)?.description,
+          `${tool.name}.${name}`,
+        ).toMatch(/\S/);
+      }
+      expect(tool.annotations.title).toBe(tool.title);
+    }
+    expect(
+      Object.fromEntries(
+        TOOLS.map(({ name, annotations: { title: _title, ...hints } }) => [
+          name,
+          hints,
+        ]),
+      ),
+    ).toEqual({
+      guardian_invoke_tool: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_claim: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_record: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
+  });
+
   it.each([RECORD_TOOL, LEGACY_RECORD_TOOL])(
     "%s fetches the records for a request id",
     async (name) => {
@@ -183,6 +224,26 @@ describe("guardian-mcp dispatch", () => {
     expect(payload(result as any)).toMatchObject({
       decision: "ASK",
       requestId: "req_held",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("a claim before the person approves (APPROVAL_PENDING) stays held as ASK", async () => {
+    const claim = vi.fn().mockResolvedValue({
+      ok: false,
+      reasonCode: "APPROVAL_PENDING",
+      requestId: "req_held",
+    });
+    const execute = vi.fn();
+    const client = stubClient({ claim, execute });
+    const result = await handleToolCall({ client }, "guardian_claim", {
+      requestId: "req_held",
+    });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result as any)).toMatchObject({
+      decision: "ASK",
+      requestId: "req_held",
+      reasonCode: "APPROVAL_PENDING",
     });
     expect(execute).not.toHaveBeenCalled();
   });

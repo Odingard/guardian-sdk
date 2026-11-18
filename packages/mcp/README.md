@@ -35,11 +35,13 @@ npm i -g @odingard/guardian-mcp
 
 ## Tools
 
-| Tool                   | What it does                                                                                                                                    |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `guardian_invoke_tool` | Propose a tool call. ALLOW executes and returns the record; ASK returns a `requestId` held for human approval; DENY refuses with a reason code. |
-| `guardian_claim`       | Claim an approved ASK by `requestId`, execute, return the signed record.                                                                        |
-| `guardian_record`      | Fetch the machine-readable evidence records for a request.                                                                                      |
+| Tool                   | What it does                                                                                                                                                                                            | Annotations                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `guardian_invoke_tool` | Run a registered tool through Guardian. ALLOW runs it and returns the record; ASK runs nothing and returns a `requestId` to claim after the person approves; DENY runs nothing and gives a reason code. | destructive, not idempotent, open world    |
+| `guardian_claim`       | Run a request held as ASK, after the person approves it, and return the record. Before approval it answers ASK again. An approval is used once: claiming again does not run the call twice.             | destructive, not idempotent, open world    |
+| `guardian_record`      | Fetch the evidence records Guardian holds for a `requestId`. Runs and changes nothing.                                                                                                                  | makes no changes, idempotent, closed world |
+
+Each tool has a `title`, MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a description for every parameter.
 
 `guardian_record` was called `guardian_receipt` before 0.5.1. The old name is no longer listed but still works, so existing clients keep running.
 
@@ -87,7 +89,9 @@ upstream server's tools unchanged, and every call is decided first:
 | **DENY**                 | Nothing is forwarded, ever. The result is an MCP tool error (`isError: true`) with the reason code and, when Guardian made a record of it, the `requestId`.                                                                                                                                            |
 | **Guardian unreachable** | Nothing is forwarded. The result is a tool error (`isError: true`) whose JSON keeps `decision: "DENY"` with `reasonCode: "SERVICE_UNAVAILABLE"`, and its message says Guardian could not be reached and the call can be tried again later. A held call stays held, so `guardian_claim` can be retried. |
 
-- `guardian_claim` and `guardian_record` are added to the tool list.
+- `guardian_claim` and `guardian_record` are added to the tool list, with the
+  same annotations as above. Here `guardian_claim` forwards the held call to
+  the upstream server.
 - The upstream server never receives `GUARDIAN_*` settings, so it never sees
   the agent credential.
 - **Decision-gated:** an allowed call runs upstream before the capability is

@@ -81,7 +81,31 @@ describe("governed MCP proxy", () => {
     expect(tools[0]!.description).toMatch(/Guardian-governed/);
     for (const tool of tools.slice(1)) {
       expect(`${tool.name} ${tool.description}`).not.toMatch(/receipt/i);
+      const properties = (
+        tool.inputSchema as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      expect(properties.requestId!.description).toMatch(/requestId/);
     }
+    expect(
+      Object.fromEntries(tools.slice(1).map((t) => [t.name, t.annotations])),
+    ).toEqual({
+      guardian_claim: {
+        title: "Forward an approved call",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_record: {
+        title: "Get the records for a request",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
   });
 
   it("hides upstream tools named guardian_record or guardian_receipt", async () => {
