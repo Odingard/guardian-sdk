@@ -46,7 +46,7 @@ Issues = "https://github.com/Odingard/guardian-sdk/issues"
 packages = ["src/odingard_guardian"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
