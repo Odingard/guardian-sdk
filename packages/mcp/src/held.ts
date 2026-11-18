@@ -257,11 +257,14 @@ export async function cancelHeld(
     });
   }
   // No clear answer (the SDK says so, or an SDK without the flag reports
-  // an outage): the withdrawal may have happened. Keep the held call; a
-  // retry with the same requestId gives a clear answer.
+  // an outage, a 5xx or an unreadable answer): the withdrawal may have
+  // happened. Keep the held call; a retry with the same requestId gives a
+  // clear answer.
   const unconfirmed =
     result.outcomeUnknown === true ||
-    result.reasonCode === "SERVICE_UNAVAILABLE";
+    result.reasonCode === "SERVICE_UNAVAILABLE" ||
+    result.reasonCode === "MALFORMED_RESPONSE" ||
+    /^HTTP_5\d\d$/.test(result.reasonCode ?? "");
   return jsonResult(
     {
       ok: false,

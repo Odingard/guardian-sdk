@@ -217,6 +217,9 @@ describe("guardian-mcp: guardian_pending and guardian_cancel", () => {
       },
       // An SDK that does not set outcomeUnknown yet.
       { ok: false as const, reasonCode: "SERVICE_UNAVAILABLE" },
+      { ok: false as const, reasonCode: "HTTP_502" },
+      { ok: false as const, reasonCode: "HTTP_500" },
+      { ok: false as const, reasonCode: "MALFORMED_RESPONSE" },
     ]) {
       const result = await handleToolCall(
         { client: client({ withdraw: vi.fn(async () => answer) }) },
