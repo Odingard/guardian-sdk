@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
   "httpx>=0.25,<1",
-  "cryptography>=41",
+  "cryptography>=50.0.2",
 ]
 
 [project.optional-dependencies]
