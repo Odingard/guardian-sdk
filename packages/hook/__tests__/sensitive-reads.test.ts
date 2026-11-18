@@ -283,6 +283,12 @@ describe("path tricks", () => {
     expect(grep({ path: home, glob: "a.ts" })).toBeUndefined();
     // An exclusion filter searches everything else.
     expect(grep({ path: home, glob: "!*.ts" })).toBe("shell_destructive");
+    expect(grep({ path: join(home, ".aws"), glob: "!*.ts" })).toBe(
+      "shell_destructive",
+    );
+    expect(grep({ path: home, include: "!*.md" }, "grep")).toBe(
+      "shell_destructive",
+    );
     expect(grep({ path: join(home, "code", "a.ts") })).toBeUndefined();
   });
 
@@ -394,6 +400,12 @@ describe("shell commands that read a sensitive file", () => {
       "git log -p -- .env",
       "git -c core.pager=cat show HEAD:.npmrc",
       "git checkout HEAD~3 -- .env",
+      "sudo -u app find / -name .pgpass",
+      "ls | xargs grep -l .npmrc",
+      "bash -c 'cd /srv && cat .npmrc'",
+      "bash <<'EOF'\ncd /srv\ncat .npmrc\nEOF",
+      "tar -C /srv -cf - .npmrc",
+      "env -C /srv cat .npmrc",
     ]) {
       ask(command, src);
     }
@@ -438,6 +450,13 @@ describe("shell commands that read a sensitive file", () => {
       ['node -e "console.log(obj.key)"', "shell"],
       ['git commit -m "fix secret rotation"', "shell"],
       ["gh secret list", "shell"],
+      ['git commit -m "fix secret leak in log output"', "shell"],
+      ['git commit -m "grep for secret usage"', "shell"],
+      ['echo "cd into the secret dir"', "shell"],
+      [
+        "git commit -m \"$(cat <<'EOF'\nfix secret leak in log output\nEOF\n)\"",
+        "shell",
+      ],
       ["cat .npmrc", "shell"], // no such file here: nothing to read
       ["echo $HOME", "shell"],
       ["git push origin main", "git_push"],

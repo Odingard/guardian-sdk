@@ -479,24 +479,87 @@ const MAX_NESTED_DEPTH = 4;
 const TOKEN_SPLIT = /[\s'"`=:,;()<>{}|&@]+/;
 const DOTGLOB = /dotglob|globdots|glob_dots|globignore|\(D/i;
 /**
- * The command may read files from another folder or machine (`cd`, `git
- * -C`, `ssh`, `docker exec`): a bare name is checked as written, whether or
- * not it exists here.
+ * Commands that may read files from another folder or machine (`cd`,
+ * `ssh`, `docker exec`), and search and archive tools that take a bare
+ * name as a filter for files in other folders (`find ~ -name id_rsa`,
+ * `grep -r --include=.env`): with one of them, a bare name counts whether
+ * or not it exists here.
  */
-const ELSEWHERE =
-  /(?:^|[\s;&|(`])(?:cd|pushd|chdir|ssh|scp|sftp|rsync|docker|podman|nerdctl|kubectl|oc)(?=$|[\s;&|)`])|(?:^|\s)(?:-C|--chdir|--directory|--cwd|--git-dir|--work-tree)(?=$|[\s=])/;
-/**
- * Search and archive tools take a bare name as a filter for files in other
- * folders (`find ~ -name id_rsa`, `grep -r --include=.env`): it counts too.
- */
-const SEARCHES =
-  /(?:^|[\s;&|(`/])(?:find|fd|fdfind|locate|mlocate|plocate|grep|egrep|fgrep|zgrep|rg|ag|ack|tar|zip|7z|rsync|cpio)(?=$|[\s;&|)`])/;
+const ELSEWHERE = new Set(
+  (
+    "cd pushd chdir ssh scp sftp rsync docker podman nerdctl kubectl oc " +
+    "find fd fdfind locate mlocate plocate grep egrep fgrep zgrep rg ag ack " +
+    "tar zip 7z cpio"
+  ).split(" "),
+);
+/** Options that run a command in another folder (`git -C`, `make -C`). */
+const CHDIR_OPTION =
+  /^(?:-C|--chdir|--directory|--cwd|--git-dir|--work-tree)(?:=|$)/;
 /**
  * Git subcommands that read a file by name from history, not from the
  * working tree (`git show HEAD~1:.env`, `git log -p -- .env`).
  */
-const GIT_HISTORY =
-  /(?:^|[\s;&|(`/])git\s(?:[^;&|\n`]*\s)?(?:show|cat-file|log|diff|archive|blame|grep|checkout|restore|ls-tree|whatchanged|format-patch|stash|cherry-pick|bundle)(?=$|[\s;&|)`])/;
+const GIT_HISTORY = new Set(
+  (
+    "show cat-file log diff archive blame grep checkout restore ls-tree " +
+    "whatchanged format-patch stash cherry-pick bundle"
+  ).split(" "),
+);
+/** Shells and evaluators: their code arguments are commands too. */
+const CODE_RUNNERS = new Set(
+  "sh bash zsh dash ksh mksh ash fish busybox eval su pwsh powershell".split(
+    " ",
+  ),
+);
+const INTERPRETER_NAME =
+  /^(?:sh|bash|zsh|dash|ksh|mksh|ash|fish|busybox|pwsh|powershell|python[0-9.]*|node|nodejs|deno|bun|ruby|perl|php|lua|osascript)$/;
+const baseOf = (word: string) =>
+  (word.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+
+/**
+ * True when a command of the line may read files elsewhere: one of its
+ * words is such a command, a folder option or, after `git`, a subcommand
+ * that reads history. Quoted text such as a
+ * commit message is not a command. A here-document fed to a shell or
+ * interpreter cannot be read here, so then the raw text decides.
+ */
+function runsElsewhere(command: string): boolean {
+  const parsed = parseShell(command);
+  let interpreter = false;
+  const visit = (p: Parsed, depth: number): boolean => {
+    for (const cmd of p.commands) {
+      const words = cmd.words.map((w) => w.value);
+      // Each word is checked whole: a quoted message is one word, so the
+      // `log` in "fix the log output" is not a command.
+      const bases = words.map(baseOf);
+      if (bases.some((b) => ELSEWHERE.has(b))) return true;
+      if (words.some((w) => CHDIR_OPTION.test(w))) return true;
+      if (bases.some((b) => INTERPRETER_NAME.test(b))) interpreter = true;
+      const git = bases.indexOf("git");
+      if (git >= 0 && words.slice(git + 1).some((w) => GIT_HISTORY.has(w))) {
+        return true;
+      }
+      // `sh -c '…'`, `eval '…'`: the code is commands too.
+      const runner = bases.findIndex((b) => CODE_RUNNERS.has(b));
+      if (runner >= 0 && depth < MAX_NESTED_DEPTH) {
+        for (const w of words.slice(runner + 1)) {
+          if (/[\s;&|]/.test(w) && visit(parseShell(w), depth + 1)) {
+            return true;
+          }
+        }
+      }
+      const subs = [...cmd.subs, ...cmd.words.flatMap((w) => w.subs)];
+      if (subs.some((sub) => visit(sub, depth))) return true;
+    }
+    return false;
+  };
+  if (visit(parsed, 0)) return true;
+  // `bash <<EOF … EOF`: the body is code the parser does not read.
+  return interpreter && command.includes("<<") && RAW_ELSEWHERE.test(command);
+}
+
+const RAW_ELSEWHERE =
+  /(?:^|[\s;&|(`/])(?:cd|pushd|chdir|ssh|scp|sftp|rsync|docker|podman|nerdctl|kubectl|oc|find|fd|fdfind|locate|grep|egrep|fgrep|rg|ag|ack|tar|zip|7z|cpio|git)(?=$|[\s;&|)`])/;
 const MAX_BARE_CHECKS = 512;
 
 /**
@@ -504,8 +567,9 @@ const MAX_BARE_CHECKS = 512;
  * here-documents and code given to interpreters), in each word after
  * quotes and escapes are removed, after brace and glob expansion, and
  * through symlinks. A bare name (`.env`) counts when that file exists in
- * the working directory or the command may run elsewhere (see ELSEWHERE). A command that builds a path at run time (`$(…)`,
- * `$VAR`) is not seen.
+ * the working directory or the command may run elsewhere (see
+ * runsElsewhere). A command that builds a path at run time (`$(…)`, `$VAR`)
+ * is not seen.
  */
 export function sensitiveInCommand(
   command: string,
@@ -516,10 +580,7 @@ export function sensitiveInCommand(
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
-  const elsewhere =
-    ELSEWHERE.test(command) ||
-    SEARCHES.test(command) ||
-    GIT_HISTORY.test(command);
+  const elsewhere = runsElsewhere(command);
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
@@ -650,14 +711,14 @@ export function sensitiveInSearch(
   root: string,
   config: SensitiveConfig = DEFAULT_SENSITIVE,
 ): SensitiveHit | undefined {
-  // `!pattern` excludes files: the search reads all the others.
-  if (filter.startsWith("!")) filter = "*";
   let variants: string[];
   try {
     variants = expandBraces(filter);
   } catch {
     return { path: filter.slice(0, 200), pattern: UNRESOLVED };
   }
+  // `!pattern` excludes files: the search reads all the others.
+  if (variants.some((v) => v.startsWith("!"))) variants = ["*"];
   const compiled = variants.map((v) => {
     const parts = segmentsOf(v);
     const segments = parts.map((part): Segment => {
