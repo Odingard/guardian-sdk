@@ -76,6 +76,14 @@ class RequestResult:
     decision: Optional[Decision] = None
     capability_token: Optional[str] = None
     reason_code: Optional[str] = None
+    #: Watch mode, for a request sent with ``watch_aware=True``: the agent
+    #: is in watch mode and Guardian would have asked (``"ASK"``) or denied
+    #: (``"DENY"``) the call under the current rules. It comes with
+    #: ``decision="DENY"`` and ``reason_code="WATCHED"``: Guardian issued no
+    #: capability and performs nothing for the call. The guard runs an
+    #: in-process tool anyway, because watch mode lets the agent's own tools
+    #: run while Guardian watches.
+    watched: Optional[Literal["ASK", "DENY"]] = None
 
 
 @dataclass(frozen=True)
@@ -231,13 +239,28 @@ def _request_result(status: int, data: Any, request_id: Optional[str]) -> Reques
     if not isinstance(token, str):
         token = data.get("token") if isinstance(data.get("token"), str) else None
     rid = data.get("requestId")
+    reason = data.get("reasonCode") if isinstance(data.get("reasonCode"), str) else None
     return RequestResult(
         ok=True,
         request_id=rid if isinstance(rid, str) else (request_id or ""),
         decision="ALLOW" if decision is None else decision,
         capability_token=token,
-        reason_code=data.get("reasonCode") if isinstance(data.get("reasonCode"), str) else None,
+        reason_code=reason,
+        watched=_watched(data) if decision == "DENY" and reason == "WATCHED" else None,
     )
+
+
+def _watched(data: Mapping[str, Any]) -> Optional[Literal["ASK", "DENY"]]:
+    """Watch mode: only an exact ``"ASK"`` or ``"DENY"`` is kept."""
+    watch = data.get("watch")
+    if not isinstance(watch, dict):
+        return None
+    would = watch.get("wouldDecision")
+    if would == "ASK":
+        return "ASK"
+    if would == "DENY":
+        return "DENY"
+    return None
 
 
 def _execute_result(status: int, data: Any) -> ExecuteResult:
@@ -278,6 +301,7 @@ def _portable_result(status: int, data: Any) -> PortableReceiptResult:
 
 
 _UNAVAILABLE = (0, {"ok": False, "reasonCode": "SERVICE_UNAVAILABLE"})
+_WATCH_AWARE_HEADER = "x-guardian-watch-aware"
 
 
 class _Base:
@@ -305,6 +329,12 @@ class _Base:
         ):
             merged["adapter_id"] = self.adapter_id
         return build_proposal(merged)
+
+    @staticmethod
+    def _watch_headers(invocation: Mapping[str, Any]) -> Dict[str, str]:
+        """Watch mode: ``watch_aware=True`` says this caller handles the
+        watched answer. The guard sets it for in-process tools."""
+        return {_WATCH_AWARE_HEADER: "1"} if invocation.get("watch_aware") is True else {}
 
     @staticmethod
     def _parse(response: httpx.Response) -> tuple:
@@ -346,12 +376,14 @@ class GuardianClient(_Base):
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _call(self, path: str, body: Any = None, method: str = "POST") -> tuple:
+    def _call(
+        self, path: str, body: Any = None, method: str = "POST", headers: Optional[Mapping[str, str]] = None
+    ) -> tuple:
         try:
             if method == "GET":
                 response = self._http.get(f"{self.base_url}{path}")
             else:
-                response = self._http.post(f"{self.base_url}{path}", json=body)
+                response = self._http.post(f"{self.base_url}{path}", json=body, headers=dict(headers or {}))
         except httpx.HTTPError:
             return _UNAVAILABLE  # fail closed
         return self._parse(response)
@@ -359,7 +391,7 @@ class GuardianClient(_Base):
     def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         """Request a capability. ALLOW → token; ASK → held for a human; DENY → refused."""
         proposal = self._proposal(invocation)
-        status, data = self._call("/v1/agent/requests", proposal)
+        status, data = self._call("/v1/agent/requests", proposal, headers=self._watch_headers(invocation))
         return _request_result(status, data, proposal["requestId"])
 
     def claim(self, request_id: str) -> RequestResult:
@@ -409,19 +441,21 @@ class AsyncGuardianClient(_Base):
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    async def _call(self, path: str, body: Any = None, method: str = "POST") -> tuple:
+    async def _call(
+        self, path: str, body: Any = None, method: str = "POST", headers: Optional[Mapping[str, str]] = None
+    ) -> tuple:
         try:
             if method == "GET":
                 response = await self._http.get(f"{self.base_url}{path}")
             else:
-                response = await self._http.post(f"{self.base_url}{path}", json=body)
+                response = await self._http.post(f"{self.base_url}{path}", json=body, headers=dict(headers or {}))
         except httpx.HTTPError:
             return _UNAVAILABLE  # fail closed
         return self._parse(response)
 
     async def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         proposal = self._proposal(invocation)
-        status, data = await self._call("/v1/agent/requests", proposal)
+        status, data = await self._call("/v1/agent/requests", proposal, headers=self._watch_headers(invocation))
         return _request_result(status, data, proposal["requestId"])
 
     async def claim(self, request_id: str) -> RequestResult:

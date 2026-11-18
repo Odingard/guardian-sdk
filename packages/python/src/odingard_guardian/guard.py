@@ -376,7 +376,8 @@ def to_arguments_record(value: Any) -> Dict[str, Any]:
 # ("claim", request_id) → RequestResult, ("execute", request_id, token) →
 # ExecuteResult, ("run",) → the wrapped function's output,
 # ("receipt", request_id, receipt) → None, ("lookup", request_id) →
-# ("verified", receipt) | ("not-sent",) | ("unknown",).
+# ("verified", receipt) | ("not-sent",) | ("unknown",), ("watched",
+# request_id, would_decision) → None.
 
 
 class _Ask(Exception):
@@ -559,6 +560,29 @@ def _settle(
     if not result.ok:
         # Keep Guardian's request id on a refusal so it can be traced.
         return _deny(opts, tool_name, result.reason_code or "DENIED", result.request_id or None)
+    if (
+        opts.mode_for(tool_name) == "in_process"
+        and result.decision == "DENY"
+        and result.reason_code == "WATCHED"
+        and result.watched in ("ASK", "DENY")
+    ):
+        # Watch mode: Guardian would have asked or denied this call and let
+        # it be watched instead. It issued no capability and performs
+        # nothing for it, and it keeps the record of what it would have
+        # decided. The in-process function runs (with its content pins
+        # checked), and there is nothing to record. A remote tool stays a
+        # denial: Guardian performs nothing.
+        request_id = result.request_id or ""
+        refusal = yield ("pin_check", "in_process")
+        if refusal is not None:
+            return (
+                yield from _execution_failed(
+                    opts, GuardianExecutionFailed(tool_name, request_id, refusal, local_effect_ran=False)
+                )
+            )
+        output = yield ("run",)
+        yield ("watched", request_id, result.watched)
+        return output
     if result.decision == "ALLOW" and result.capability_token:
         request_id = result.request_id or ""
         if opts.mode_for(tool_name) == "remote":
@@ -791,6 +815,9 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
             **amount_facts(declaration, args),
             **({"adapter_id": opts.adapter_id} if opts.adapter_id else {}),
             "purpose": opts.purpose_for(tool_name, args),
+            # Watch mode: an in-process tool can take the watched answer
+            # (see _settle); a remote tool never asks for it.
+            **({"watch_aware": True} if opts.mode_for(tool_name) == "in_process" else {}),
         },
     )
     hint = None if result.ok else amount_refusal_hint(tool_name, declaration, args, result.reason_code)
@@ -976,6 +1003,9 @@ class _Run:
                     if callable(close):
                         close()  # a sync guard does not await an async hook
                     value = None
+                elif kind == "watched":
+                    self.guard._notify_watched(self.tool_name, op[1], op[2])
+                    value = None
                 else:  # receipt
                     self.receipt = op[2]
                     if self.guard._on_receipt:
@@ -1021,6 +1051,14 @@ class _Run:
                         except Exception:  # noqa: BLE001 — hooks only observe
                             pass
                     value = None
+                elif kind == "watched":
+                    pending_watch = self.guard._notify_watched(self.tool_name, op[1], op[2])
+                    if pending_watch is not None:
+                        try:
+                            await pending_watch
+                        except Exception:  # noqa: BLE001 — hooks only observe
+                            pass
+                    value = None
                 else:  # receipt
                     self.receipt = op[2]
                     if self.guard._on_receipt:
@@ -1047,6 +1085,12 @@ class Guard:
         the decision back as data, which is useful as a tool result for an LLM.
     :param on_receipt: ``callback(tool_name, request_id, receipt)`` after every
         recorded execution.
+    :param on_watched: watch mode: ``callback(tool_name, request_id,
+        would_decision)`` after an in-process function ran while the agent is
+        in watch mode, for a call Guardian would have asked about (``"ASK"``)
+        or denied (``"DENY"``) under the current rules. Guardian issued no
+        capability for the call and performs nothing for it; it keeps its
+        record of what it would have decided. Errors it raises are ignored.
     :param on_execution_failed: what to do when the call ran (in-process) or
         Guardian was asked to perform it (remote) but it could not be
         confirmed: redemption failed after your function ran, or a remote
@@ -1112,6 +1156,7 @@ class Guard:
         on_ask: OnDecision = "raise",
         on_deny: OnDecision = "raise",
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
+        on_watched: Optional[Callable[[str, str, str], Any]] = None,
         install_record_transport: bool = False,
         on_execution_failed: Optional[OnDecision] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
@@ -1143,7 +1188,19 @@ class Guard:
         #: Record-only entries this Guard registered itself (in memory only).
         self._ensured: Set[str] = set()
         self._on_receipt = on_receipt
+        self._on_watched = on_watched
         self._on_execution_error = on_execution_error
+
+    def _notify_watched(self, tool_name: str, request_id: str, would_decision: str) -> Any:
+        """Run ``on_watched``. Its errors are ignored: the function already ran.
+        Returns an awaitable for an async callback (the async driver awaits it)."""
+        if self._on_watched is None:
+            return None
+        try:
+            result = self._on_watched(tool_name, request_id, would_decision)
+        except Exception:  # noqa: BLE001 — hooks only observe
+            return None
+        return result if inspect.isawaitable(result) else None
 
     def _check_file_args(
         self, tool_name: str, file_args: Optional[FileArgsDeclaration], allowed: Any = ("bytes", "copy", "recheck")

@@ -395,6 +395,19 @@ export type GuardianAdapterOptions = Readonly<{
     event: { toolName: string; requestId: string; receipt: unknown },
   ) => void;
   /**
+   * Watch mode: called after an `inProcess` tool ran while the agent is in
+   * watch mode, for a call that Guardian would have asked about (`"ASK"`)
+   * or denied (`"DENY"`) under the current rules. Guardian issued no
+   * capability for the call and performs nothing for it; it keeps its
+   * record of what it would have decided. An error it throws is ignored:
+   * the tool already ran.
+   */
+  onWatched?: (event: {
+    toolName: string;
+    requestId: string;
+    wouldDecision: "ASK" | "DENY";
+  }) => void | PromiseLike<void>;
+  /**
    * Per tool: which top-level arguments are local file paths whose bytes
    * are pinned, e.g. `{ send_report: ["attachmentPath"] }`. `bytes` is the
    * default when you don't name a mode: a list of names, or `true` in place
@@ -1333,6 +1346,21 @@ async function notifyReceipt(
   }
 }
 
+/** Run `onWatched`. Its error is ignored: the tool already ran. */
+async function notifyWatched(
+  options: GuardianAdapterOptions,
+  event: { toolName: string; requestId: string; wouldDecision: "ASK" | "DENY" },
+): Promise<void> {
+  if (options.onWatched === undefined) {
+    return;
+  }
+  try {
+    await options.onWatched(event);
+  } catch {
+    // The tool already ran; a failing observer changes nothing.
+  }
+}
+
 /** True when an execute failure may hide a performed action. */
 function executeOutcomeUnknown(executed: {
   reasonCode: string;
@@ -1425,11 +1453,59 @@ async function lookUpExecution(
 }
 
 /**
+ * Runs an `inProcess` tool after Guardian's answer: re-checks every
+ * declared file argument (content pins) just before the tool runs, then
+ * runs it on its own unfrozen copy of the approved input. A missing or
+ * wrong pin, or a changed file, refuses and the tool does not run.
+ */
+async function runLocally<Output>(
+  options: GuardianAdapterOptions,
+  toolName: string,
+  requestId: string,
+  input: unknown,
+  runTool: RunTool<Output>,
+): Promise<Output> {
+  const spec = fileArgsFor(options, toolName);
+  let prepared: VerifiedArguments | undefined;
+  if (spec !== undefined || carriesReservedKey(input)) {
+    try {
+      prepared = await verifyArguments(spec ?? {}, input, options);
+    } catch (err) {
+      throw new GuardianExecutionFailed({
+        toolName,
+        requestId,
+        reasonCode:
+          err instanceof ContentPinError
+            ? err.reasonCode
+            : CONTENT_PIN_UNREADABLE,
+        localEffectRan: false,
+        ...(err instanceof Error ? { detail: err.message } : {}),
+      });
+    }
+  }
+  let output: Output;
+  try {
+    output = (await drainIterable(
+      await runTool(
+        prepared !== undefined ? prepared.toolInput : structuredClone(input),
+      ),
+    )) as Output;
+  } finally {
+    // A private copy is deleted when the tool settles, also on throw.
+    await prepared?.cleanup().catch(() => undefined);
+  }
+  return output;
+}
+
+/**
  * The triad applied to an already-answered request (request or claim).
  * remote: ALLOW → execute (Guardian performs the call) → receipt is the
  * output; the local impl never runs.
  * inProcess: ALLOW → run the impl → execute redeems + records → impl output.
  * ASK → pending handle; DENY → typed denial.
+ * Watch mode (a watched DENY for an `inProcess` tool): Guardian would have
+ * asked or denied and let the call be watched instead; the impl runs and
+ * nothing is recorded (Guardian issued no capability for it).
  *
  * When the execute was sent but its outcome is unknown (no answer, a 5xx,
  * an unreadable answer, or an `outcome-pending` / `outcome-unconfirmed`
@@ -1482,6 +1558,32 @@ export async function settle<Output>(
       nonEmpty(heldRequestId),
       "invoke",
     );
+  }
+  // Watch mode: Guardian would have asked or denied this call and let it
+  // be watched instead. It issued no capability and performs nothing for
+  // it, and it keeps the record of what it would have decided. A tool that
+  // runs in this process runs (with its content pins checked), and there
+  // is nothing to record. Only an exact watched answer (client.ts) gets
+  // here; a remote tool stays a denial: Guardian performs nothing.
+  if (
+    mode === "inProcess" &&
+    result.decision === "DENY" &&
+    result.reasonCode === "WATCHED" &&
+    (result.watched === "ASK" || result.watched === "DENY")
+  ) {
+    const output = await runLocally(
+      options,
+      toolName,
+      result.requestId,
+      input,
+      runTool,
+    );
+    await notifyWatched(options, {
+      toolName,
+      requestId: result.requestId,
+      wouldDecision: result.watched,
+    });
+    return output;
   }
   if (result.decision === "ALLOW" && result.capabilityToken) {
     const requestId = result.requestId;
@@ -1591,35 +1693,13 @@ export async function settle<Output>(
     // before the tool runs, driven by the tool's `fileArgs` (not by what
     // the input carries). A missing or wrong pin, or a changed file,
     // refuses: the tool does not run and the capability is not redeemed.
-    const spec = fileArgsFor(options, toolName);
-    let prepared: VerifiedArguments | undefined;
-    if (spec !== undefined || carriesReservedKey(input)) {
-      try {
-        prepared = await verifyArguments(spec ?? {}, input, options);
-      } catch (err) {
-        throw new GuardianExecutionFailed({
-          toolName,
-          requestId,
-          reasonCode:
-            err instanceof ContentPinError
-              ? err.reasonCode
-              : CONTENT_PIN_UNREADABLE,
-          localEffectRan: false,
-          ...(err instanceof Error ? { detail: err.message } : {}),
-        });
-      }
-    }
-    let output: Output;
-    try {
-      output = (await drainIterable(
-        await runTool(
-          prepared !== undefined ? prepared.toolInput : structuredClone(input),
-        ),
-      )) as Output;
-    } finally {
-      // A private copy is deleted when the tool settles, also on throw.
-      await prepared?.cleanup().catch(() => undefined);
-    }
+    const output = await runLocally(
+      options,
+      toolName,
+      requestId,
+      input,
+      runTool,
+    );
     const executed = await options.client.execute({
       requestId,
       capabilityToken: result.capabilityToken,
@@ -1838,6 +1918,11 @@ export async function runThroughGuardian<Output>(
     ...amountFacts(declaration, args),
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     purpose: resolvePurpose(options, toolName, snapshot),
+    // Watch mode: a tool that runs in this process can take the watched
+    // answer (see settle); a remote tool never asks for it.
+    ...(toolModeFor(options, toolName) === "inProcess"
+      ? { watchAware: true }
+      : {}),
   });
   const hint = result.ok
     ? undefined
