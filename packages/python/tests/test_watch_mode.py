@@ -1,4 +1,4 @@
-"""Watch mode: the same cases as the TypeScript core's watch-mode.test.ts.
+"""Watch mode (opt-in): the same cases as the TypeScript core's watch-mode.test.ts.
 
 While the agent is in watch mode, Guardian records what it would have
 decided. For a would-ask or a would-deny it issues no capability; a caller
@@ -85,6 +85,12 @@ def test_client_ignores_a_watch_field_anywhere_else(body):
     assert result.watched is None
 
 
+def test_client_keeps_no_watched_answer_on_a_claim_or_a_request_that_did_not_ask():
+    client = make(lambda r: httpx.Response(200, json=watched_body("DENY")), [])
+    assert client.claim("req_watched01").watched is None
+    assert client.request(invocation()).watched is None
+
+
 def test_async_client_sends_the_header_too():
     seen = []
 
@@ -129,12 +135,12 @@ def watched(would):
 
 def test_guard_asks_for_the_watched_answer_for_in_process_tools_only():
     local = FakeClient(watched("DENY"))
-    Guard(local, connection_id=CONNECTION)("delete_ticket")(lambda: "deleted")()
+    Guard(local, connection_id=CONNECTION, watch_mode=True)("delete_ticket")(lambda: "deleted")()
     assert local.invocations[0]["watch_aware"] is True
 
     remote = FakeClient(RequestResult(ok=True, request_id="req_r", decision="DENY"))
     with pytest.raises(GuardianDenied):
-        Guard(remote, connection_id=CONNECTION, mode="remote")("delete_ticket")(lambda: "deleted")()
+        Guard(remote, connection_id=CONNECTION, watch_mode=True, mode="remote")("delete_ticket")(lambda: "deleted")()
     assert "watch_aware" not in remote.invocations[0]
 
 
@@ -144,7 +150,7 @@ def test_guard_runs_the_function_once_records_nothing_and_reports_it(would):
     seen, receipts, ran = [], [], []
     guard = Guard(
         client,
-        connection_id=CONNECTION,
+        connection_id=CONNECTION, watch_mode=True,
         on_watched=lambda tool, request_id, decision: seen.append((tool, request_id, decision)),
         on_receipt=lambda tool, request_id, receipt: receipts.append(request_id),
     )
@@ -165,7 +171,7 @@ def test_guard_returns_the_output_even_when_on_watched_raises():
     def boom(*_):
         raise RuntimeError("observer failed")
 
-    guard = Guard(FakeClient(watched("DENY")), connection_id=CONNECTION, on_watched=boom)
+    guard = Guard(FakeClient(watched("DENY")), connection_id=CONNECTION, watch_mode=True, on_watched=boom)
     assert guard("delete_ticket")(lambda: "deleted")() == "deleted"
 
 
@@ -181,7 +187,7 @@ def test_guard_keeps_every_other_deny_a_denial(answer):
     client = FakeClient(answer)
     ran = []
     with pytest.raises(GuardianDenied):
-        Guard(client, connection_id=CONNECTION)("delete_ticket")(lambda: ran.append(1))()
+        Guard(client, connection_id=CONNECTION, watch_mode=True)("delete_ticket")(lambda: ran.append(1))()
     assert ran == []
     assert client.calls == ["request:tool.invoke"]
 
@@ -190,7 +196,7 @@ def test_guard_never_runs_a_remote_tool_on_a_watched_answer():
     client = FakeClient(watched("DENY"))
     ran = []
     with pytest.raises(GuardianDenied):
-        Guard(client, connection_id=CONNECTION, mode="remote")("delete_ticket")(lambda: ran.append(1))()
+        Guard(client, connection_id=CONNECTION, watch_mode=True, mode="remote")("delete_ticket")(lambda: ran.append(1))()
     assert ran == []
     assert client.calls == ["request:tool.invoke"]
 
@@ -214,7 +220,7 @@ def test_async_guard_runs_the_function_and_awaits_on_watched():
     async def on_watched(tool, request_id, decision):
         seen.append(decision)
 
-    guard = Guard(AsyncFake(), connection_id=CONNECTION, on_watched=on_watched)
+    guard = Guard(AsyncFake(), connection_id=CONNECTION, watch_mode=True, on_watched=on_watched)
 
     @guard("delete_ticket")
     async def delete():
@@ -237,7 +243,7 @@ def test_guard_still_checks_the_content_pins_before_the_function_runs(tmp_path):
             return super().request(inv)
 
     ran = []
-    guard = Guard(RewritingClient(watched("DENY")), connection_id=CONNECTION)
+    guard = Guard(RewritingClient(watched("DENY")), connection_id=CONNECTION, watch_mode=True)
     with pytest.raises(GuardianExecutionFailed) as failed:
         guard.run(
             "send_report",
@@ -248,3 +254,13 @@ def test_guard_still_checks_the_content_pins_before_the_function_runs(tmp_path):
     assert failed.value.reason_code == "CONTENT_CHANGED_SINCE_APPROVAL"
     assert failed.value.local_effect_ran is False
     assert ran == []
+
+
+def test_watch_mode_is_off_by_default_no_header_and_a_watched_answer_is_a_denial():
+    client = FakeClient(watched("DENY"))
+    ran = []
+    with pytest.raises(GuardianDenied):
+        Guard(client, connection_id=CONNECTION)("delete_ticket")(lambda: ran.append(1))()
+    assert ran == []
+    assert "watch_aware" not in client.invocations[0]
+    assert client.calls == ["request:tool.invoke"]

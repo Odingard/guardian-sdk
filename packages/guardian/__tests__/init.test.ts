@@ -4,6 +4,8 @@ import {
   statSync,
   writeFileSync,
   mkdirSync,
+  chmodSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +18,7 @@ import type {
   GuardianRequestResult,
 } from "@odingard/guardian-sdk";
 
-import { mergeEnvText } from "../src/env-file.js";
+import { mergeEnvText, writeEnvFile } from "../src/env-file.js";
 import {
   connectUrl,
   INIT_WORDS,
@@ -228,6 +230,29 @@ describe("the env file", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("sets an existing default folder to mode 700, and leaves a named one", () => {
+    const base = mkdtempSync(join(tmpdir(), "guardian-env-"));
+    const folder = join(base, "guardian");
+    mkdirSync(folder, { mode: 0o755 });
+    chmodSync(folder, 0o755);
+    writeEnvFile(join(folder, "env"), values, { restrictFolder: true });
+    expect(statSync(folder).mode & 0o777).toBe(0o700);
+    const named = join(base, "project");
+    mkdirSync(named, { mode: 0o755 });
+    chmodSync(named, 0o755);
+    writeEnvFile(join(named, ".guardian.env"), values);
+    expect(statSync(named).mode & 0o777).toBe(0o755);
+    expect(statSync(join(named, ".guardian.env")).mode & 0o777).toBe(0o600);
+  });
+
+  it("leaves no temporary file behind when the rename fails", () => {
+    const folder = mkdtempSync(join(tmpdir(), "guardian-env-"));
+    // A folder where the file should go makes the rename fail.
+    mkdirSync(join(folder, "env"));
+    expect(() => writeEnvFile(join(folder, "env"), values)).toThrow();
+    expect(readdirSync(folder)).toEqual(["env"]);
   });
 
   it("refuses a value it cannot write safely", () => {

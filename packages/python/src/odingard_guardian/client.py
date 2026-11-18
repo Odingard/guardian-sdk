@@ -81,8 +81,9 @@ class RequestResult:
     #: (``"DENY"``) the call under the current rules. It comes with
     #: ``decision="DENY"`` and ``reason_code="WATCHED"``: Guardian issued no
     #: capability and performs nothing for the call. The guard runs an
-    #: in-process tool anyway, because watch mode lets the agent's own tools
-    #: run while Guardian watches.
+    #: in-process tool anyway when ``Guard(watch_mode=True)``, because watch
+    #: mode lets the agent's own tools run while Guardian watches. Set only
+    #: on an answer to a request sent with ``watch_aware=True``.
     watched: Optional[Literal["ASK", "DENY"]] = None
 
 
@@ -217,7 +218,9 @@ def build_proposal(invocation: Mapping[str, Any]) -> Dict[str, Any]:
     return proposal
 
 
-def _request_result(status: int, data: Any, request_id: Optional[str]) -> RequestResult:
+def _request_result(
+    status: int, data: Any, request_id: Optional[str], asked_for_watch: bool = False
+) -> RequestResult:
     if status >= 500:
         # A server error is Guardian failing to answer, not a decision: the
         # call is still refused (fail closed) but reported as an outage.
@@ -246,7 +249,8 @@ def _request_result(status: int, data: Any, request_id: Optional[str]) -> Reques
         decision="ALLOW" if decision is None else decision,
         capability_token=token,
         reason_code=reason,
-        watched=_watched(data) if decision == "DENY" and reason == "WATCHED" else None,
+        # A watched answer counts only when this call asked for it.
+        watched=_watched(data) if asked_for_watch and decision == "DENY" and reason == "WATCHED" else None,
     )
 
 
@@ -333,7 +337,8 @@ class _Base:
     @staticmethod
     def _watch_headers(invocation: Mapping[str, Any]) -> Dict[str, str]:
         """Watch mode: ``watch_aware=True`` says this caller handles the
-        watched answer. The guard sets it for in-process tools."""
+        watched answer. ``Guard(watch_mode=True)`` sets it for in-process
+        tools; a claim never asks for it."""
         return {_WATCH_AWARE_HEADER: "1"} if invocation.get("watch_aware") is True else {}
 
     @staticmethod
@@ -391,8 +396,9 @@ class GuardianClient(_Base):
     def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         """Request a capability. ALLOW → token; ASK → held for a human; DENY → refused."""
         proposal = self._proposal(invocation)
-        status, data = self._call("/v1/agent/requests", proposal, headers=self._watch_headers(invocation))
-        return _request_result(status, data, proposal["requestId"])
+        headers = self._watch_headers(invocation)
+        status, data = self._call("/v1/agent/requests", proposal, headers=headers)
+        return _request_result(status, data, proposal["requestId"], asked_for_watch=bool(headers))
 
     def claim(self, request_id: str) -> RequestResult:
         """Collect the capability after a human approved a prior ASK."""
@@ -455,8 +461,9 @@ class AsyncGuardianClient(_Base):
 
     async def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         proposal = self._proposal(invocation)
-        status, data = await self._call("/v1/agent/requests", proposal, headers=self._watch_headers(invocation))
-        return _request_result(status, data, proposal["requestId"])
+        headers = self._watch_headers(invocation)
+        status, data = await self._call("/v1/agent/requests", proposal, headers=headers)
+        return _request_result(status, data, proposal["requestId"], asked_for_watch=bool(headers))
 
     async def claim(self, request_id: str) -> RequestResult:
         status, data = await self._call("/v1/agent/claims", {"schemaVersion": 1, "requestId": request_id})

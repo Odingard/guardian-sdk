@@ -405,6 +405,8 @@ class _Options:
     max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES
     #: Amount declarations by tool name, as set in the Guardian console.
     amount_args: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: Watch mode, opt-in (see ``Guard``).
+    watch_mode: bool = False
     #: on_ask="result" only: held request ids by (kind, connection, tool, args),
     #: so calling the tool again after approval claims the approved request
     #: instead of proposing a fresh one that needs a fresh approval.
@@ -561,7 +563,8 @@ def _settle(
         # Keep Guardian's request id on a refusal so it can be traced.
         return _deny(opts, tool_name, result.reason_code or "DENIED", result.request_id or None)
     if (
-        opts.mode_for(tool_name) == "in_process"
+        opts.watch_mode
+        and opts.mode_for(tool_name) == "in_process"
         and result.decision == "DENY"
         and result.reason_code == "WATCHED"
         and result.watched in ("ASK", "DENY")
@@ -815,9 +818,9 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
             **amount_facts(declaration, args),
             **({"adapter_id": opts.adapter_id} if opts.adapter_id else {}),
             "purpose": opts.purpose_for(tool_name, args),
-            # Watch mode: an in-process tool can take the watched answer
-            # (see _settle); a remote tool never asks for it.
-            **({"watch_aware": True} if opts.mode_for(tool_name) == "in_process" else {}),
+            # Watch mode (opt-in): an in-process tool can take the watched
+            # answer (see _settle); a remote tool never asks for it.
+            **({"watch_aware": True} if opts.watch_mode and opts.mode_for(tool_name) == "in_process" else {}),
         },
     )
     hint = None if result.ok else amount_refusal_hint(tool_name, declaration, args, result.reason_code)
@@ -1085,6 +1088,14 @@ class Guard:
         the decision back as data, which is useful as a tool result for an LLM.
     :param on_receipt: ``callback(tool_name, request_id, receipt)`` after every
         recorded execution.
+    :param watch_mode: watch mode, opt-in. Default ``False``: an answer
+        that a call was watched is a denial like any other, and nothing runs
+        without a capability. With ``True``, in-process functions ask
+        Guardian for the watched answer: while the owner has the agent in
+        watch mode, a call Guardian would have asked about or denied comes
+        back as a watched DENY, and the function runs (content pins still
+        checked) with no capability and nothing to record. Guardian performs
+        nothing for the call. Remote tools never ask for it.
     :param on_watched: watch mode: ``callback(tool_name, request_id,
         would_decision)`` after an in-process function ran while the agent is
         in watch mode, for a call Guardian would have asked about (``"ASK"``)
@@ -1157,6 +1168,7 @@ class Guard:
         on_deny: OnDecision = "raise",
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_watched: Optional[Callable[[str, str, str], Any]] = None,
+        watch_mode: bool = False,
         install_record_transport: bool = False,
         on_execution_failed: Optional[OnDecision] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
@@ -1184,6 +1196,7 @@ class Guard:
             max_pin_bytes=max_pin_bytes,
             max_pin_total_bytes=max_pin_total_bytes,
             amount_args=normalize_amount_args(amount_args),
+            watch_mode=watch_mode is True,
         )
         #: Record-only entries this Guard registered itself (in memory only).
         self._ensured: Set[str] = set()

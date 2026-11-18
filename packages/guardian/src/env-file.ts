@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -50,17 +51,40 @@ export function mergeEnvText(existing: string, values: EnvValues): string {
   return `${kept === "" ? "" : `${kept}\n`}${ours.join("\n")}\n`;
 }
 
-export function writeEnvFile(path: string, values: EnvValues): void {
+/**
+ * Writes the file. `restrictFolder` (the default `~/.config/guardian`)
+ * also sets the folder to mode 700 when it already exists; a folder the
+ * person named is left as it is. The temporary file is removed if the
+ * write or the rename fails.
+ */
+export function writeEnvFile(
+  path: string,
+  values: EnvValues,
+  options: { restrictFolder?: boolean } = {},
+): void {
   const folder = dirname(path);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
+  if (options.restrictFolder === true) chmodSync(folder, 0o700);
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
   const text = mergeEnvText(existing, values);
   const temporary = join(
     folder,
     `.guardian-env-${randomBytes(6).toString("hex")}.tmp`,
   );
-  writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, path);
-  chmodSync(path, 0o600);
+  let moved = false;
+  try {
+    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, path);
+    moved = true;
+    chmodSync(path, 0o600);
+  } finally {
+    if (!moved) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // Never created, or already gone.
+      }
+    }
+  }
 }

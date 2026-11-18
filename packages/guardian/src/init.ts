@@ -394,7 +394,7 @@ export async function runInit(
     GUARDIAN_BASE_URL: options.api,
   };
   if (await askYes(io, options.yes, INIT_WORDS.savePrompt(envFile))) {
-    writeEnvFile(envFile, values);
+    writeEnvFile(envFile, values, { restrictFolder: options.envFile === null });
     io.out(INIT_WORDS.saved(envFile));
     io.out(INIT_WORDS.loadHint(envFile));
   } else {
