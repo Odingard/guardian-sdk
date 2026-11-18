@@ -289,6 +289,10 @@ describe("path tricks", () => {
     // Several pieces, as Claude Code passes them to ripgrep.
     expect(grep({ path: dir, glob: "*.md .env" })).toBe("shell_destructive");
     expect(grep({ path: dir, glob: "*.md,.env" })).toBe("shell_destructive");
+    // A blank filter is no filter.
+    expect(grep({ path: dir, glob: " " })).toBe("shell_destructive");
+    expect(grep({ path: dir, glob: "," })).toBe("shell_destructive");
+    expect(grep({ path: dir, include: " " }, "grep")).toBe("shell_destructive");
     expect(grep({ path: home, glob: "*.ts !x" })).toBe("shell_destructive");
     expect(grep({ path: dir, glob: "*.{md,txt}" })).toBe("shell_destructive"); // notes.txt
     expect(

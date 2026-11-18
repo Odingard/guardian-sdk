@@ -1297,11 +1297,15 @@ function readCall(
   const hits: SensitiveHit[] = [];
   const onPath = checkPath(target, config, cwd ? { cwd } : {});
   if (onPath) hits.push(onPath);
-  if (filter && typeof filter.value === "string" && filter.value !== "") {
-    for (const piece of filterPieces(filter.value)) {
+  const pieces =
+    filter && typeof filter.value === "string"
+      ? filterPieces(filter.value)
+      : [];
+  if (pieces.length > 0) {
+    for (const piece of pieces) {
       const onFilter =
         sensitiveInFilter(piece, config) ??
-        (filter.searches
+        (filter!.searches
           ? sensitiveInSearch(piece, absoluteIn(target, cwd), config)
           : undefined);
       if (onFilter) {
@@ -1310,7 +1314,8 @@ function readCall(
       }
     }
   } else if (filter?.searches && hits.length === 0) {
-    // A search with no filter reads every file under the folder.
+    // A search with no filter (or a blank one) reads every file under the
+    // folder.
     const inside = sensitiveInSearch("*", absoluteIn(target, cwd), config);
     if (inside) hits.push(inside);
   }
