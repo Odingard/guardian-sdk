@@ -24,6 +24,7 @@
 
 ## Docs (unreleased)
 
+- **Dependency maintenance.** Dependabot checks npm workspaces, the Python package and GitHub Actions weekly, grouping minor/patch updates per ecosystem with a five-PR limit each.
 - **Sample decision record.** `examples/receipts/sample.greceipt.json`, a signed `greceipt.v1` record from Guardian, replaces the earlier sample. `examples/verify-receipt.mjs` now verifies it by default against the keys published by `https://guardian-api.odingard.com`. The Python receipt fixtures are regenerated from it. No code change.
 - **SDK test fixtures.** The TypeScript SDK's receipt tests use the same sample record and its published verification key. Tests only; no code change.
 - **Repository layout.** Examples are grouped by topic under `examples/` (`agents/`, `mcp/`, `payments/`, `python/`; index in `examples/README.md`). The skill.md changelog moved from `skill/CHANGELOG.md` to `docs/skill-changelog.md`, and the root README's longer sections to `docs/guides.md`. No code change.
