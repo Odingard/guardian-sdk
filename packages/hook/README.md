@@ -85,6 +85,8 @@ The agent's environment holds `GUARDIAN_AGENT_CREDENTIAL` and often other secret
 
 Setting a variable to run a command (`env FOO=bar make`), `printenv PATH` and a secret passed to another command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`) stay where they were. Not seen: a variable name built at run time, and scripts that print the environment.
 
+This check catches common ways an agent can print secrets from its environment. It is not a complete barrier: don't keep long-lived secrets in an agent's environment.
+
 ## Setup
 
 Guardian sets modes **per connection**, not per tool. So the hook uses two record-only tool servers, one per risk tier. That lets `ls` run straight away while `terraform apply` waits for your approval.
