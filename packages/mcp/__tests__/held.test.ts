@@ -256,7 +256,9 @@ describe("guardian-mcp: guardian_pending and guardian_cancel", () => {
     expect(isError(mismatched)).toBe(true);
     expect(payload(mismatched)).toMatchObject({
       reasonCode: "MALFORMED_RESPONSE",
+      outcomeUnknown: true,
     });
+    expect(payload(mismatched).message).toMatch(/may or may not have been/);
   });
 
   it("an SDK without the methods answers NOT_SUPPORTED and changes nothing", async () => {
@@ -507,6 +509,30 @@ describe("guardian-mcp proxy: guardian_pending and guardian_cancel", () => {
     });
     expect(payload(later).error).toMatch(/holds no call/);
     expect(calls).toEqual([]);
+  });
+
+  it("an answer about another request is unconfirmed and the proxy keeps the held call", async () => {
+    const { proxy, hold, guardian } = setup({
+      withdraw: vi.fn(async () => ({
+        ok: true as const,
+        state: "withdrawn" as const,
+        requestId: "req_other",
+        withdrawnAtEpochMs: 1,
+      })),
+    });
+    await hold();
+    const result = await proxy.callTool("guardian_cancel", {
+      requestId: "req_ask",
+    });
+    expect(payload(result)).toMatchObject({
+      reasonCode: "MALFORMED_RESPONSE",
+      outcomeUnknown: true,
+    });
+    const listed = await proxy.callTool("guardian_pending", {});
+    expect(payload(listed).requests[0]).toMatchObject({
+      heldByThisProxy: true,
+    });
+    expect(guardian.withdraw).toHaveBeenCalledTimes(1);
   });
 
   it("a withdrawal while a repeated call's claim is waiting cannot put the withdrawn request back", async () => {

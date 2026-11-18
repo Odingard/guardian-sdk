@@ -234,14 +234,15 @@ export async function cancelHeld(
   if (!client.withdraw) return jsonResult(UNSUPPORTED, true);
   const result = await client.withdraw(requestId);
   if (result.ok && result.requestId !== requestId) {
-    // An answer about another request: fail closed, drop nothing.
+    // An answer about another request is unreadable: the withdrawal may
+    // have happened. Report it as unconfirmed and drop nothing.
     return jsonResult(
       {
         ok: false,
         reasonCode: "MALFORMED_RESPONSE",
         requestId,
-        message:
-          "Guardian's answer did not match this requestId. Nothing was dropped.",
+        outcomeUnknown: true,
+        message: UNCONFIRMED_MESSAGE,
       },
       true,
     );
