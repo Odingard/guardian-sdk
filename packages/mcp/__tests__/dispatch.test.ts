@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GuardianClient } from "@odingard/guardian-sdk";
-import { TOOLS, handleToolCall } from "../src/dispatch.js";
+import {
+  LEGACY_RECORD_TOOL,
+  RECORD_TOOL,
+  TOOLS,
+  handleToolCall,
+} from "../src/dispatch.js";
 
 function stubClient(overrides: Partial<GuardianClient>): GuardianClient {
   return {
@@ -21,9 +26,44 @@ describe("guardian-mcp dispatch", () => {
     expect(TOOLS.map((t) => t.name)).toEqual([
       "guardian_invoke_tool",
       "guardian_claim",
-      "guardian_receipt",
+      "guardian_record",
     ]);
   });
+
+  it("listed tool names and descriptions say record", () => {
+    for (const tool of TOOLS) {
+      expect(`${tool.name} ${tool.description}`).not.toMatch(/receipt/i);
+    }
+  });
+
+  it.each([RECORD_TOOL, LEGACY_RECORD_TOOL])(
+    "%s fetches the records for a request id",
+    async (name) => {
+      const receipts = vi
+        .fn()
+        .mockResolvedValue({ ok: true, receipts: [{ id: "rcpt_1" }] });
+      const client = stubClient({ receipts });
+      const result = await handleToolCall({ client }, name, {
+        requestId: "req_1",
+      });
+      expect(receipts).toHaveBeenCalledWith("req_1");
+      expect(payload(result)).toEqual({
+        requestId: "req_1",
+        receipts: [{ id: "rcpt_1" }],
+      });
+    },
+  );
+
+  it.each([RECORD_TOOL, LEGACY_RECORD_TOOL])(
+    "%s requires a requestId",
+    async (name) => {
+      const receipts = vi.fn();
+      const client = stubClient({ receipts });
+      const result = await handleToolCall({ client }, name, {});
+      expect(result.isError).toBe(true);
+      expect(receipts).not.toHaveBeenCalled();
+    },
+  );
 
   it("ALLOW executes the held capability and returns the receipt", async () => {
     const request = vi.fn().mockResolvedValue({

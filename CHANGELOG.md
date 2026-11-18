@@ -1,5 +1,14 @@
 # Changelog
 
+## guardian-mcp 0.5.1, released 2026-11-18
+
+### Changed: the records tool is listed as `guardian_record`
+
+- **`@odingard/guardian-mcp`**: the tool that fetches the evidence records for a request id is listed as `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`. The old name, `guardian_receipt`, is no longer listed but still works and gives the same answer, so existing clients keep running. Tool descriptions and messages say "record", and name `guardian_record` where they named the old tool.
+  - In `proxy`, an upstream tool named `guardian_record` is hidden, like `guardian_claim` and `guardian_receipt`.
+  - Unchanged: the JSON the tools return, including its field names.
+- The package description and the MCP Registry entry (`packages/mcp/server.json`) are updated. The entry uses the current registry schema and adds a title, website and icon.
+
 ## guardian-hook 0.4.4, released 2026-11-18
 
 ### Added: reads of sensitive files are governed
@@ -50,6 +59,8 @@
 
 ## Docs (unreleased)
 
+- **Package descriptions.** The descriptions of `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-steel` and `odingard-guardian` say "record". They ship with each package's next release.
+- **Listings.** `glama.json` names the maintainers of the Glama listing. `.github/workflows/publish-mcp.yml` publishes `packages/mcp/server.json` to the MCP Registry when an `mcp-v<version>` tag is pushed.
 - **Dependency maintenance.** Dependabot checks npm workspaces, the Python package and GitHub Actions weekly, grouping minor/patch updates per ecosystem with a five-PR limit each.
 - **Sample decision record.** `examples/receipts/sample.greceipt.json`, a signed `greceipt.v1` record from Guardian, replaces the earlier sample. `examples/verify-receipt.mjs` now verifies it by default against the keys published by `https://guardian-api.odingard.com`. The Python receipt fixtures are regenerated from it. No code change.
 - **SDK test fixtures.** The TypeScript SDK's receipt tests use the same sample record and its published verification key. Tests only; no code change.

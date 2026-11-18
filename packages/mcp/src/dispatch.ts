@@ -1,11 +1,19 @@
 import type { GuardianClient } from "@odingard/guardian-sdk";
 
+/** The tool that fetches Guardian's records for a request id. */
+export const RECORD_TOOL = "guardian_record";
+/**
+ * Earlier name of {@link RECORD_TOOL}. Not listed, still callable, so
+ * clients that call it keep working.
+ */
+export const LEGACY_RECORD_TOOL = "guardian_receipt";
+
 export const TOOLS = [
   {
     name: "guardian_invoke_tool",
     description:
       "Propose a tool invocation to Guardian. ALLOW executes immediately and " +
-      "returns the execution receipt; ASK is held for human approval (call " +
+      "returns the execution record; ASK is held for human approval (call " +
       "guardian_claim with the returned requestId after the human approves); " +
       "DENY refuses the action with a reason code.",
     inputSchema: {
@@ -34,7 +42,7 @@ export const TOOLS = [
     name: "guardian_claim",
     description:
       "Collect the capability for a request that was held as ASK and approved " +
-      "by the human, then execute it and return the receipt.",
+      "by the human, then execute it and return the record.",
     inputSchema: {
       type: "object",
       properties: { requestId: { type: "string" } },
@@ -42,9 +50,9 @@ export const TOOLS = [
     },
   },
   {
-    name: "guardian_receipt",
+    name: RECORD_TOOL,
     description:
-      "Fetch the machine-readable evidence receipts for a request id.",
+      "Fetch the machine-readable evidence records for a request id.",
     inputSchema: {
       type: "object",
       properties: { requestId: { type: "string" } },
@@ -79,8 +87,7 @@ function jsonError(payload: unknown): ToolResult {
   return { ...jsonResult(payload), isError: true };
 }
 
-const CHECK_FIRST =
-  "Call guardian_receipt with this requestId, or check the target system, before retrying.";
+const CHECK_FIRST = `Call ${RECORD_TOOL} with this requestId, or check the target system, before retrying.`;
 
 function denied(
   reasonCode: string | undefined,
@@ -157,7 +164,7 @@ async function requestAndExecute(
         outcome: "not-done",
         receipt: executed.receipt,
         message:
-          "Guardian did not send the call (receipt status not-sent). It was not done.",
+          "Guardian did not send the call (record status not-sent). It was not done.",
       });
     }
     return jsonError({
@@ -165,7 +172,7 @@ async function requestAndExecute(
       requestId: result.requestId,
       outcome: "unknown",
       receipt: executed.receipt,
-      message: `The outcome is unknown (receipt status ${typeof status === "string" ? status : "missing"}). The call may have been done. ${CHECK_FIRST}`,
+      message: `The outcome is unknown (record status ${typeof status === "string" ? status : "missing"}). The call may have been done. ${CHECK_FIRST}`,
     });
   }
   if (result.decision === "ASK") {
@@ -233,7 +240,7 @@ export async function handleToolCall(
     return requestAndExecute(client, result);
   }
 
-  if (name === "guardian_receipt") {
+  if (name === RECORD_TOOL || name === LEGACY_RECORD_TOOL) {
     const requestId = arguments_.requestId;
     if (typeof requestId !== "string" || requestId.length === 0) {
       return errorResult("requestId is required");

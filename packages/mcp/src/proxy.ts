@@ -147,12 +147,14 @@ type ToolResult = {
 };
 
 const CLAIM_TOOL = "guardian_claim";
-const RECEIPT_TOOL = "guardian_receipt";
+const RECORD_TOOL = "guardian_record";
+/** Earlier name of RECORD_TOOL: not listed, still callable. */
+const LEGACY_RECORD_TOOL = "guardian_receipt";
 
 /**
  * `_meta` key under which an allowed call's result carries Guardian's
- * requestId (`{ requestId }`), so the client can fetch the receipt with
- * `guardian_receipt`. The upstream's `content` is left untouched.
+ * requestId (`{ requestId }`), so the client can fetch the record with
+ * `guardian_record`. The upstream's `content` is left untouched.
  */
 export const GUARDIAN_RESULT_META = "com.odingard/guardian";
 
@@ -189,9 +191,9 @@ export const PROXY_GOVERNANCE_TOOLS: UpstreamTool[] = [
     },
   },
   {
-    name: RECEIPT_TOOL,
+    name: RECORD_TOOL,
     description:
-      "Fetch the machine-readable evidence receipts for a request id.",
+      "Fetch the machine-readable evidence records for a request id.",
     inputSchema: {
       type: "object",
       properties: { requestId: { type: "string" } },
@@ -401,8 +403,8 @@ function failure(
         ...(err.outcomeUnknown ? { outcomeUnknown: true } : {}),
         message: err.outcomeUnknown
           ? err.localEffectRan
-            ? `The upstream call ran, but Guardian could not confirm that it was recorded. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
-            : `Guardian could not confirm whether the call completed. It may have run. Do not call it again; check this requestId with ${RECEIPT_TOOL}.`
+            ? `The upstream call ran, but Guardian could not confirm that it was recorded. Do not call it again; check this requestId with ${RECORD_TOOL}.`
+            : `Guardian could not confirm whether the call completed. It may have run. Do not call it again; check this requestId with ${RECORD_TOOL}.`
           : err.localEffectRan
             ? "The upstream call ran but Guardian refused to redeem the capability. Do not call it again. Treat this as an incident, not a success."
             : "Guardian could not redeem the capability; the call was not completed.",
@@ -595,7 +597,11 @@ export function createGovernedProxy(
     if (upstreamTools) return upstreamTools;
     const tools = new Map<string, UpstreamTool>();
     for (const tool of await upstream.listTools()) {
-      if (tool.name === CLAIM_TOOL || tool.name === RECEIPT_TOOL) {
+      if (
+        tool.name === CLAIM_TOOL ||
+        tool.name === RECORD_TOOL ||
+        tool.name === LEGACY_RECORD_TOOL
+      ) {
         log(
           `guardian-mcp proxy: upstream tool "${tool.name}" collides with a Guardian tool name and is hidden`,
         );
@@ -687,7 +693,7 @@ export function createGovernedProxy(
           toolName: seen.toolName,
           requestId,
           alreadyClaimed: true,
-          message: `This approved call is already being forwarded by an earlier ${CLAIM_TOOL}. Do not propose ${seen.toolName} again; wait, then call ${RECEIPT_TOOL} with this requestId to see what happened.`,
+          message: `This approved call is already being forwarded by an earlier ${CLAIM_TOOL}. Do not propose ${seen.toolName} again; wait, then call ${RECORD_TOOL} with this requestId to see what happened.`,
         },
         true,
       );
@@ -911,7 +917,7 @@ export function createGovernedProxy(
         requestId,
         error:
           "This proxy holds no call with this requestId, so this claim forwarded nothing. " +
-          `If it was claimed before (in this or an earlier proxy session), the call may already have been forwarded: call ${RECEIPT_TOOL} with this requestId before proposing it again.`,
+          `If it was claimed before (in this or an earlier proxy session), the call may already have been forwarded: call ${RECORD_TOOL} with this requestId before proposing it again.`,
       },
       true,
     );
@@ -950,7 +956,7 @@ export function createGovernedProxy(
         }
         return claim(requestId, signal);
       }
-      if (name === RECEIPT_TOOL) {
+      if (name === RECORD_TOOL || name === LEGACY_RECORD_TOOL) {
         const requestId = args.requestId;
         if (typeof requestId !== "string" || requestId.length === 0) {
           return jsonResult({ error: "requestId is required" }, true);

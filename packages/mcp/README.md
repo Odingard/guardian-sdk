@@ -35,11 +35,13 @@ npm i -g @odingard/guardian-mcp
 
 ## Tools
 
-| Tool                   | What it does                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `guardian_invoke_tool` | Propose a tool call. ALLOW executes and returns the record; ASK returns a `requestId` held for human approval; DENY refuses with a reason code.  |
-| `guardian_claim`       | Claim an approved ASK by `requestId`, execute, return the signed record.                                                                         |
-| `guardian_receipt`     | Fetch the machine-readable evidence records for a request.                                                                                       |
+| Tool                   | What it does                                                                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `guardian_invoke_tool` | Propose a tool call. ALLOW executes and returns the record; ASK returns a `requestId` held for human approval; DENY refuses with a reason code. |
+| `guardian_claim`       | Claim an approved ASK by `requestId`, execute, return the signed record.                                                                        |
+| `guardian_record`      | Fetch the machine-readable evidence records for a request.                                                                                      |
+
+`guardian_record` was called `guardian_receipt` before 0.5.1. The old name is no longer listed but still works, so existing clients keep running.
 
 Nothing executes without a Guardian capability — the model's output is a proposal, never an action.
 
@@ -52,7 +54,7 @@ what happened:
 - Status `not-sent`: `outcome: "not-done"`, the call was not done.
 - Status `outcome-pending` or `outcome-unconfirmed`, or an execute
   answer that was refused or lost: `outcome: "unknown"`. The call may have
-  been done, so check (`guardian_receipt`, or the target system) before
+  been done, so check (`guardian_record`, or the target system) before
   retrying.
 
 ## Govern an existing MCP server: `guardian-mcp proxy` (0.3)
@@ -80,12 +82,12 @@ upstream server's tools unchanged, and every call is decided first:
 
 | Decision                 | What happens                                                                                                                                                                                                                                                                                           |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **ALLOW**                | The call is forwarded to the upstream server, then the capability is redeemed and the signed record kept. The upstream result is returned unchanged, with Guardian's `requestId` under `_meta["com.odingard/guardian"]`, so the client can fetch the record with `guardian_receipt`.                   |
+| **ALLOW**                | The call is forwarded to the upstream server, then the capability is redeemed and the signed record kept. The upstream result is returned unchanged, with Guardian's `requestId` under `_meta["com.odingard/guardian"]`, so the client can fetch the record with `guardian_record`.                    |
 | **ASK**                  | Nothing is forwarded. The exact call is held under a `requestId`; after a human approves, `guardian_claim` forwards exactly that call, once.                                                                                                                                                           |
 | **DENY**                 | Nothing is forwarded, ever. The result is an MCP tool error (`isError: true`) with the reason code and, when Guardian made a record of it, the `requestId`.                                                                                                                                            |
 | **Guardian unreachable** | Nothing is forwarded. The result is a tool error (`isError: true`) whose JSON keeps `decision: "DENY"` with `reasonCode: "SERVICE_UNAVAILABLE"`, and its message says Guardian could not be reached and the call can be tried again later. A held call stays held, so `guardian_claim` can be retried. |
 
-- `guardian_claim` and `guardian_receipt` are added to the tool list.
+- `guardian_claim` and `guardian_record` are added to the tool list.
 - The upstream server never receives `GUARDIAN_*` settings, so it never sees
   the agent credential.
 - **Decision-gated:** an allowed call runs upstream before the capability is
@@ -114,10 +116,10 @@ upstream server's tools unchanged, and every call is decided first:
 - **A second `guardian_claim` of the same `requestId`** says the call was
   already forwarded and must not be proposed again. If the first claim has
   finished, its result is returned again after that notice; if it is still
-  running, the answer says to check `guardian_receipt`. The proxy remembers
+  running, the answer says to check `guardian_record`. The proxy remembers
   the last 1000 claimed requests. A `requestId` it does not hold is answered
   with "this claim forwarded nothing", and a reminder to check
-  `guardian_receipt` if it was claimed before.
+  `guardian_record` if it was claimed before.
 - An unexpected proxy error after a call was forwarded says the call may
   have run, never that it was not forwarded.
 
@@ -202,7 +204,7 @@ A server that takes a Bearer key: `--url https://mcp.example.com/mcp --header
 
 - Every `tools/call` is decided by Guardian exactly as for a stdio server:
   ALLOW forwards it, ASK holds it for `guardian_claim`, DENY never sends it.
-  `tools/list` passes through, with `guardian_claim` and `guardian_receipt`
+  `tools/list` passes through, with `guardian_claim` and `guardian_record`
   added.
 - **Secrets stay in the proxy.** Write header values as `${ENV_VAR}`;
   guardian-mcp expands them itself, so no shell is needed and the key never

@@ -255,7 +255,7 @@ const text = (r: unknown) =>
   JSON.parse((r as { content: { text: string }[] }).content[0]!.text);
 
 describe("remote MCP upstream (Streamable HTTP)", () => {
-  it("tools/list passes the remote tools through and adds guardian_claim/guardian_receipt", async () => {
+  it("tools/list passes the remote tools through and adds guardian_claim/guardian_record", async () => {
     const remote = await remoteStreamable();
     const { proxy, upstreamClient } = await governedRemote(remote.url, {
       ok: true,
@@ -267,7 +267,7 @@ describe("remote MCP upstream (Streamable HTTP)", () => {
       "GMAIL_SEND_EMAIL",
       "GMAIL_LIST_THREADS",
       "guardian_claim",
-      "guardian_receipt",
+      "guardian_record",
     ]);
     // Annotations survive the proxy, so `guardian-mcp tools` can read them.
     expect(tools[1]!.annotations).toEqual({ readOnlyHint: true });
