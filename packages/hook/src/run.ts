@@ -193,6 +193,15 @@ export const DSH_HOOKS_SNIPPET = {
   },
 };
 
+/**
+ * Watch mode (opt-in): GUARDIAN_HOOK_WATCH_MODE=on. Anything else is off,
+ * and a call Guardian would have held or denied while the agent is
+ * watched is denied (WATCHED_NOT_RUN).
+ */
+export function watchModeFromEnv(env: Env): boolean {
+  return env.GUARDIAN_HOOK_WATCH_MODE?.trim() === "on";
+}
+
 /** Which connection a tool's request goes to (modes are per connection). */
 export function connectionFor(
   toolName: HookToolName,
@@ -488,9 +497,10 @@ async function evaluate(
     approvalTimeoutMs,
     requestTtlMs: REQUEST_TTL_MS,
     pollIntervalMs: 2_000,
-    // Every agent the hook serves runs the call itself, so a watched call
-    // is left to the agent's own permissions.
-    watchAware: true,
+    // Watch mode is opt-in: with GUARDIAN_HOOK_WATCH_MODE=on, a call
+    // Guardian would have held or denied while the agent is watched is left
+    // to the agent's own permissions (the agent runs every call itself).
+    watchAware: watchModeFromEnv(env),
     ...(deps.wait ? { wait: deps.wait } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.log ? { log: deps.log } : {}),

@@ -63,6 +63,7 @@ With `watchMode: true` (Python: `watch_mode=True`), the triad runs an `inProcess
 - the client keeps `watched` only on an answer to a request that asked for it, never on a claim;
 - content pins are still checked before the tool runs;
 - a `remote` tool never runs on a watched answer.
+- guardian-hook (`GUARDIAN_HOOK_WATCH_MODE=on`) and the OpenClaw plugin (`watchMode`) ask for it only with their option on; on a watched answer the hook gives no permission decision (the agent's own permissions apply) and OpenClaw lets the call run. An Edit-type call's pin is still checked. Nothing is redeemed.
 
 ## Development
 

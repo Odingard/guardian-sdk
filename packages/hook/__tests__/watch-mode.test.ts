@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { guardianPreToolUse } from "../src/agent-sdk.js";
 import { governedCall } from "../src/classify.js";
 import { decide, type DecideOptions } from "../src/decide.js";
-import { runHookAs, type Dialect } from "../src/index.js";
+import { runHookAs, watchModeFromEnv, type Dialect } from "../src/index.js";
 
 type Client = DecideOptions["client"];
 type Result = Awaited<ReturnType<Client["request"]>>;
@@ -22,6 +22,7 @@ const ENV = {
   GUARDIAN_AGENT_CREDENTIAL: "gac1-test-credential-never-printed",
   GUARDIAN_CONNECTION_ID: "pcn_everyday01",
   GUARDIAN_HOOK_ASK_CONNECTION_ID: "pcn_approval01",
+  GUARDIAN_HOOK_WATCH_MODE: "on",
 };
 
 const quiet = { log: () => {}, wait: async () => {} };
@@ -223,6 +224,27 @@ describe("watch mode: everything else stays a deny", () => {
       });
     }
   }
+
+  for (const value of [undefined, "", "off", "true", "1", "ON "]) {
+    it(`watch mode is off unless GUARDIAN_HOOK_WATCH_MODE=on (${JSON.stringify(value)})`, async () => {
+      const g = fake(watched("ASK"));
+      const env: Record<string, string | undefined> = {
+        ...ENV,
+        GUARDIAN_HOOK_WATCH_MODE: value,
+      };
+      const out = await runHookAs("claude-code", bash("claude-code"), env, {
+        client: g.client,
+        ...quiet,
+      });
+      expect(out.verdict?.decision).toBe("deny");
+      expect(g.invocations[0]).not.toHaveProperty("watchAware");
+      expect(watchModeFromEnv(env)).toBe(false);
+    });
+  }
+
+  it("watch mode is on for an exact on, spaces trimmed", () => {
+    expect(watchModeFromEnv({ GUARDIAN_HOOK_WATCH_MODE: " on " })).toBe(true);
+  });
 
   it("names a watched call that did not run in plain words", async () => {
     const g = fake(cases[2]![1]);

@@ -9,6 +9,7 @@ import plugin, {
   register,
   takeCredential,
 } from "../src/index.js";
+import { resolveSettings } from "../src/plugin.js";
 import { protectedInstall } from "./install-fixture.js";
 
 /**
@@ -262,7 +263,7 @@ describe("watch mode", () => {
       const g = fakeGuardian(watchedAnswer(would));
       const asked: unknown[] = [];
       const handler = createGuardianToolHandler({
-        config: CONFIG,
+        config: { ...CONFIG, watchMode: true },
         client: {
           ...g.client,
           request: async (invocation) => {
@@ -277,6 +278,44 @@ describe("watch mode", () => {
       expect(g.executed).toEqual([]);
       expect(asked[0]).toMatchObject({ watchAware: true });
     }
+  });
+
+  it("is off by default, and watchMode: false wins over the environment: the call is blocked", async () => {
+    for (const [config, env] of [
+      [CONFIG, {}],
+      [{ ...CONFIG, watchMode: false }, { GUARDIAN_HOOK_WATCH_MODE: "on" }],
+    ] as const) {
+      const g = fakeGuardian(watchedAnswer("ASK"));
+      const asked: unknown[] = [];
+      const handler = createGuardianToolHandler({
+        config,
+        env,
+        client: {
+          ...g.client,
+          request: async (invocation) => {
+            asked.push(invocation);
+            return g.client.request(invocation);
+          },
+        },
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toMatchObject({ block: true });
+      expect(asked[0]).not.toHaveProperty("watchAware");
+      expect(g.executed).toEqual([]);
+    }
+  });
+
+  it("GUARDIAN_HOOK_WATCH_MODE=on turns it on when the config does not say", () => {
+    expect(
+      resolveSettings({}, { GUARDIAN_HOOK_WATCH_MODE: "on" }).watchMode,
+    ).toBe(true);
+    expect(resolveSettings({}, {}).watchMode).toBe(false);
+    expect(resolveSettings({ watchMode: true }, {}).watchMode).toBe(true);
+    expect(
+      resolveSettings({ watchMode: false }, { GUARDIAN_HOOK_WATCH_MODE: "on" })
+        .watchMode,
+    ).toBe(false);
   });
 
   it("a watched call that did not run, or a WATCHED answer without a would-be decision, is blocked", async () => {

@@ -16,7 +16,7 @@
  * for such a call, answers `watched`: Guardian approved nothing and
  * performs nothing, and the agent's own permissions decide whether the
  * call runs, as without the hook. An edit's pinned target is still
- * checked. Without `watchAware` such a call is denied.
+ * checked. Without `watchAware` (the default) such a call is denied.
  *
  * A redemption whose answer was lost (no answer, a 5xx, an unreadable
  * answer) is looked up in Guardian's record of the request: a verified
@@ -95,7 +95,7 @@ const PLAIN: Record<string, string> = {
     'this tool is not allowed for the agent yet. In the Guardian console: Agents → this agent → the connection\'s card → "Allow a tool by name"',
   SERVICE_UNAVAILABLE: "Guardian could not be reached",
   WATCHED_NOT_RUN:
-    "this agent is in watch mode, and Guardian does not carry out a call it would have held or denied. Update @odingard/guardian-hook and @odingard/guardian-sdk to let watched calls run",
+    "this agent is in watch mode, and Guardian does not carry out a call it would have held or denied. To leave such calls to the agent's own permissions while it is watched, set GUARDIAN_HOOK_WATCH_MODE=on",
   REQUEST_CONFLICT: "Guardian saw a conflicting request",
   EXECUTION_NOT_SENT: "Guardian did not complete the redemption",
 };
