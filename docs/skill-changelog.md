@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.15
+
+- Date: 2026-11-18
+- SHA-256: `0cc5846cc1ce0611deda606de52830cc5000328e556bc50f4a3cd48e9f960a8d`
+- Pins: `@odingard/guardian-mcp` 0.5.2. The other pins are unchanged from 1.0.14.
+- Pins the guardian-mcp release with clearer tool definitions, whose `guardian-mcp tools` labels the Ask mode "Ask me". 4D points at the tag `skill-v1.0.15`. No other change.
+
 ## 1.0.14
 
 - Date: 2026-11-18
