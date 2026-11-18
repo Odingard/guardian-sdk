@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-asyncio>=0.23; python_version < '3.10'", "pytest-asyncio>=1.5.0; python_version >= '3.10'"]
+test = ["pytest>=9.2.0", "pytest-asyncio>=0.23; python_version < '3.10'", "pytest-asyncio>=1.5.0; python_version >= '3.10'"]
 # Python 3.11+ (the frameworks' own minimum). Tested with agent-framework-core
 # 1.26.0 and semantic-kernel 1.47.0.
 agent-framework = ["agent-framework-core>=1.26,<2"]
