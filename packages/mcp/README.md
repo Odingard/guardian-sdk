@@ -35,11 +35,13 @@ npm i -g @odingard/guardian-mcp
 
 ## Tools
 
-| Tool                   | What it does                                                                                                                                                                                            | Annotations                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `guardian_invoke_tool` | Run a registered tool through Guardian. ALLOW runs it and returns the record; ASK runs nothing and returns a `requestId` to claim after the person approves; DENY runs nothing and gives a reason code. | destructive, not idempotent, open world    |
-| `guardian_claim`       | Run a request held as ASK, after the person approves it, and return the record. Before approval it answers ASK again. An approval is used once: claiming again does not run the call twice.             | destructive, not idempotent, open world    |
-| `guardian_record`      | Fetch the evidence records Guardian holds for a `requestId`. Runs and changes nothing.                                                                                                                  | makes no changes, idempotent, closed world |
+| Tool                   | What it does                                                                                                                                                                                                                                                                                          | Annotations                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `guardian_invoke_tool` | Run a registered tool through Guardian. ALLOW runs it and returns the record; ASK runs nothing and returns a `requestId` to claim after the person approves; DENY runs nothing and gives a reason code.                                                                                               | destructive, not idempotent, open world                  |
+| `guardian_claim`       | Run a request held as ASK, after the person approves it, and return the record. Before approval it answers ASK again. An approval is used once: claiming again does not run the call twice.                                                                                                           | destructive, not idempotent, open world                  |
+| `guardian_record`      | Fetch the evidence records Guardian holds for a `requestId`. Runs and changes nothing.                                                                                                                                                                                                                | makes no changes, idempotent, closed world               |
+| `guardian_pending`     | List this agent's own requests held for a person's approval (ASK), from newest to oldest: `requestId`, action, tool name, purpose, created and expiry times. Paged with `limit` and `before`. Never shows other agents' requests. Runs and changes nothing.                                           | makes no changes, idempotent, closed world               |
+| `guardian_cancel`      | Withdraw one of this agent's own held requests: the person no longer sees it and it can never be claimed. It takes authority away and runs nothing. Calling it again gives the same answer; a request the person already decided, or one that expired, answers `ALREADY_DECIDED` and nothing changes. | destructive (cannot be undone), idempotent, closed world |
 
 Each tool has a `title`, MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a description for every parameter.
 
@@ -89,9 +91,13 @@ upstream server's tools unchanged, and every call is decided first:
 | **DENY**                 | Nothing is forwarded, ever. The result is an MCP tool error (`isError: true`) with the reason code and, when Guardian made a record of it, the `requestId`.                                                                                                                                            |
 | **Guardian unreachable** | Nothing is forwarded. The result is a tool error (`isError: true`) whose JSON keeps `decision: "DENY"` with `reasonCode: "SERVICE_UNAVAILABLE"`, and its message says Guardian could not be reached and the call can be tried again later. A held call stays held, so `guardian_claim` can be retried. |
 
-- `guardian_claim` and `guardian_record` are added to the tool list, with the
-  same annotations as above. Here `guardian_claim` forwards the held call to
-  the upstream server.
+- `guardian_claim`, `guardian_record`, `guardian_pending` and
+  `guardian_cancel` are added to the tool list, with the same annotations as
+  above. Here `guardian_claim` forwards the held call to the upstream server,
+  `guardian_pending` marks each request whose call this proxy holds
+  (`heldByThisProxy`), and `guardian_cancel` also drops the held call, so a
+  later `guardian_claim` forwards nothing. An upstream tool with one of these
+  names is hidden.
 - The upstream server never receives `GUARDIAN_*` settings, so it never sees
   the agent credential.
 - **Decision-gated:** an allowed call runs upstream before the capability is
@@ -208,8 +214,8 @@ A server that takes a Bearer key: `--url https://mcp.example.com/mcp --header
 
 - Every `tools/call` is decided by Guardian exactly as for a stdio server:
   ALLOW forwards it, ASK holds it for `guardian_claim`, DENY never sends it.
-  `tools/list` passes through, with `guardian_claim` and `guardian_record`
-  added.
+  `tools/list` passes through, with `guardian_claim`, `guardian_record`,
+  `guardian_pending` and `guardian_cancel` added.
 - **Secrets stay in the proxy.** Write header values as `${ENV_VAR}`;
   guardian-mcp expands them itself, so no shell is needed and the key never
   appears in the agent's view. In a shell, use single quotes so the shell

@@ -9,6 +9,7 @@ import plugin, {
   register,
   takeCredential,
 } from "../src/index.js";
+import { resolveSettings } from "../src/plugin.js";
 import { protectedInstall } from "./install-fixture.js";
 
 /**
@@ -245,6 +246,98 @@ describe("guardian before_tool_call handler", () => {
     });
     await handler({ toolName: "browser", params: { action: "snapshot" } });
     expect(g.seen[0]?.connectionId).toBe("pcn_everyday");
+  });
+});
+
+describe("watch mode", () => {
+  const watchedAnswer = (would: "ASK" | "DENY"): Result => ({
+    ok: true,
+    requestId: "req_w",
+    decision: "DENY",
+    reasonCode: "WATCHED",
+    watched: would,
+  });
+
+  it("a call Guardian would have asked about or denied runs, and nothing is redeemed", async () => {
+    for (const would of ["ASK", "DENY"] as const) {
+      const g = fakeGuardian(watchedAnswer(would));
+      const asked: unknown[] = [];
+      const handler = createGuardianToolHandler({
+        config: { ...CONFIG, watchMode: true },
+        client: {
+          ...g.client,
+          request: async (invocation) => {
+            asked.push(invocation);
+            return g.client.request(invocation);
+          },
+        },
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toEqual({ params: { command: "terraform apply" } });
+      expect(g.executed).toEqual([]);
+      expect(asked[0]).toMatchObject({ watchAware: true });
+    }
+  });
+
+  it("is off by default, and watchMode: false wins over the environment: the call is blocked", async () => {
+    for (const [config, env] of [
+      [CONFIG, {}],
+      [{ ...CONFIG, watchMode: false }, { GUARDIAN_HOOK_WATCH_MODE: "on" }],
+    ] as const) {
+      const g = fakeGuardian(watchedAnswer("ASK"));
+      const asked: unknown[] = [];
+      const handler = createGuardianToolHandler({
+        config,
+        env,
+        client: {
+          ...g.client,
+          request: async (invocation) => {
+            asked.push(invocation);
+            return g.client.request(invocation);
+          },
+        },
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toMatchObject({ block: true });
+      expect(asked[0]).not.toHaveProperty("watchAware");
+      expect(g.executed).toEqual([]);
+    }
+  });
+
+  it("GUARDIAN_HOOK_WATCH_MODE=on turns it on when the config does not say", () => {
+    expect(
+      resolveSettings({}, { GUARDIAN_HOOK_WATCH_MODE: "on" }).watchMode,
+    ).toBe(true);
+    expect(resolveSettings({}, {}).watchMode).toBe(false);
+    expect(resolveSettings({ watchMode: true }, {}).watchMode).toBe(true);
+    expect(
+      resolveSettings({ watchMode: false }, { GUARDIAN_HOOK_WATCH_MODE: "on" })
+        .watchMode,
+    ).toBe(false);
+  });
+
+  it("a watched call that did not run, or a WATCHED answer without a would-be decision, is blocked", async () => {
+    for (const answer of [
+      {
+        ok: true,
+        requestId: "req_w",
+        decision: "DENY",
+        reasonCode: "WATCHED_NOT_RUN",
+      },
+      { ok: true, requestId: "req_w", decision: "DENY", reasonCode: "WATCHED" },
+    ] as Result[]) {
+      const g = fakeGuardian(answer);
+      const handler = createGuardianToolHandler({
+        config: CONFIG,
+        client: g.client,
+        ...fakeClock(),
+      });
+      const out = await handler(exec("terraform apply"), { agentId: "main" });
+      expect(out).toMatchObject({ block: true });
+      expect(g.executed).toEqual([]);
+    }
   });
 });
 
