@@ -4,6 +4,7 @@ import {
   createGuard,
   createGuardianClient,
   createGuardianContext,
+  GuardianApprovalPending,
   GuardianDenied,
   GuardianExecutionFailed,
   settle,
@@ -13,14 +14,15 @@ import {
 } from "../index.js";
 
 /**
- * Watch mode. While the agent is in watch mode, Guardian records what it
- * would have decided. For a would-ask or a would-deny it issues no
- * capability; a caller that sent `x-guardian-watch-aware: 1` gets a watched
- * answer (`decision: "DENY"`, reasonCode `WATCHED`,
- * `watch: { wouldDecision }`). The guard asks for it only for a tool that
- * runs in the agent's own process, and then runs the tool with nothing to
- * record. A remote tool is never run by the SDK and never asks for the
- * watched answer.
+ * Watch mode (opt-in with `watchMode: true`). While the agent is in watch
+ * mode, Guardian records what it would have decided. For a would-ask or a
+ * would-deny it issues no capability; a caller that sent
+ * `x-guardian-watch-aware: 1` gets a watched answer (`decision: "DENY"`,
+ * reasonCode `WATCHED`, `watch: { wouldDecision }`). With `watchMode`, the
+ * guard asks for it for a tool that runs in the agent's own process, and
+ * then runs the tool with nothing to record. Without it, a watched answer
+ * is a denial. A remote tool is never run by the SDK, and a claim never
+ * takes a watched answer.
  */
 
 const CONNECTION = "pcn_0123456789abcdef0123456789abcdef";
@@ -59,6 +61,25 @@ const watchedBody = (wouldDecision: unknown) => ({
 });
 
 describe("the client", () => {
+  it("never keeps a watched answer on a claim", async () => {
+    const claimed = await clientAnswering(watchedBody("DENY")).claim(
+      "req_watched01",
+    );
+    expect(claimed).toEqual({
+      ok: true,
+      requestId: "req_watched01",
+      decision: "DENY",
+      reasonCode: "WATCHED",
+    });
+  });
+
+  it("never keeps a watched answer on a request that did not ask", async () => {
+    const answered = await clientAnswering(watchedBody("DENY")).request(
+      invocation(),
+    );
+    expect(answered).not.toHaveProperty("watched");
+  });
+
   it("sends the watch-aware header only when asked, never in the proposal", async () => {
     const seen: Seen[] = [];
     const client = clientAnswering({ ok: true, decision: "DENY" }, seen);
@@ -160,7 +181,11 @@ const watched = (wouldDecision: "ASK" | "DENY"): GuardianRequestResult => ({
 describe("the guard while the agent is watched", () => {
   it("asks for the watched answer for an inProcess tool only", async () => {
     const local = fakeClient(watched("DENY"));
-    await createGuard({ client: local.client, connectionId: CONNECTION })(
+    await createGuard({
+      client: local.client,
+      connectionId: CONNECTION,
+      watchMode: true,
+    })(
       "delete_ticket",
       () => "deleted",
     )({});
@@ -174,6 +199,7 @@ describe("the guard while the agent is watched", () => {
     await createGuard({
       client: remote.client,
       connectionId: CONNECTION,
+      watchMode: true,
       mode: "remote",
     })(
       "delete_ticket",
@@ -191,6 +217,7 @@ describe("the guard while the agent is watched", () => {
       const tool = createGuard({
         client,
         connectionId: CONNECTION,
+        watchMode: true,
         onWatched: (event) => {
           seen.push(event);
         },
@@ -220,6 +247,7 @@ describe("the guard while the agent is watched", () => {
     const tool = createGuard({
       client,
       connectionId: CONNECTION,
+      watchMode: true,
       onWatched: () => {
         throw new Error("observer failed");
       },
@@ -248,12 +276,13 @@ describe("the guard while the agent is watched", () => {
     ] as GuardianRequestResult[]) {
       const { client, calls } = fakeClient(answer);
       let ran = 0;
-      const tool = createGuard({ client, connectionId: CONNECTION })(
-        "delete_ticket",
-        () => {
-          ran += 1;
-        },
-      );
+      const tool = createGuard({
+        client,
+        connectionId: CONNECTION,
+        watchMode: true,
+      })("delete_ticket", () => {
+        ran += 1;
+      });
       await expect(tool({})).rejects.toBeInstanceOf(GuardianDenied);
       expect(ran).toBe(0);
       expect(calls).toEqual(["request:tool.invoke"]);
@@ -266,6 +295,7 @@ describe("the guard while the agent is watched", () => {
     const tool = createGuard({
       client,
       connectionId: CONNECTION,
+      watchMode: true,
       mode: "remote",
     })("delete_ticket", () => {
       ran += 1;
@@ -280,6 +310,7 @@ describe("the guard while the agent is watched", () => {
     const ctx = createGuardianContext({
       client,
       connectionId: CONNECTION,
+      watchMode: true,
       mode: "inProcess",
       fileArgs: { send_report: ["attachmentPath"] },
     });
@@ -299,5 +330,53 @@ describe("the guard while the agent is watched", () => {
       localEffectRan: false,
     });
     expect(ran).toBe(false);
+  });
+
+  it("is off unless watchMode is set: no header, and a watched answer is a denial", async () => {
+    const { client, calls, asked } = fakeClient(watched("DENY"));
+    let ran = 0;
+    const tool = createGuard({ client, connectionId: CONNECTION })(
+      "delete_ticket",
+      () => {
+        ran += 1;
+      },
+    );
+    await expect(tool({})).rejects.toBeInstanceOf(GuardianDenied);
+    expect(ran).toBe(0);
+    expect(asked[0]).not.toHaveProperty("watchAware");
+    expect(calls).toEqual(["request:tool.invoke"]);
+  });
+
+  it("never runs a held tool when its claim comes back watched", async () => {
+    const client = createGuardianClient({
+      baseUrl: "https://guardian.test",
+      credential: "gak_test",
+      fetch: async (url) =>
+        String(url).endsWith("/v1/agent/claims")
+          ? Response.json(watchedBody("DENY"))
+          : Response.json(
+              {
+                ok: false,
+                reasonCode: "APPROVAL_REQUIRED",
+                requestId: "req_watched01",
+              },
+              { status: 403 },
+            ),
+    });
+    let ran = 0;
+    const tool = createGuard({
+      client,
+      connectionId: CONNECTION,
+      watchMode: true,
+    })("delete_ticket", () => {
+      ran += 1;
+    });
+    const held = await tool({}).catch((error: unknown) => error);
+    expect(held).toBeInstanceOf(GuardianApprovalPending);
+    const resumed = await (held as GuardianApprovalPending<unknown>)
+      .resume()
+      .catch((error: unknown) => error);
+    expect(resumed).toBeInstanceOf(GuardianDenied);
+    expect(ran).toBe(0);
   });
 });

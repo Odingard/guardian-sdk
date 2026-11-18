@@ -55,6 +55,15 @@ The Python Hermes plugin (`packages/python/src/odingard_guardian/hermes.py`)
 works the same way and reuses the Python guard's rules (`_outcome_unknown`
 and `_lookup_answer` in `guard.py`).
 
+### Watch mode (exception, opt-in)
+
+With `watchMode: true` (Python: `watch_mode=True`), the triad runs an `inProcess` tool on a watched answer: a `DENY` with reasonCode `WATCHED` and `watch.wouldDecision`, given while the agent's owner has it in watch mode, for a call Guardian would have asked about or denied. Guardian issues no capability for such a call and performs nothing for it, so there is nothing to redeem or record. The rule below does not hold for these calls, and that is why the option is off by default. Without it, a watched answer is a denial like any other. Keep these limits:
+
+- the triad asks for the watched answer (`x-guardian-watch-aware: 1`) for `inProcess` tools only, and only with the option on;
+- the client keeps `watched` only on an answer to a request that asked for it, never on a claim;
+- content pins are still checked before the tool runs;
+- a `remote` tool never runs on a watched answer.
+
 ## Development
 
 ```bash
@@ -73,7 +82,8 @@ instead.
 Rules that matter:
 
 - `ALLOW` executes only via the issued single-use capability — never run the
-  underlying action without one.
+  underlying action without one. The one exception is opt-in watch mode,
+  described above.
 - `ASK` never auto-resolves — surface the requestId to the human layer.
 - No model calls in the decision path. No credentials in tests or commits.
 

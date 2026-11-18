@@ -157,8 +157,9 @@ export type GuardianInvocation = (
     /**
      * Watch mode: say that this caller handles the watched answer
      * (`decision: "DENY"`, reasonCode `WATCHED`, with `watched`). Sent as
-     * a request header, never as part of the proposal. The guard sets it
-     * for tools that run in your own process; leave it unset otherwise.
+     * a request header, never as part of the proposal. The guard sets it,
+     * with `watchMode: true`, for tools that run in your own process; leave
+     * it unset otherwise. A claim never asks for it.
      */
     watchAware?: boolean;
   }>;
@@ -182,9 +183,10 @@ export type GuardianRequestResult =
        * is in watch mode and Guardian would have asked (`"ASK"`) or denied
        * (`"DENY"`) this call under the current rules. It comes with
        * `decision: "DENY"` and reasonCode `WATCHED`: Guardian issued no
-       * capability and performs nothing for the call. The guard runs a tool
-       * that runs in your own process anyway, because watch mode lets the
-       * agent's own tools run while Guardian watches.
+       * capability and performs nothing for the call. With `watchMode: true`
+       * the guard runs a tool that runs in your own process anyway, because
+       * watch mode lets the agent's own tools run while Guardian watches.
+       * Set only on an answer to a request sent with `watchAware: true`.
        */
       watched?: "ASK" | "DENY";
     }
@@ -385,6 +387,8 @@ export function createGuardianClient(
     extraHeaders: Readonly<Record<string, string>> = {},
   ): Promise<GuardianRequestResult> => {
     const response = await call(path, body, "POST", extraHeaders);
+    // A watched answer counts only when this call asked for it.
+    const askedForWatch = extraHeaders[WATCH_AWARE_HEADER] === "1";
     const data = response.body;
     const requestId = (body as { requestId?: unknown }).requestId;
     if (!data || data.ok !== true) {
@@ -407,7 +411,7 @@ export function createGuardianClient(
       typeof data.reasonCode === "string" ? data.reasonCode : undefined;
     if (data.decision === "ASK" || data.decision === "DENY") {
       const watched =
-        data.decision === "DENY" && reasonCode === "WATCHED"
+        askedForWatch && data.decision === "DENY" && reasonCode === "WATCHED"
           ? watchedDecision(data.watch)
           : undefined;
       return {

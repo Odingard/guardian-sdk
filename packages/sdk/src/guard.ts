@@ -395,6 +395,17 @@ export type GuardianAdapterOptions = Readonly<{
     event: { toolName: string; requestId: string; receipt: unknown },
   ) => void;
   /**
+   * Watch mode, opt-in. Default false: an answer that a call was watched is
+   * a denial like any other, and nothing runs without a capability. With
+   * `true`, `inProcess` tools ask Guardian for the watched answer: while the
+   * owner has the agent in watch mode, a call Guardian would have asked
+   * about or denied comes back as a watched DENY, and the guard runs the
+   * tool (content pins still checked) with no capability and nothing to
+   * record. Guardian performs nothing for the call. `remote` tools never
+   * ask for it.
+   */
+  watchMode?: boolean;
+  /**
    * Watch mode: called after an `inProcess` tool ran while the agent is in
    * watch mode, for a call that Guardian would have asked about (`"ASK"`)
    * or denied (`"DENY"`) under the current rules. Guardian issued no
@@ -1563,9 +1574,11 @@ export async function settle<Output>(
   // be watched instead. It issued no capability and performs nothing for
   // it, and it keeps the record of what it would have decided. A tool that
   // runs in this process runs (with its content pins checked), and there
-  // is nothing to record. Only an exact watched answer (client.ts) gets
-  // here; a remote tool stays a denial: Guardian performs nothing.
+  // is nothing to record. Only with `watchMode: true` and an exact watched
+  // answer (client.ts) does it get here; a remote tool stays a denial:
+  // Guardian performs nothing.
   if (
+    options.watchMode === true &&
     mode === "inProcess" &&
     result.decision === "DENY" &&
     result.reasonCode === "WATCHED" &&
@@ -1918,9 +1931,10 @@ export async function runThroughGuardian<Output>(
     ...amountFacts(declaration, args),
     ...(options.adapterId ? { adapterId: options.adapterId } : {}),
     purpose: resolvePurpose(options, toolName, snapshot),
-    // Watch mode: a tool that runs in this process can take the watched
-    // answer (see settle); a remote tool never asks for it.
-    ...(toolModeFor(options, toolName) === "inProcess"
+    // Watch mode (opt-in): a tool that runs in this process can take the
+    // watched answer (see settle); a remote tool never asks for it.
+    ...(options.watchMode === true &&
+    toolModeFor(options, toolName) === "inProcess"
       ? { watchAware: true }
       : {}),
   });

@@ -157,20 +157,21 @@ limit. The decision itself never changes.
 Runnable: [`examples/payments/invoice-agent.mjs`](../../examples/payments/invoice-agent.mjs).
 For Python, see [`odingard-guardian`](../python).
 
-## Watch mode (unreleased)
+## Watch mode (unreleased, opt-in)
 
-While the agent is in watch mode (the console's **Start watching**), Guardian records what it would have decided for each action and blocks nothing at that step. For a call it would have asked about or denied, it issues no capability and performs nothing. `createGuard`, and the LangChain, Vercel AI and OpenAI Agents adapters built on it, then run an `inProcess` tool anyway (its `fileArgs` are still checked) and there is nothing to record. `onWatched` tells you when that happened:
+While the agent is in watch mode (the console's **Start watching**), Guardian records what it would have decided for each action and blocks nothing at that step. For a call it would have asked about or denied, it issues no capability and performs nothing. With `watchMode: true`, `createGuard` (and the LangChain, Vercel AI and OpenAI Agents adapters built on it) then runs an `inProcess` tool anyway: its `fileArgs` are still checked, and there is nothing to record. `onWatched` tells you when that happened:
 
 ```ts
 const guard = createGuard({
   client,
   connectionId: "pcn_…",
+  watchMode: true,
   onWatched: ({ toolName, requestId, wouldDecision }) =>
     console.log(`${toolName} (${requestId}) would have been ${wouldDecision}`),
 });
 ```
 
-A `remote` tool is never run this way: Guardian performs nothing for it, and the call is a `GuardianDenied`. Outside watch mode nothing changes.
+Without `watchMode`, such a call is refused (`GuardianDenied`) and the tool does not run. A `remote` tool is never run this way: Guardian performs nothing for it. Outside watch mode nothing changes.
 
 ## Pin the contents of file arguments — `fileArgs` (0.4)
 
