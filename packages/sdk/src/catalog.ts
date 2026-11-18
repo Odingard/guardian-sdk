@@ -1,4 +1,8 @@
-import catalog from "./catalog/public-catalog.v1.json" with { type: "json" };
+import catalogJson from "./catalog/public-catalog.v1.json" with { type: "json" };
+
+// A copy, so the declaration output spells out the catalog type instead of
+// importing the JSON file (which is not part of the type output).
+const catalog = { ...catalogJson };
 
 /**
  * Guardian's public catalog metadata, generated from Guardian's

@@ -25,6 +25,8 @@ jobs:
         run: |
           node scripts/check-skill.mjs
           node --test scripts/check-skill.test.mjs
+      - name: SDK types check in a TypeScript 5 project (skipLibCheck off)
+        run: node scripts/check-sdk-types.mjs
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |
