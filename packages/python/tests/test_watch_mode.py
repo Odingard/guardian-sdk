@@ -264,3 +264,28 @@ def test_watch_mode_is_off_by_default_no_header_and_a_watched_answer_is_a_denial
     assert ran == []
     assert "watch_aware" not in client.invocations[0]
     assert client.calls == ["request:tool.invoke"]
+
+
+def test_sync_guard_closes_an_async_on_watched_instead_of_leaving_it_unawaited():
+    closed = []
+
+    async def on_watched(tool, request_id, decision):  # pragma: no cover - never awaited
+        raise AssertionError("not awaited by a sync guard")
+
+    def hook(tool, request_id, decision):
+        coroutine = on_watched(tool, request_id, decision)
+        original_close = coroutine.close
+
+        class Tracked:
+            def __await__(self):  # pragma: no cover - never awaited
+                return coroutine.__await__()
+
+            def close(self):
+                closed.append(True)
+                original_close()
+
+        return Tracked()
+
+    guard = Guard(FakeClient(watched("DENY")), connection_id=CONNECTION, watch_mode=True, on_watched=hook)
+    assert guard("delete_ticket")(lambda: "deleted")() == "deleted"
+    assert closed == [True]

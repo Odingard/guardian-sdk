@@ -22,6 +22,19 @@ export {
 } from "./embedded.js";
 export { classifyRequestResult, type GuardianDecision } from "./lifecycle.js";
 export {
+  createMissionClient,
+  missionFallsBack,
+  verifyMissionRecordOffline,
+  MISSION_FALLBACK_REASONS,
+  MISSION_RECORD_DOMAIN,
+  MISSION_RECORD_SCHEMA,
+  type MissionClient,
+  type MissionClientConfig,
+  type MissionRecordVerification,
+  type MissionRequestResult,
+  type MissionRoute,
+} from "./mission.js";
+export {
   fetchReceiptVerificationKeys,
   verifyReceiptOffline,
   verifyReceiptOnline,

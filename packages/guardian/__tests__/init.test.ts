@@ -81,6 +81,7 @@ describe("arguments", () => {
       ["--console", "http://guardian.example.test"],
       ["--api", "ftp://x"],
       ["--api", "https://user:pass@x.test"],
+      ["--api", "https://[::1]:8443"],
       ["--tools", "Bad Name"],
     ]) {
       expect(parseInitArgs(argv).ok, argv.join(" ")).toBe(false);
@@ -265,6 +266,8 @@ describe("the env file", () => {
 function fakeClient(script: {
   request: GuardianRequestResult;
   claims?: GuardianRequestResult[];
+  /** The receipt status execute answers (default sent-verified). */
+  status?: string;
 }) {
   const calls: string[] = [];
   const client: GuardianClient = {
@@ -277,14 +280,21 @@ function fakeClient(script: {
     async claim(requestId) {
       calls.push(`claim:${requestId}`);
       return (
-        script.claims?.shift() ?? { ok: false, reasonCode: "APPROVAL_PENDING" }
+        script.claims?.shift() ?? {
+          ok: false,
+          reasonCode: "APPROVAL_PENDING",
+          requestId,
+        }
       );
     },
     async execute({ requestId }) {
       calls.push(`execute:${requestId}`);
       return {
         ok: true,
-        receipt: { requestId, status: "sent-verified" } as never,
+        receipt: {
+          requestId,
+          status: script.status ?? "sent-verified",
+        } as never,
       };
     },
     async portableReceipt() {
@@ -332,7 +342,7 @@ describe("the test action", () => {
         requestId: "req_t2",
       },
       claims: [
-        { ok: false, reasonCode: "APPROVAL_PENDING" },
+        { ok: false, reasonCode: "APPROVAL_PENDING", requestId: "req_t2" },
         {
           ok: true,
           requestId: "req_t2",
@@ -375,7 +385,7 @@ describe("the test action", () => {
         ...instant,
       }),
     ).resolves.toEqual({
-      kind: "denied",
+      kind: "refused",
       requestId: "req_t3",
       reasonCode: "POLICY_DENY",
     });
@@ -413,16 +423,66 @@ describe("the test action", () => {
         now: () => clock,
         waitMs: 3_000,
       }),
-    ).resolves.toEqual({
-      kind: "expired",
-      requestId: "req_t4",
-      reasonCode: "APPROVAL_PENDING",
+    ).resolves.toEqual({ kind: "expired", requestId: "req_t4" });
+  });
+
+  it("reports recorded only for a verified record", async () => {
+    const notSent = fakeClient({
+      request: {
+        ok: true,
+        requestId: "req_t6",
+        decision: "ALLOW",
+        capabilityToken: "cap",
+      },
+      status: "not-sent",
     });
+    await expect(
+      runSetupTest({
+        client: notSent.client,
+        connectionId: CONNECTION,
+        onWaiting: () => undefined,
+        ...instant,
+      }),
+    ).resolves.toEqual({
+      kind: "refused",
+      requestId: "req_t6",
+      reasonCode: "EXECUTION_NOT_SENT",
+    });
+    // A pending record that cannot be confirmed is unknown, never retried.
+    for (const status of ["outcome-pending", "outcome-unconfirmed"]) {
+      const pending = fakeClient({
+        request: {
+          ok: true,
+          requestId: "req_t7",
+          decision: "ALLOW",
+          capabilityToken: "cap",
+        },
+        status,
+      });
+      await expect(
+        runSetupTest({
+          client: pending.client,
+          connectionId: CONNECTION,
+          onWaiting: () => undefined,
+          ...instant,
+        }),
+      ).resolves.toMatchObject({ kind: "unknown", requestId: "req_t7" });
+    }
   });
 });
 
 describe("guardian init, end to end with a stand-in browser", () => {
-  function setup(answers: Array<string | null>) {
+  function setup(
+    answers: Array<string | null>,
+    script: Parameters<typeof fakeClient>[0] = {
+      request: {
+        ok: true,
+        requestId: "req_t5",
+        decision: "ALLOW",
+        capabilityToken: "cap",
+      },
+    },
+  ) {
     const home = mkdtempSync(join(tmpdir(), "guardian-home-"));
     const cwd = mkdtempSync(join(tmpdir(), "guardian-project-"));
     mkdirSync(cwd, { recursive: true });
@@ -435,14 +495,7 @@ describe("guardian init, end to end with a stand-in browser", () => {
     );
     const out: string[] = [];
     const err: string[] = [];
-    const { client, calls } = fakeClient({
-      request: {
-        ok: true,
-        requestId: "req_t5",
-        decision: "ALLOW",
-        capabilityToken: "cap",
-      },
-    });
+    const { client, calls } = fakeClient(script);
     let opened = "";
     const io: InitIo = {
       out: (text) => out.push(text),
@@ -509,6 +562,53 @@ describe("guardian init, end to end with a stand-in browser", () => {
     expect([...run.out, ...run.err].join("\n")).not.toContain(CREDENTIAL);
   });
 
+  it("stops after three refused test actions and fails", async () => {
+    const run = setup(["", "", "", "", ""], {
+      request: { ok: false, reasonCode: "INVALID_REQUEST" },
+    });
+    const code = await runInit(["--tools", "send_reply"], run.io);
+    expect(code).toBe(1);
+    expect(
+      run.calls.filter((call) => call.startsWith("request:")),
+    ).toHaveLength(3);
+    expect(run.out.some((line) => line.startsWith("Done in"))).toBe(false);
+  });
+
+  it("fails when no one approves the held test action in time", async () => {
+    const run = setup(["", ""], {
+      request: {
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: "req_t9",
+      },
+    });
+    const code = await runInit(["--tools", "send_reply"], {
+      ...run.io,
+      sleep: async () => undefined,
+    });
+    expect(code).toBe(1);
+    expect(run.err).toContain(INIT_WORDS.testExpired);
+    expect(run.out.some((line) => line.startsWith("Done in"))).toBe(false);
+  });
+
+  it("never sends the test action again when its record is unknown", async () => {
+    const run = setup(["", "", ""], {
+      request: {
+        ok: true,
+        requestId: "req_t8",
+        decision: "ALLOW",
+        capabilityToken: "cap",
+      },
+      status: "outcome-pending",
+    });
+    const code = await runInit(["--tools", "send_reply"], run.io);
+    expect(code).toBe(1);
+    expect(
+      run.calls.filter((call) => call.startsWith("request:")),
+    ).toHaveLength(1);
+    expect(run.err.join("\n")).toContain("req_t8");
+  });
+
   it("saves nothing without a yes", async () => {
     const run = setup(["n"]);
     const code = await runInit(["--tools", "send_reply", "--no-test"], run.io);
@@ -523,7 +623,11 @@ describe("guardian init, end to end with a stand-in browser", () => {
   it("avoids the words the product wording rules out", () => {
     const words: string[] = [];
     for (const value of Object.values(INIT_WORDS)) {
-      words.push(typeof value === "string" ? value : value("X" as never));
+      words.push(
+        typeof value === "string"
+          ? value
+          : (value as (...args: string[]) => string)("X", "Y"),
+      );
     }
     const banned = /\b(only|first|nobody|tamper-proof|phone|receipts?)\b/i;
     for (const text of words) expect(text, text).not.toMatch(banned);

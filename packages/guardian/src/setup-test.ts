@@ -1,21 +1,51 @@
 /**
  * The test action of `guardian init`: one governed call of the tool
- * `guardian_setup_test`, which does nothing. It goes through Guardian like
- * any other action: allowed and recorded, held for the person and then
- * recorded once they approve, or refused. Nothing else is sent.
+ * `guardian_setup_test`, which does nothing. It goes through the SDK's
+ * shared guard (`createGuard`, the same path as every wrapped tool): it is
+ * allowed and recorded, held until the person approves it in the console
+ * and then recorded, or refused. A record Guardian cannot confirm is
+ * reported as such and never retried.
  */
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import {
+  createGuard,
+  GuardianApprovalPending,
+  GuardianDenied,
+  GuardianExecutionFailed,
+  type GuardianClient,
+} from "@odingard/guardian-sdk";
 
 export const SETUP_TEST_TOOL = "guardian_setup_test";
 
 export type SetupTestOutcome =
-  | { kind: "allowed"; requestId: string }
+  | { kind: "allowed"; requestId?: string }
   | { kind: "approved"; requestId: string }
-  | { kind: "denied"; requestId?: string; reasonCode: string }
   | { kind: "refused"; requestId?: string; reasonCode: string }
-  | { kind: "expired"; requestId: string; reasonCode: string };
+  | { kind: "unknown"; requestId: string; reasonCode: string }
+  | { kind: "expired"; requestId: string };
 
-const HELD = new Set(["APPROVAL_REQUIRED", "APPROVAL_PENDING"]);
+function fromError(error: unknown): SetupTestOutcome {
+  if (error instanceof GuardianExecutionFailed) {
+    return error.outcomeUnknown
+      ? {
+          kind: "unknown",
+          requestId: error.requestId,
+          reasonCode: error.reasonCode,
+        }
+      : {
+          kind: "refused",
+          requestId: error.requestId,
+          reasonCode: error.reasonCode,
+        };
+  }
+  if (error instanceof GuardianDenied) {
+    return {
+      kind: "refused",
+      ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
+      reasonCode: error.reasonCode,
+    };
+  }
+  throw error;
+}
 
 export async function runSetupTest(input: {
   client: GuardianClient;
@@ -23,6 +53,7 @@ export async function runSetupTest(input: {
   onWaiting(requestId: string): void;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
+  /** How long to wait for the person (the request itself lasts 2 minutes). */
   waitMs?: number;
   now?: () => number;
 }): Promise<SetupTestOutcome> {
@@ -30,83 +61,39 @@ export async function runSetupTest(input: {
     input.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const now = input.now ?? Date.now;
   const pollMs = input.pollMs ?? 3_000;
-  const waitMs = input.waitMs ?? 300_000;
-  const requested = await input.client.request({
-    action: "tool.invoke",
+  const waitMs = input.waitMs ?? 120_000;
+  let recordedId: string | undefined;
+  const guard = createGuard({
+    client: input.client,
     connectionId: input.connectionId,
-    toolName: SETUP_TEST_TOOL,
-    arguments: {},
     purpose: "Guardian setup test",
-    ttlMs: 300_000,
+    onReceipt: (event) => {
+      recordedId = event.requestId;
+    },
   });
-  const record = async (
-    requestId: string,
-    capabilityToken: string,
-    kind: "allowed" | "approved",
-  ): Promise<SetupTestOutcome> => {
-    const executed = await input.client.execute({ requestId, capabilityToken });
-    return executed.ok
-      ? { kind, requestId }
-      : { kind: "refused", requestId, reasonCode: executed.reasonCode };
-  };
-  if (requested.ok && requested.decision === "ALLOW") {
-    return requested.capabilityToken
-      ? record(requested.requestId, requested.capabilityToken, "allowed")
-      : {
-          kind: "refused",
-          requestId: requested.requestId,
-          reasonCode: "MISSING_CAPABILITY",
-        };
-  }
-  if (requested.ok && requested.decision === "DENY") {
+  const setupTest = guard(SETUP_TEST_TOOL, async () => ({ ok: true }));
+  let held: GuardianApprovalPending<unknown>;
+  try {
+    await setupTest({});
     return {
-      kind: "denied",
-      requestId: requested.requestId,
-      reasonCode: requested.reasonCode ?? "DENIED",
+      kind: "allowed",
+      ...(recordedId === undefined ? {} : { requestId: recordedId }),
     };
+  } catch (error) {
+    if (!(error instanceof GuardianApprovalPending)) return fromError(error);
+    held = error as GuardianApprovalPending<unknown>;
   }
-  const heldId =
-    requested.ok && requested.decision === "ASK"
-      ? requested.requestId
-      : !requested.ok && HELD.has(requested.reasonCode)
-        ? requested.requestId
-        : undefined;
-  if (heldId === undefined) {
-    return {
-      kind: "refused",
-      ...(requested.ok || requested.requestId === undefined
-        ? {}
-        : { requestId: requested.requestId }),
-      reasonCode: requested.ok
-        ? (requested.reasonCode ?? "MALFORMED_RESPONSE")
-        : requested.reasonCode,
-    };
-  }
-  input.onWaiting(heldId);
+  input.onWaiting(held.requestId);
   const deadline = now() + waitMs;
   while (now() < deadline) {
     await sleep(pollMs);
-    const claimed = await input.client.claim(heldId);
-    if (claimed.ok && claimed.decision === "ALLOW" && claimed.capabilityToken) {
-      return record(heldId, claimed.capabilityToken, "approved");
+    try {
+      await held.resume();
+      return { kind: "approved", requestId: held.requestId };
+    } catch (error) {
+      if (error instanceof GuardianApprovalPending) continue;
+      return fromError(error);
     }
-    if (claimed.ok && claimed.decision === "DENY") {
-      return {
-        kind: "denied",
-        requestId: heldId,
-        reasonCode: claimed.reasonCode ?? "DENIED",
-      };
-    }
-    if (claimed.ok && claimed.decision === "ASK") continue;
-    if (!claimed.ok && HELD.has(claimed.reasonCode)) continue;
-    if (!claimed.ok && claimed.reasonCode === "SERVICE_UNAVAILABLE") continue;
-    return {
-      kind: "denied",
-      requestId: heldId,
-      reasonCode: claimed.ok
-        ? (claimed.reasonCode ?? "MALFORMED_RESPONSE")
-        : claimed.reasonCode,
-    };
   }
-  return { kind: "expired", requestId: heldId, reasonCode: "APPROVAL_PENDING" };
+  return { kind: "expired", requestId: held.requestId };
 }

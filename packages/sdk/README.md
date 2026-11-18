@@ -380,6 +380,55 @@ Anything else refuses with a reason code such as `REQUEST_MISMATCH` or `AMOUNT_M
 
 `fetchReceiptStatus` calls the public `POST /v1/receipts/status`. The signed record itself is the credential, and the reply is only a status (`active`, `pending`, `revoked`, `expired`, `used`, `paused` or `unknown`), never identities.
 
+## Missions (unreleased)
+
+A person approves one mission card in the Guardian console: an agent, a total
+budget, an end time, and the connections, actions and sites it covers. The
+approval issues a mission credential for that agent. Inside the card's limits,
+requests made with it need no new approval; sending email still asks.
+
+```ts
+import { createMissionClient } from "@odingard/guardian-sdk";
+
+const guardian = createMissionClient({
+  baseUrl: "https://guardian-api.odingard.com",
+  agentCredential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
+  missionCredential: process.env.GUARDIAN_MISSION_CREDENTIAL!,
+});
+
+const result = await guardian.request({
+  action: "tool.invoke",
+  connectionId: "pcn_…",
+  toolName: "book_flight",
+  arguments: { amount: "640.00" },
+});
+// result.via: "mission" (decided under the mission) or "standing"
+```
+
+- `createMissionClient(config)` has the methods of `createGuardianClient`.
+  `request` uses the mission credential. When Guardian refuses because the
+  mission does not cover the action (`missionFallsBack`,
+  `MISSION_FALLBACK_REASONS`: an authorization refusal, which hosted Guardian
+  answers as `NOT_AUTHORIZED`, or the mission has ended), the same action is
+  sent as a new request with the agent credential, where the person's usual
+  permissions apply with every check, so a fallback can cost one extra
+  approval request, never an unapproved action. Guardian unreachable, a
+  malformed or conflicting request, or an approval already required are
+  returned as they are. The result names the credential that
+  decided (`via`) and, after a fallback, the mission's refusal
+  (`missionReasonCode`). `claim`, `execute` and record lookups use the
+  credential that made the request; a request id the client did not make is
+  refused with `MISSION_REQUEST_UNKNOWN`.
+- `verifyMissionRecordOffline(record, keys)` checks a signed mission record
+  (`guardian.mission-record.v1`: the approved card, its limits, the
+  permissions the approval issued, who approved it and when) against
+  Guardian's published keys (the key set in
+  [Verify a decision without an account](#verify-a-decision-without-an-account)).
+  The record is signed under its own
+  domain (`MISSION_RECORD_DOMAIN`). It returns `{ valid: true, keyId }` or
+  `{ valid: false, reasonCode }` with `RECORD_MALFORMED`,
+  `RECORD_KEY_UNKNOWN`, `RECORD_SIGNATURE_INVALID` or `RECORD_DIGEST_MISMATCH`.
+
 ## Embedded approvals — humans only
 
 `createEmbeddedApprovalClient({ baseUrl, sessionToken })` lets your own UI list,
