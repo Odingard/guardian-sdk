@@ -95,9 +95,12 @@ upstream server's tools unchanged, and every call is decided first:
   `guardian_cancel` are added to the tool list, with the same annotations as
   above. Here `guardian_claim` forwards the held call to the upstream server,
   `guardian_pending` marks each request whose call this proxy holds
-  (`heldByThisProxy`), and `guardian_cancel` also drops the held call, so a
-  later `guardian_claim` forwards nothing. An upstream tool with one of these
-  names is hidden.
+  (`heldByThisProxy`), and `guardian_cancel` also drops the held call once
+  Guardian confirms the withdrawal, so a later `guardian_claim` forwards
+  nothing and the same call made again is a new request. If no clear answer
+  comes back (`outcomeUnknown: true`), the proxy keeps the held call; calling
+  `guardian_cancel` again with the same `requestId` is safe. An upstream tool
+  with one of these names is hidden.
 - The upstream server never receives `GUARDIAN_*` settings, so it never sees
   the agent credential.
 - **Decision-gated:** an allowed call runs upstream before the capability is

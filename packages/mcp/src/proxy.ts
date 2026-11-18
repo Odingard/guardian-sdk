@@ -776,8 +776,23 @@ export function createGovernedProxy(
   const withdrawnRequests = new Set<string>();
 
   /**
+   * Forget the SDK's memory of any held call whose request was withdrawn.
+   * Runs on a confirmed withdrawal and again after every governed call, so a
+   * claim that was already waiting when the withdrawal landed cannot put the
+   * withdrawn request back.
+   */
+  function forgetWithdrawnHeld(): void {
+    if (!ctx.heldInvocations || withdrawnRequests.size === 0) return;
+    for (const [key, held] of [...ctx.heldInvocations]) {
+      if (withdrawnRequests.has(held)) ctx.heldInvocations.delete(key);
+    }
+  }
+
+  /**
    * Guardian confirmed the withdrawal: forget the held call (or held setup
-   * step) and any capability kept for it, so no claim here forwards it.
+   * step) and any capability kept for it, so no claim here forwards it, and
+   * the SDK's memory of the held call, so the same call proposed again
+   * becomes a new request instead of claiming the withdrawn one.
    */
   function dropHeld(requestId: string): void {
     withdrawnRequests.add(requestId);
@@ -788,6 +803,7 @@ export function createGovernedProxy(
     }
     pendingCalls.delete(requestId);
     claimedCapabilities.delete(requestId);
+    forgetWithdrawnHeld();
     const installFor = pendingInstalls.get(requestId);
     if (installFor !== undefined) {
       pendingInstalls.delete(requestId);
@@ -1097,6 +1113,8 @@ export function createGovernedProxy(
         return toCallResult(name, args, output, call.allowedRequestId());
       } catch (err) {
         return failure(err, name, forwarding);
+      } finally {
+        forgetWithdrawnHeld();
       }
     },
   };

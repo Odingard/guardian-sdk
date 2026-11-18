@@ -186,10 +186,6 @@ describe("guardian-mcp: guardian_pending and guardian_cancel", () => {
         /already expired/,
       ],
       [{ ok: false as const, reasonCode: "NOT_FOUND" }, /no held request/],
-      [
-        { ok: false as const, reasonCode: "SERVICE_UNAVAILABLE" },
-        /could not be reached, so nothing changed/,
-      ],
     ] as const) {
       const result = await handleToolCall(
         { client: client({ withdraw: vi.fn(async () => answer) }) },
@@ -203,6 +199,43 @@ describe("guardian-mcp: guardian_pending and guardian_cancel", () => {
         requestId: "req_ask",
       });
       expect(payload(result).message).toMatch(message);
+      expect(payload(result)).not.toHaveProperty("outcomeUnknown");
+    }
+  });
+
+  it("guardian_cancel reports a lost answer as unconfirmed, never as nothing changed", async () => {
+    for (const answer of [
+      {
+        ok: false as const,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        outcomeUnknown: true as const,
+      },
+      {
+        ok: false as const,
+        reasonCode: "HTTP_502",
+        outcomeUnknown: true as const,
+      },
+      // An SDK that does not set outcomeUnknown yet.
+      { ok: false as const, reasonCode: "SERVICE_UNAVAILABLE" },
+      { ok: false as const, reasonCode: "HTTP_502" },
+      { ok: false as const, reasonCode: "HTTP_500" },
+      { ok: false as const, reasonCode: "MALFORMED_RESPONSE" },
+    ]) {
+      const result = await handleToolCall(
+        { client: client({ withdraw: vi.fn(async () => answer) }) },
+        "guardian_cancel",
+        { requestId: "req_ask" },
+      );
+      expect(isError(result)).toBe(true);
+      expect(payload(result)).toEqual({
+        ok: false,
+        reasonCode: answer.reasonCode,
+        requestId: "req_ask",
+        outcomeUnknown: true,
+        message:
+          "No clear answer came back from Guardian, so this request may or may not have been withdrawn. Calling guardian_cancel again with the same requestId is safe.",
+      });
+      expect(payload(result).message).not.toMatch(/nothing changed/i);
     }
   });
 
@@ -223,7 +256,9 @@ describe("guardian-mcp: guardian_pending and guardian_cancel", () => {
     expect(isError(mismatched)).toBe(true);
     expect(payload(mismatched)).toMatchObject({
       reasonCode: "MALFORMED_RESPONSE",
+      outcomeUnknown: true,
     });
+    expect(payload(mismatched).message).toMatch(/may or may not have been/);
   });
 
   it("an SDK without the methods answers NOT_SUPPORTED and changes nothing", async () => {
@@ -338,6 +373,11 @@ describe("guardian-mcp proxy: guardian_pending and guardian_cancel", () => {
         state: "approved",
       },
       { ok: false as const, reasonCode: "SERVICE_UNAVAILABLE" },
+      {
+        ok: false as const,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        outcomeUnknown: true as const,
+      },
     ]) {
       const { proxy, hold, calls } = setup({
         withdraw: vi.fn(async () => answer),
@@ -360,6 +400,84 @@ describe("guardian-mcp proxy: guardian_pending and guardian_cancel", () => {
       });
       expect(calls).toHaveLength(1);
     }
+  });
+
+  it("after a confirmed withdrawal, the same call again is a new request, not a claim of the withdrawn one", async () => {
+    const ids = ["req_ask", "req_other", "req_new"];
+    const request = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: ids.shift()!,
+      }),
+    );
+    const claim = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_PENDING",
+      }),
+    );
+    const { proxy, hold, calls } = setup({ request, claim });
+    await hold();
+    const other = { to: "+15550101", body: "invoice paid" };
+    expect(payload(await proxy.callTool("send_message", other))).toMatchObject({
+      decision: "ASK",
+      requestId: "req_other",
+    });
+    expect(
+      payload(
+        await proxy.callTool("guardian_cancel", { requestId: "req_ask" }),
+      ),
+    ).toMatchObject({ state: "withdrawn" });
+    const again = await proxy.callTool("send_message", {
+      to: "+15550100",
+      body: "invoice due",
+    });
+    expect(payload(again)).toMatchObject({
+      decision: "ASK",
+      requestId: "req_new",
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(claim).not.toHaveBeenCalled();
+    // The other held call is still remembered: proposing it again claims it.
+    await proxy.callTool("send_message", other);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(claim.mock.calls).toEqual([["req_other"]]);
+    expect(calls).toEqual([]);
+  });
+
+  it("an unconfirmed withdrawal keeps the SDK's held call: the same call again claims it", async () => {
+    const request = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: "req_ask",
+      }),
+    );
+    const claim = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_PENDING",
+      }),
+    );
+    const { proxy, hold, calls } = setup({
+      request,
+      claim,
+      withdraw: vi.fn(async () => ({
+        ok: false as const,
+        reasonCode: "SERVICE_UNAVAILABLE",
+        outcomeUnknown: true as const,
+      })),
+    });
+    await hold();
+    await proxy.callTool("guardian_cancel", { requestId: "req_ask" });
+    await proxy.callTool("send_message", {
+      to: "+15550100",
+      body: "invoice due",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(claim.mock.calls).toEqual([["req_ask"]]);
+    expect(calls).toEqual([]);
   });
 
   it("a withdrawal during a claim that is still waiting keeps the call dropped", async () => {
@@ -390,6 +508,71 @@ describe("guardian-mcp proxy: guardian_pending and guardian_cancel", () => {
       requestId: "req_ask",
     });
     expect(payload(later).error).toMatch(/holds no call/);
+    expect(calls).toEqual([]);
+  });
+
+  it("an answer about another request is unconfirmed and the proxy keeps the held call", async () => {
+    const { proxy, hold, guardian } = setup({
+      withdraw: vi.fn(async () => ({
+        ok: true as const,
+        state: "withdrawn" as const,
+        requestId: "req_other",
+        withdrawnAtEpochMs: 1,
+      })),
+    });
+    await hold();
+    const result = await proxy.callTool("guardian_cancel", {
+      requestId: "req_ask",
+    });
+    expect(payload(result)).toMatchObject({
+      reasonCode: "MALFORMED_RESPONSE",
+      outcomeUnknown: true,
+    });
+    const listed = await proxy.callTool("guardian_pending", {});
+    expect(payload(listed).requests[0]).toMatchObject({
+      heldByThisProxy: true,
+    });
+    expect(guardian.withdraw).toHaveBeenCalledTimes(1);
+  });
+
+  it("a withdrawal while a repeated call's claim is waiting cannot put the withdrawn request back", async () => {
+    const ids = ["req_ask", "req_new"];
+    const request = vi.fn(
+      async (): Promise<GuardianRequestResult> => ({
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: ids.shift()!,
+      }),
+    );
+    let answerClaim!: (value: GuardianRequestResult) => void;
+    const claim = vi.fn(
+      () =>
+        new Promise<GuardianRequestResult>((resolve) => {
+          answerClaim = resolve;
+        }),
+    );
+    const { proxy, hold, calls } = setup({ request, claim });
+    await hold();
+    const message = { to: "+15550100", body: "invoice due" };
+    // The agent repeats the held call: the SDK claims req_ask and waits.
+    const repeated = proxy.callTool("send_message", message);
+    await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(1));
+    expect(
+      payload(
+        await proxy.callTool("guardian_cancel", { requestId: "req_ask" }),
+      ),
+    ).toMatchObject({ state: "withdrawn" });
+    // Guardian answered the claim before the withdrawal landed.
+    answerClaim({ ok: false, reasonCode: "APPROVAL_PENDING" });
+    await repeated;
+    // The same call again is a new request, not a claim of req_ask.
+    const again = await proxy.callTool("send_message", message);
+    expect(payload(again)).toMatchObject({
+      decision: "ASK",
+      requestId: "req_new",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(1);
     expect(calls).toEqual([]);
   });
 });

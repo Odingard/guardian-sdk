@@ -97,14 +97,24 @@ def test_withdraw_never_reports_a_withdrawal_it_did_not_get():
     assert make(lambda r: httpx.Response(409, json=decided)).withdraw("req_0123456789abcdef") == WithdrawResult(
         ok=False, reason_code="ALREADY_DECIDED", request_id="req_0123456789abcdef", state="approved"
     )
-    for body, status, code in [
-        ({**WITHDRAWN, "state": "pending"}, 200, "MALFORMED_RESPONSE"),
-        ({"ok": True, "state": "withdrawn"}, 200, "MALFORMED_RESPONSE"),
-        ({"ok": False, "reasonCode": "NOT_FOUND"}, 404, "NOT_FOUND"),
-        ({"ok": False, "reasonCode": "SERVICE_UNAVAILABLE"}, 503, "SERVICE_UNAVAILABLE"),
+    for body, status, code, unknown in [
+        ({**WITHDRAWN, "state": "pending"}, 200, "MALFORMED_RESPONSE", True),
+        ({"ok": True, "state": "withdrawn"}, 200, "MALFORMED_RESPONSE", True),
+        ({"ok": False, "reasonCode": "NOT_FOUND"}, 404, "NOT_FOUND", False),
+        ({"ok": False, "reasonCode": "RATE_LIMITED"}, 429, "RATE_LIMITED", False),
+        ({"ok": False, "reasonCode": "SERVICE_UNAVAILABLE"}, 503, "SERVICE_UNAVAILABLE", True),
     ]:
         result = make(lambda r, body=body, status=status: httpx.Response(status, json=body)).withdraw("req_x")
-        assert not result.ok and result.reason_code == code
+        assert not result.ok and result.reason_code == code and result.outcome_unknown is unknown
+
+
+def test_withdraw_reports_a_lost_answer_as_unconfirmed():
+    def down(request):
+        raise httpx.ConnectError("connection reset")
+
+    assert make(down).withdraw("req_0123456789abcdef") == WithdrawResult(
+        ok=False, reason_code="SERVICE_UNAVAILABLE", outcome_unknown=True
+    )
 
 
 async def test_async_client_lists_and_withdraws():
