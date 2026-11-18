@@ -1,5 +1,18 @@
 # Changelog
 
+## guardian-mcp 0.5.2, unreleased
+
+### Changed: clearer tool definitions
+
+- **`@odingard/guardian-mcp`**: `guardian_invoke_tool`, `guardian_claim` and `guardian_record`, in `guardian-mcp` and in `guardian-mcp proxy`, describe what they do, what they return, their errors, whether calling them again is safe, and how they fit together (invoke; on ASK, wait for the person to approve; claim; record).
+  - Every parameter has a description, including `requestId` on `guardian_claim` and `guardian_record`. `toolName` and `connectionId` on `guardian_invoke_tool` also list the format Guardian accepts (`pattern`, `maxLength`), and `purpose` its maximum length.
+  - Each tool has a `title` and MCP tool annotations: `guardian_invoke_tool` and `guardian_claim` set `destructiveHint` and `openWorldHint`; `guardian_record` sets `readOnlyHint` and `idempotentHint`.
+  - Unchanged: the tool names, the hidden earlier name of `guardian_record`, and the JSON the tools return.
+
+### Fixed: claiming before the person approves stays held
+
+- **`@odingard/guardian-mcp`**: in `guardian-mcp`, a `guardian_claim` made before the person approves (`APPROVAL_PENDING`) answers ASK with the `requestId`, so it can be claimed again after approval. Before, it was reported as DENY with "Do not retry the same call". Nothing runs in either case. `guardian-mcp proxy` already kept such a call held.
+
 ## guardian-mcp 0.5.1, released 2026-11-18
 
 ### Changed: the records tool is listed as `guardian_record`
