@@ -34,7 +34,7 @@ Shell commands are routed by consequence. That routing is what lets you put depl
 | --------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shell`               | Allow          | Ordinary commands (build, test, inspect)                                                                                                           |
 | `shell_deploy`        | Ask me first   | terraform/tofu apply and destroy, pulumi up, kubectl apply and delete, helm install and upgrade, cloud deploy CLIs, package publish, `gh pr merge` |
-| `shell_destructive`   | Ask me first   | See the list below, and [sensitive files](#sensitive-files) (`.env`, keys, cloud credentials)                                                      |
+| `shell_destructive`   | Ask me first   | See the list below, [sensitive files](#sensitive-files) (`.env`, keys, cloud credentials) and [the agent's environment](#the-agents-environment)   |
 | `git_push`            | Ask me first   | Pushing commits                                                                                                                                    |
 | `shell_session`       | Ask me first   | Starting an interactive shell, interpreter, database client or remote session (`bash`, `python3`, `ssh host`, `docker exec -it`, `psql app`)       |
 | `file_write`          | Allow          | Write and edit (the approver sees the path, size and a SHA-256 of the content; the content itself is not sent)                                     |
@@ -73,6 +73,17 @@ Fail closed: invalid settings, a read without a path, or an error while checking
 What this does not see: a shell search over a folder (`grep -r TOKEN .`, `rg TOKEN`) can read a sensitive file inside it; for shell commands the hook checks the names in the command, not every file the search opens. A path built at run time (`cat "$(…)"`, `cat $F`) and files read by scripts are not seen either. WebSearch is `web_fetch`: the query leaves your machine, so it is governed like a fetched URL.
 
 **Speed.** An ordinary read is decided locally (checking the patterns takes well under a millisecond; walking a folder for a Grep took about 45 ms for this repository), but every read now starts the hook process. On our test machine that took about 0.15 s with the package installed globally and about 0.75 s through `npx -y` with a warm cache. To keep reads fast, install it (`npm i -g @odingard/guardian-hook`) and use `"command": "guardian-hook"`.
+
+## The agent's environment
+
+The agent's environment holds `GUARDIAN_AGENT_CREDENTIAL` and often other secrets. A shell command that can print it goes to `shell_destructive` (Ask tier) with `touches: "sensitive-env"` and what it reads, under Claude Code, Codex and DeepSeek Harness. `GUARDIAN_HOOK_SENSITIVE_MODE=deny` makes the hook refuse these commands itself.
+
+- Commands that print the environment: `env` and `printenv` with nothing to run, `export` / `export -p`, `set` with no arguments, `declare` / `declare -x` / `declare -p` and `typeset`, `ps e`, `/proc/<pid>/environ` (also after `cd /proc/self`), and the PowerShell `env:` drive. Also through wrappers, `sh -c`, `eval`, `$( )` and `find -exec`.
+- Any expansion of a `GUARDIAN_*` variable (`$GUARDIAN_AGENT_CREDENTIAL`, `${GUARDIAN_…}`, `$env:GUARDIAN_…`), in any command, and an indirect expansion (`${!name}`).
+- A secret variable (`*_TOKEN`, `*_SECRET`, `*_KEY`, `*_PASSWORD`, `AWS_*`) expanded in `echo`, `printf`, `cat`, a here-document or here-string, `sh -c`, `eval` or interpreter code, named to `printenv`, or run as the command itself.
+- Interpreter code that reads the whole environment (`python -c 'import os;print(os.environ)'`, `node -e 'console.log(process.env)'`, Ruby `ENV`, Perl `%ENV`, PHP `getenv()`, awk `ENVIRON`, `jq -n env`) or a secret variable by name (`os.environ["GITHUB_TOKEN"]`, `process.env.GITHUB_TOKEN`).
+
+Setting a variable to run a command (`env FOO=bar make`), `printenv PATH` and a secret passed to another command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`) stay where they were. Not seen: a variable name built at run time, and scripts that print the environment.
 
 ## Setup
 

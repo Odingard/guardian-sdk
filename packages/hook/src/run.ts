@@ -408,11 +408,19 @@ async function evaluate(
   }
   // Not a governed tool: no opinion; the agent's own permissions apply.
   if (classified === null) return null;
-  if (classified.sensitive && sensitive.mode === "deny") {
-    const hit = classified.sensitive[0]!;
-    return failClosed(
-      `${hit.path} is a sensitive file (${hit.pattern}), and GUARDIAN_HOOK_SENSITIVE_MODE=deny blocks it. Nothing ran.`,
-    );
+  if (sensitive.mode === "deny") {
+    const hit = classified.sensitive?.[0];
+    if (hit) {
+      return failClosed(
+        `${hit.path} is a sensitive file (${hit.pattern}), and GUARDIAN_HOOK_SENSITIVE_MODE=deny blocks it. Nothing ran.`,
+      );
+    }
+    const env = classified.sensitiveEnv?.[0];
+    if (env) {
+      return failClosed(
+        `${env.text} can print the agent's environment (${env.reason}), and GUARDIAN_HOOK_SENSITIVE_MODE=deny blocks it. Nothing ran.`,
+      );
+    }
   }
   // Edit-type tools: pin the target's current contents before anything is
   // proposed. A failure denies the call (fail closed).
