@@ -27,16 +27,23 @@ export type HookModule = {
 
 const SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 
-/** A short, safe label for the failure: an error code or class name only. */
+const CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+const ERROR_CLASS = /^(?:[A-Z][A-Za-z0-9]{0,55})?(?:Error|Exception)$/;
+
+/**
+ * A short, safe label for the failure: an error code or class name only.
+ * Nothing else from the error (its message, a thrown string) is shown: it
+ * could hold a secret or text meant for the model.
+ */
 function label(cause: unknown): string {
-  if (typeof cause === "string") return cause;
+  if (typeof cause === "string") return CODE.test(cause) ? cause : "error";
   if (cause && typeof cause === "object") {
     const code = (cause as { code?: unknown }).code;
-    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)) {
+    if (typeof code === "string" && CODE.test(code)) {
       return code;
     }
     const name = (cause as { name?: unknown }).name;
-    if (typeof name === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) {
+    if (typeof name === "string" && ERROR_CLASS.test(name)) {
       return name;
     }
   }
