@@ -417,6 +417,10 @@ describe("shell commands that read a sensitive file", () => {
       "python3 -c \"import os; os.chdir('/srv/keys'); print(open('server.pem').read())\"",
       "tar -C /srv -cf - .npmrc",
       "env -C /srv cat .npmrc",
+      "su - postgres -c 'cat .pgpass'",
+      "sudo --login -u postgres cat .pgpass",
+      "runuser -l postgres -c 'cat .pgpass'",
+      "sudo -iu postgres cat .pgpass",
       "python3 -c \"import os; os.chdir(os.path.expanduser('~')); print(open('.git-credentials').read())\"",
       "node -e \"process.chdir(require('os').homedir()); console.log(require('fs').readFileSync('.npmrc','utf8'))\"",
       "python3 -c \"import os; print(open(os.path.join(os.environ['HOME'], '.pgpass')).read())\"",
@@ -435,6 +439,21 @@ describe("shell commands that read a sensitive file", () => {
     ask(`cat ${Array.from({ length: 2_100 }, (_, i) => `f${i}`).join(" ")}`);
     // A huge brace range does not hang the hook; it counts as unresolved.
     ask("echo {9007199254740992..9007199254740994}");
+  });
+
+  it("terminal_send: the terminal's folder is not known, so bare names count", () => {
+    const src = join(dir, "src");
+    const send = (text: string, tool = "terminal_send") =>
+      governedCall({
+        tool,
+        input: { [tool === "terminal_send" ? "text" : "command"]: text },
+        cwd: src,
+      })?.toolName;
+    expect(send("cd ~")).toBe("shell");
+    expect(send("cat .npmrc")).toBe("shell_destructive");
+    expect(send("jq .key data.json")).toBe("shell_destructive");
+    // A plain shell call starts in the folder the agent reports.
+    expect(send("cat .npmrc", "bash")).toBe("shell");
   });
 
   it("Codex and DeepSeek Harness shell tools get the same treatment", () => {

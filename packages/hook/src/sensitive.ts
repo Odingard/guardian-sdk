@@ -507,12 +507,30 @@ const GIT_HISTORY = new Set(
 );
 /** Shells and evaluators: their code arguments are commands too. */
 const CODE_RUNNERS = new Set(
-  "sh bash zsh dash ksh mksh ash fish busybox eval su pwsh powershell".split(
+  "sh bash zsh dash ksh mksh ash fish busybox eval su runuser pwsh powershell".split(
     " ",
   ),
 );
 const INTERPRETER_NAME =
   /^(?:sh|bash|zsh|dash|ksh|mksh|ash|fish|busybox|pwsh|powershell|python[0-9.]*|node|nodejs|deno|bun|ruby|perl|php|lua|osascript)$/;
+/**
+ * A login switch runs in another user's home folder: `su -`, `su -l`,
+ * `runuser --login`, `sudo -i`, `sudo --login`, `doas -i`.
+ */
+function switchesHome(bases: readonly string[], words: readonly string[]) {
+  return bases.some((b, i) => {
+    const rest = words.slice(i + 1);
+    if (b === "su" || b === "runuser") {
+      return rest.some(
+        (w) => w === "-" || w === "--login" || /^-[a-z]*l/.test(w),
+      );
+    }
+    if (b === "sudo" || b === "doas") {
+      return rest.some((w) => w === "--login" || /^-[a-zA-Z]*i/.test(w));
+    }
+    return false;
+  });
+}
 const baseOf = (word: string) =>
   (word.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
 
@@ -536,6 +554,7 @@ function runsElsewhere(command: string): {
       // `log` in "fix the log output" is not a command.
       const bases = words.map(baseOf);
       if (bases.some((b) => ELSEWHERE.has(b))) return true;
+      if (switchesHome(bases, words)) return true;
       if (words.some((w) => CHDIR_OPTION.test(w))) return true;
       if (bases.some((b) => INTERPRETER_NAME.test(b))) interpreter = true;
       const git = bases.indexOf("git");
@@ -588,12 +607,19 @@ export function sensitiveInCommand(
   command: string,
   config: SensitiveConfig = DEFAULT_SENSITIVE,
   cwd: string = process.cwd(),
+  /**
+   * The shell's folder is not known (text typed into a terminal that keeps
+   * its folder between calls): every bare name counts.
+   */
+  folderUnknown = false,
 ): SensitiveHit[] {
   const hits: SensitiveHit[] = [];
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
-  const { elsewhere, interpreter } = runsElsewhere(command);
+  const found = runsElsewhere(command);
+  const elsewhere = folderUnknown || found.elsewhere;
+  const { interpreter } = found;
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`

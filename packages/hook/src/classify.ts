@@ -1348,7 +1348,13 @@ export function governedCall(
     : undefined;
   if (shellField) {
     const command = commandText(input[shellField]);
-    const hits = sensitiveInCommand(command, config, call.cwd ?? options.cwd);
+    // A PTY keeps its folder between calls, so the hook cannot know it.
+    const hits = sensitiveInCommand(
+      command,
+      config,
+      call.cwd ?? options.cwd,
+      tool === "terminal_send",
+    );
     const toolName = routeCommand(command, hits.length > 0);
     return {
       toolName,
