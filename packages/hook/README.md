@@ -4,7 +4,7 @@
 
 **Guardian is the trust layer for agent commerce.** Human Authority Infrastructure for Autonomous AI: the agent proposes; the human decides.
 
-**Guardian for coding agents.** A [Claude Code](https://code.claude.com/docs/en/hooks) `PreToolUse` hook that sends every consequential tool call (shell commands, file writes, web fetches, MCP tools) to Guardian before it runs. The same hook runs under [OpenAI Codex CLI](#openai-codex-cli) (`guardian-hook codex`) and [DeepSeek Harness](#deepseek-harness-dsh) (`guardian-hook dsh`).
+**Guardian for coding agents.** A [Claude Code](https://code.claude.com/docs/en/hooks) `PreToolUse` hook that sends every consequential tool call (shell commands, file writes, web fetches and searches, MCP tools, reads of sensitive files) to Guardian before it runs. The same hook runs under [OpenAI Codex CLI](#openai-codex-cli) (`guardian-hook codex`) and [DeepSeek Harness](#deepseek-harness-dsh) (`guardian-hook dsh`).
 
 - `npm test` runs under **Allow**.
 - `terraform apply` waits until **you approve it**.
@@ -34,11 +34,11 @@ Shell commands are routed by consequence. That routing is what lets you put depl
 | --------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shell`               | Allow          | Ordinary commands (build, test, inspect)                                                                                                           |
 | `shell_deploy`        | Ask me first   | terraform/tofu apply and destroy, pulumi up, kubectl apply and delete, helm install and upgrade, cloud deploy CLIs, package publish, `gh pr merge` |
-| `shell_destructive`   | Ask me first   | See the list below                                                                                                                                 |
+| `shell_destructive`   | Ask me first   | See the list below, and [sensitive files](#sensitive-files) (`.env`, keys, cloud credentials)                                                      |
 | `git_push`            | Ask me first   | Pushing commits                                                                                                                                    |
 | `shell_session`       | Ask me first   | Starting an interactive shell, interpreter, database client or remote session (`bash`, `python3`, `ssh host`, `docker exec -it`, `psql app`)       |
 | `file_write`          | Allow          | Write and edit (the approver sees the path, size and a SHA-256 of the content; the content itself is not sent)                                     |
-| `web_fetch`           | Allow          | Fetching a URL                                                                                                                                     |
+| `web_fetch`           | Allow          | Fetching a URL, and web searches (`WebSearch`; the approver sees the query)                                                                        |
 | `mcp.<server>.<tool>` | your choice    | Any MCP tool, e.g. `mcp.github.create_pull_request`                                                                                                |
 
 `shell_destructive` covers:
@@ -50,7 +50,29 @@ Shell commands are routed by consequence. That routing is what lets you put depl
 - Changes to the agent's own MCP servers, hooks or permissions: `claude mcp add`, `add-json`, `add-from-claude-desktop`, `remove` and the other non-read `mcp`, `plugin` and `config` subcommands of `claude`, `codex` and `gemini`; a nested `claude` or `codex` given `--mcp-config`, `--settings`, `--dangerously-skip-permissions` or a wider `--permission-mode`; and writes to `.mcp.json`, `mcp.json`, `~/.claude.json`, `settings.local.json`, `.claude/settings*.json`, `.claude/hooks`, `agents`, `commands`, `skills` or `plugins`, `.codex/`, `.cursor/`, `.gemini/`, `.dsh/` or `guardian-hooks.json`. That includes writes by redirection (`> .mcp.json`), by commands such as `cp`, `mv`, `tee`, `sed -i` and `ln`, and by the file tools (`Write`, `Edit`, `MultiEdit`, `write`, `edit`, `str_replace_editor`, `apply_patch`), which then carry `touches: "agent-config"`. Reading those files stays `shell`.
 - Commands the hook cannot parse (see above).
 
-Read-only tools (Read, Grep, Glob, LS, WebSearch) are not routed through Guardian.
+## Sensitive files
+
+Read, NotebookRead, Grep, Glob and LS go through the hook too. A read of an ordinary file gets no opinion: nothing is sent to Guardian and Claude Code's own permissions apply. A read of a sensitive file goes to `shell_destructive` (Ask tier) with `touches: "sensitive-file"`, the path and the pattern it matched, so the needs-approval connection decides and Guardian records the request. The same holds for a shell command that names a sensitive file (`cat .env`, `cp ~/.ssh/id_rsa /tmp`, `base64 .env`, `curl -F f=@.env …`, `python3 -c "open('.env')"`), under Claude Code, Codex and DeepSeek Harness.
+
+The patterns are checked on your machine, deterministically. The defaults:
+
+`.env*` (except `.env.example`, `.env.sample` and `.env.template`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `.aws/sso/cache/**`, `.config/gcloud/**`, `.azure/**`, `.kube/config`, `.docker/config.json`, `.config/gh/hosts.yml`, `*secret*`, `.npmrc`, `.pypirc`, `.netrc`, `.pgpass`, `.git-credentials`, `proc/*/environ`.
+
+- A pattern without `/` matches a file or folder name; a pattern with `/` matches the end of the path. `*` and `?` match within a name, `[abc]` one character, `**` any number of folders. Case is ignored.
+- A path is checked as written, as an absolute path (`./`, `..` and `~` resolved against the working directory) and, when it exists, with symlinks followed. A path that exists but cannot be resolved counts as sensitive.
+- In a shell command the hook checks every word after quotes and escapes are removed, brace and glob expansion as the shell would do it (`.en?`, `.{e,x}nv`, `*` with `dotglob`), code given to `sh -c`, interpreters and here-documents, and redirections (`< .env`).
+- For Grep and Glob, the path and the file filter (`glob`, `pattern`) are checked as written.
+
+You set:
+
+- `GUARDIAN_HOOK_SENSITIVE_PATHS`: more patterns, comma separated, checked after the defaults. `!pattern` exempts what it matches, and the last matching pattern wins: `*.tfstate,!.env.test` adds Terraform state and exempts `.env.test`. Start the list with `!*` to drop the defaults.
+- `GUARDIAN_HOOK_SENSITIVE_MODE`: `ask` (default) sends sensitive reads to Guardian as above; `deny` makes the hook refuse them itself, without sending anything to Guardian.
+
+Fail closed: invalid settings, a read without a path, or an error while checking a call deny the call. An exemption covers the name it matches, not the file a symlink points to.
+
+What this does not see: a search over a folder (Grep on the repository, `grep -r`, `rg`) can read a sensitive file inside it; the hook checks the path and filter named in the call, not every file the search opens. A path built at run time (`cat "$(…)"`, `cat $F`) and files read by scripts are not seen either. WebSearch is `web_fetch`: the query leaves your machine, so it is governed like a fetched URL.
+
+**Speed.** An ordinary read is decided locally (checking the patterns takes well under a millisecond), but every read now starts the hook process. On our test machine that took about 0.15 s with the package installed globally and about 0.75 s through `npx -y` with a warm cache. To keep reads fast, install it (`npm i -g @odingard/guardian-hook`) and use `"command": "guardian-hook"`.
 
 ## Setup
 
@@ -80,7 +102,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read|NotebookRead|Grep|Glob|LS|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -94,6 +116,8 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
   }
 }
 ```
+
+Older setups use `"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"`, which does not send reads or web searches to the hook; replace it with the matcher above.
 
 `"onFailure": "block"` (Claude Code v2.1.295 or later) makes Claude Code block the call when the hook cannot start at all (no Node, or npx cannot fetch the package) or times out; without it Claude Code runs the call in those cases. A hook that starts but fails to load or crashes blocks the call either way.
 
@@ -167,6 +191,8 @@ Set the same `GUARDIAN_*` variables as for Claude Code in the environment Codex 
 | `apply_patch` (every file edit Codex makes)    | `file_write`                                                              | The target paths and operations from the patch headers (`add`, `update`, `delete`, `move`), its size and a SHA-256 digest. Never the patch text. |
 | `mcp__<server>__<tool>`                        | `mcp.<server>.<tool>`                                                     | The MCP arguments (a digest above 2,000 characters).                                                                                             |
 
+Codex reads files through `Bash`, so a command that names a [sensitive file](#sensitive-files) goes to `shell_destructive`.
+
 How a decision reaches Codex: an allow prints nothing and exits 0, which Codex treats as success (Codex documents `permissionDecision: "allow"` only together with `updatedInput`). A deny prints the deny JSON, writes the reason to stderr and exits 2; Codex blocks on either. The hook never returns `"ask"`, which Codex does not support and treats as a failed hook that lets the call run: on ASK the hook waits for the approval itself (up to 5 minutes) and then answers allow or deny.
 
 ### Hosted Codex agents (`codex exec`)
@@ -212,7 +238,7 @@ The bridge's hooks file, e.g. `/data/.dsh/guardian-hooks.json`:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch)$|^mcp__.*",
+        "matcher": "^(bash|pwsh|terminal_send|write|edit|apply_patch|str_replace_editor|web_fetch|web_search|read|read_image|grep|glob|Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read|NotebookRead|Grep|Glob|LS)$|^mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -239,21 +265,23 @@ Mount the bridge in `$DSH_HOME/cordis.patch.yml` (for example `/data/.dsh/cordis
 
 The bridge reads its config once at startup, so restart the agent after changing it. Approvers see the agent as "DeepSeek Harness".
 
-**The matcher decides whether the hook runs at all.** The bridge matches it against dsh's own tool name, passed unchanged (checked in the bridge source, `hooks-claude-code/src/index.ts`). A tool the matcher does not name never reaches the hook and is not governed. The matcher also lists Claude Code's names (`Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `WebFetch`) in case a bridge version renames tools; it does not use a catch-all, because a tool the hook does not know would only get "no opinion".
+**The matcher decides whether the hook runs at all.** The bridge matches it against dsh's own tool name, passed unchanged (checked in the bridge source, `hooks-claude-code/src/index.ts`). A tool the matcher does not name never reaches the hook and is not governed. The matcher also lists Claude Code's names (`Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `WebFetch`, `WebSearch` and the read tools) in case a bridge version renames tools; it does not use a catch-all, because a tool the hook does not know would get "no opinion" anyway.
 
-| dsh tool                                                | Guardian tool                                            | What Guardian sees                                       |
-| ------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `bash`, `pwsh`, `terminal_send` (text typed into a PTY) | `shell`, `shell_deploy`, `shell_destructive`, `git_push` | The command or typed text.                               |
-| `write`, `edit`, `str_replace_editor` (all but `view`)  | `file_write`                                             | The path, size and a SHA-256 digest; never the contents. |
-| `apply_patch` (on by default in `dsh-base`)             | `file_write`                                             | Target paths and operations, size and digest.            |
-| `web_fetch`                                             | `web_fetch`                                              | The URL.                                                 |
-| `mcp__<server>__<tool>`                                 | `mcp.<server>.<tool>`                                    | The MCP arguments.                                       |
+| dsh tool                                                              | Guardian tool                                                                      | What Guardian sees                                       |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `bash`, `pwsh`, `terminal_send` (text typed into a PTY)               | `shell`, `shell_deploy`, `shell_destructive`, `git_push`                           | The command or typed text.                               |
+| `write`, `edit`, `str_replace_editor` (all but `view`)                | `file_write`                                                                       | The path, size and a SHA-256 digest; never the contents. |
+| `apply_patch` (on by default in `dsh-base`)                           | `file_write`                                                                       | Target paths and operations, size and digest.            |
+| `web_fetch`                                                           | `web_fetch`                                                                        | The URL.                                                 |
+| `web_search`                                                          | `web_fetch`                                                                        | The queries.                                             |
+| `read`, `read_image`, `grep`, `glob`, and `str_replace_editor` `view` | `shell_destructive` for a [sensitive file](#sensitive-files); no opinion otherwise | The path, the filter and the pattern matched.            |
+| `mcp__<server>__<tool>`                                               | `mcp.<server>.<tool>`                                                              | The MCP arguments.                                       |
 
 A deny is the Claude Code deny JSON, plus the reason on stderr and exit 2, both of which the bridge treats as a block. An allow does not pre-approve the call in dsh: dsh's own approval policy still applies after Guardian allows it. The hook never returns `"ask"`; it waits for the approval itself, so it works in one-shot headless chats too.
 
 ### Not governed under DeepSeek Harness
 
-- **Every dsh tool not in the table**, including ones with real effects: `run_code` itself (its tool sub-calls go through the same pre-execute pipeline, per dsh's docs; check with a denied sub-call before you rely on it), `subagent`, `workflow`, `ralph`; `plugin_manager` and `load_workspace_dependencies` (they install packages); the experimental browser tools `stagehand_act` and `stagehand_navigate` (they can click, submit forms and navigate); `send_message`, `spawn_teammate`, `team_task_*`; `job_*` (including `job_kill`); `schedule_*`; `skill`, `lsp`, `propose_action`, `terminal_open`, `web_search`; and read-only tools. Disable the ones you do not want with your dsh profile.
+- **Every dsh tool not in the table**, including ones with real effects: `run_code` itself (its tool sub-calls go through the same pre-execute pipeline, per dsh's docs; check with a denied sub-call before you rely on it), `subagent`, `workflow`, `ralph`; `plugin_manager` and `load_workspace_dependencies` (they install packages); the experimental browser tools `stagehand_act` and `stagehand_navigate` (they can click, submit forms and navigate); `send_message`, `spawn_teammate`, `team_task_*`; `job_*` (including `job_kill`); `schedule_*`; `skill`, `lsp`, `propose_action` and `terminal_open`. Disable the ones you do not want with your dsh profile.
 - **A missing or unparseable hooks file governs nothing.** The bridge logs "could not load hook config … no hooks registered" and runs every call. Check with a deny after every config change.
 - `terminal_send` is classified per message, so a command split across several sends (e.g. `terraform ap` then `ply`) is seen in pieces, and text sent to a program already running in the PTY (a REPL, `ssh`) is classified as if it were a shell command. Prefer the plain `bash` tool and turn the terminal tools off where that matters.
 - **The bridge lets the call run if the hook fails to run or crashes.** Only a deny or exit 2 blocks. As with Codex, the hook catches its own crashes and load failures, exits 2 on deny, and denies at its own 540-second deadline; the `|| … exit 2` covers a hook that cannot start. A hook killed from outside still fails open.

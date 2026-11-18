@@ -30,6 +30,11 @@
  *                              subcommand
  *   GUARDIAN_HOOK_DEADLINE_MS  the hook's own hard deadline (default and
  *                              maximum 540000); past it the hook denies
+ *   GUARDIAN_HOOK_SENSITIVE_PATHS  extra sensitive-file patterns, comma
+ *                              separated, after the defaults; `!pattern`
+ *                              exempts (see sensitive.ts)
+ *   GUARDIAN_HOOK_SENSITIVE_MODE  ask (default: sensitive files go to the
+ *                              Ask tier) | deny (the hook refuses them)
  *   GUARDIAN_HOOK_APPROVAL_TIMEOUT_MS  how long ASK waits (default and
  *                              maximum 300000: the hook asks Guardian to keep
  *                              the request open that long, the gateway's
@@ -44,6 +49,7 @@ import { fileURLToPath } from "node:url";
 
 import { classifyCommand } from "./classify.js";
 import { runFailClosed } from "./fail-closed.js";
+import { sensitiveConfigFromEnv } from "./sensitive.js";
 import {
   DIALECTS,
   runHookAs,
@@ -126,7 +132,8 @@ export async function main(argv: readonly string[]): Promise<void> {
     return;
   }
   if (command === "classify") {
-    process.stdout.write(`${classifyCommand(rest.join(" "))}\n`);
+    const sensitive = sensitiveConfigFromEnv(process.env);
+    process.stdout.write(`${classifyCommand(rest.join(" "), { sensitive })}\n`);
     return;
   }
   if (command === "--help" || command === "-h") {

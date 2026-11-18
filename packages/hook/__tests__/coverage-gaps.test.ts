@@ -81,7 +81,7 @@ describe("interactive sessions go to the Ask tier (Codex write_stdin gap)", () =
     "sudo -s",
     "sudo -u deploy bash",
     "ssh prod-1",
-    "ssh -p 2222 -i key.pem ops@prod-1",
+    "ssh -p 2222 -i deploy_ident ops@prod-1",
     "ssh -t prod-1 bash",
     "docker exec -it api sh",
     "docker run -it alpine",

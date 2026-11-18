@@ -16,6 +16,14 @@ import {
   type FileDigest,
 } from "@odingard/guardian-sdk";
 
+import {
+  checkPath,
+  DEFAULT_SENSITIVE,
+  sensitiveInCommand,
+  sensitiveInFilter,
+  type SensitiveConfig,
+  type SensitiveHit,
+} from "./sensitive.js";
 import { parseShell, type Parsed, type Word } from "./shell.js";
 
 /** Tool names the hook proposes. Register these once in the console. */
@@ -35,7 +43,7 @@ export const HOOK_TOOLS = [
     name: "shell_destructive",
     suggestedMode: "ask",
     description:
-      "Destructive commands: rm -rf (also through xargs or find -exec), git reset --hard, git clean, force pushes and remote branch deletes, dropping databases, disk formatting, piping a download into a shell. Also changes to the agent's own MCP servers, hooks or permissions (claude mcp add, writes to .mcp.json or .claude/settings.json), and commands the hook cannot parse.",
+      "Destructive commands: rm -rf (also through xargs or find -exec), git reset --hard, git clean, force pushes and remote branch deletes, dropping databases, disk formatting, piping a download into a shell. Also changes to the agent's own MCP servers, hooks or permissions (claude mcp add, writes to .mcp.json or .claude/settings.json), reads of sensitive files (.env, keys, cloud credentials), and commands the hook cannot parse.",
   },
   {
     name: "git_push",
@@ -56,7 +64,7 @@ export const HOOK_TOOLS = [
   {
     name: "web_fetch",
     suggestedMode: "allow",
-    description: "Fetching a URL.",
+    description: "Fetching a URL or searching the web.",
   },
 ] as const;
 
@@ -76,6 +84,14 @@ export type GovernedCall = Readonly<{
    * against it again just before the approved call is released.
    */
   contentPin?: Readonly<{ path: string; pin: FileDigest }>;
+  /** The sensitive files the call names (routed to the Ask tier). */
+  sensitive?: readonly SensitiveHit[];
+}>;
+
+/** How a call is classified: the sensitive-file patterns and where it runs. */
+export type ClassifyOptions = Readonly<{
+  sensitive?: SensitiveConfig;
+  cwd?: string;
 }>;
 
 const MAX_COMMAND = 2_000;
@@ -966,7 +982,23 @@ function rankAgentCli(base: string, args: readonly string[]): number {
   return ASK;
 }
 
-export function classifyCommand(command: string): HookToolName {
+/**
+ * The Guardian tool a shell command is routed to. With `options.sensitive`
+ * (as the hook passes it), a command that names a sensitive file (see
+ * sensitive.ts) goes to the Ask tier.
+ */
+export function classifyCommand(
+  command: string,
+  options: ClassifyOptions = {},
+): HookToolName {
+  const hits = options.sensitive
+    ? sensitiveInCommand(command, options.sensitive, options.cwd)
+    : [];
+  return routeCommand(command, hits.length > 0);
+}
+
+function routeCommand(command: string, sensitive: boolean): HookToolName {
+  if (sensitive) return "shell_destructive";
   let rank = 0;
   if (DESTRUCTIVE.some((re) => re.test(command))) rank = ASK;
   else if (DEPLOY.some((re) => re.test(command))) rank = RANK.shell_deploy!;
@@ -1011,10 +1043,12 @@ function str(value: unknown): string {
 /**
  * Agent-neutral view of one tool call. `tool` is the name the agent's hook
  * reports: Claude Code's (Bash, Write, Edit, MultiEdit, NotebookEdit,
- * WebFetch, mcp__server__tool), Codex's (Bash, apply_patch, mcp__…) or
- * DeepSeek Harness's (bash, pwsh, write, edit, apply_patch,
- * str_replace_editor, terminal_send, web_fetch, mcp__…). All are recognised whichever agent
- * runs the hook; a name none of them uses is left to the agent.
+ * WebFetch, WebSearch, Read, NotebookRead, Grep, Glob, LS,
+ * mcp__server__tool), Codex's (Bash, apply_patch, mcp__…) or DeepSeek
+ * Harness's (bash, pwsh, write, edit, apply_patch, str_replace_editor,
+ * terminal_send, web_fetch, web_search, read, read_image, grep, glob,
+ * mcp__…). All are recognised whichever agent runs the hook; a name none
+ * of them uses is left to the agent.
  */
 export type ToolCall = Readonly<{
   tool: string;
@@ -1179,24 +1213,127 @@ function fileWrite(
   };
 }
 
-/** `null` = not governed (read-only tools are left to the agent). */
-export function governedCall(call: ToolCall): GovernedCall | null {
+const SENSITIVE_NOTE = "(sensitive file)";
+
+function shownHits(hits: readonly SensitiveHit[]): string[] {
+  return hits.map((h) => `${bounded(h.path, 200)} matches ${h.pattern}`);
+}
+
+/** Read-type tools: the field holding the file or folder each one reads. */
+const READ_TOOLS: Readonly<
+  Record<
+    string,
+    Readonly<{
+      path: readonly string[];
+      /** The path may be left out: the tool then reads the working directory. */
+      optional?: boolean;
+      filter?: string;
+    }>
+  >
+> = {
+  Read: { path: ["file_path"] }, // Claude Code
+  NotebookRead: { path: ["notebook_path"] },
+  Grep: { path: ["path"], optional: true, filter: "glob" },
+  Glob: { path: ["path"], optional: true, filter: "pattern" },
+  LS: { path: ["path"], optional: true },
+  read: { path: ["file_path"] }, // DeepSeek Harness
+  read_image: { path: ["file_path"] },
+  grep: { path: ["path"], optional: true, filter: "include" },
+  glob: { path: ["path"], optional: true, filter: "pattern" },
+};
+
+/** A read-type call could not be classified; the hook denies it. */
+export class ReadClassifyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReadClassifyError";
+  }
+}
+
+/**
+ * A read of an ordinary path is not governed (no opinion, nothing sent).
+ * A read of a sensitive path goes to the Ask tier with the path, so the
+ * owner's needs-approval connection decides and Guardian records it.
+ */
+function readCall(
+  tool: string,
+  path: unknown,
+  optional: boolean,
+  filter: { name: string; value: unknown } | undefined,
+  call: ToolCall,
+  options: ClassifyOptions,
+): GovernedCall | null {
+  const config = options.sensitive ?? DEFAULT_SENSITIVE;
+  const cwd = call.cwd ?? options.cwd;
+  if (path !== undefined && typeof path !== "string") {
+    throw new ReadClassifyError(`${tool}: the path is not a string`);
+  }
+  if (!optional && (typeof path !== "string" || path === "")) {
+    throw new ReadClassifyError(`${tool}: no path`);
+  }
+  if (
+    filter &&
+    filter.value !== undefined &&
+    typeof filter.value !== "string"
+  ) {
+    throw new ReadClassifyError(`${tool}: ${filter.name} is not a string`);
+  }
+  const target = typeof path === "string" && path !== "" ? path : (cwd ?? ".");
+  const hits: SensitiveHit[] = [];
+  const onPath = checkPath(target, config, cwd ? { cwd } : {});
+  if (onPath) hits.push(onPath);
+  if (filter && typeof filter.value === "string" && filter.value !== "") {
+    const onFilter = sensitiveInFilter(filter.value, config);
+    if (onFilter) hits.push(onFilter);
+  }
+  if (hits.length === 0) return null;
+  return {
+    toolName: "shell_destructive",
+    arguments: {
+      operation: tool,
+      path: bounded(target, 500),
+      ...(filter && typeof filter.value === "string" && filter.value !== ""
+        ? { [filter.name]: bounded(filter.value, 500) }
+        : {}),
+      touches: "sensitive-file",
+      sensitive: shownHits(hits),
+      ...(cwd ? { cwd } : {}),
+    },
+    summary: `${tool} ${bounded(hits[0]!.path, 160)} ${SENSITIVE_NOTE}`,
+    sensitive: hits,
+  };
+}
+
+/**
+ * `null` = not governed: no opinion, the agent's own permissions apply.
+ * Throws when a read-type call cannot be classified (the hook denies it).
+ */
+export function governedCall(
+  call: ToolCall,
+  options: ClassifyOptions = {},
+): GovernedCall | null {
   const { tool, input } = call;
   const cwd = call.cwd ? { cwd: call.cwd } : {};
+  const config = options.sensitive ?? DEFAULT_SENSITIVE;
   const shellField = Object.hasOwn(SHELL_TOOLS, tool)
     ? SHELL_TOOLS[tool]
     : undefined;
   if (shellField) {
     const command = commandText(input[shellField]);
-    const toolName = classifyCommand(command);
+    const hits = sensitiveInCommand(command, config, call.cwd ?? options.cwd);
+    const toolName = routeCommand(command, hits.length > 0);
     return {
       toolName,
       arguments: {
         command: bounded(command),
         ...(tool === "Bash" || tool === "shell" ? {} : { agentTool: tool }),
+        ...(hits.length > 0
+          ? { touches: "sensitive-file", sensitive: shownHits(hits) }
+          : {}),
         ...cwd,
       },
-      summary: `Run: ${bounded(command, 160)}`,
+      summary: `Run: ${bounded(command, 160)}${hits.length > 0 ? ` ${SENSITIVE_NOTE}` : ""}`,
+      ...(hits.length > 0 ? { sensitive: hits } : {}),
     };
   }
   if (FILE_TOOLS.has(tool)) {
@@ -1217,7 +1354,16 @@ export function governedCall(call: ToolCall): GovernedCall | null {
   if (tool === "str_replace_editor") {
     // DeepSeek Harness: {command: view|create|str_replace|insert, path, …}.
     // Only `view` is read-only; anything else, known or not, is governed.
-    if (input.command === "view") return null;
+    if (input.command === "view") {
+      return readCall(
+        "str_replace_editor.view",
+        input.path,
+        false,
+        undefined,
+        call,
+        options,
+      );
+    }
     const sub = str(input.command) || "unknown";
     const content = str(input.file_text) || str(input.new_str);
     return fileWrite(
@@ -1260,6 +1406,53 @@ export function governedCall(call: ToolCall): GovernedCall | null {
             ? `Patch ${bounded(paths[0]!, 160)}`
             : `Patch ${paths.length} files: ${bounded(paths.join(", "), 160)}`) +
         (config ? ` ${AGENT_CONFIG_NOTE}` : ""),
+    };
+  }
+  const read = Object.hasOwn(READ_TOOLS, tool) ? READ_TOOLS[tool] : undefined;
+  if (read) {
+    const path = read.path.map((k) => input[k]).find((v) => v !== undefined);
+    return readCall(
+      tool,
+      path,
+      read.optional ?? false,
+      read.filter
+        ? { name: read.filter, value: input[read.filter] }
+        : undefined,
+      call,
+      options,
+    );
+  }
+  if (tool === "WebSearch") {
+    // Claude Code: the query leaves the machine, as a fetched URL does.
+    const query = str(input.query);
+    const domains = (v: unknown) =>
+      Array.isArray(v)
+        ? v.filter((d): d is string => typeof d === "string").slice(0, 20)
+        : undefined;
+    const allowed = domains(input.allowed_domains);
+    const blocked = domains(input.blocked_domains);
+    return {
+      toolName: "web_fetch",
+      arguments: {
+        query: bounded(query, 500),
+        ...(allowed ? { allowedDomains: allowed } : {}),
+        ...(blocked ? { blockedDomains: blocked } : {}),
+      },
+      summary: `Search the web: ${bounded(query, 160)}`,
+    };
+  }
+  if (tool === "web_search") {
+    // DeepSeek Harness: {queries: string[]}.
+    const queries = Array.isArray(input.queries)
+      ? input.queries
+          .filter((q): q is string => typeof q === "string")
+          .slice(0, 10)
+          .map((q) => bounded(q, 500))
+      : [];
+    return {
+      toolName: "web_fetch",
+      arguments: { queries },
+      summary: `Search the web: ${bounded(queries.join(" | "), 160)}`,
     };
   }
   if (tool === "WebFetch" || tool === "web_fetch") {
