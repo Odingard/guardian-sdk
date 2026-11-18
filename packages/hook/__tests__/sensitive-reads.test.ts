@@ -94,6 +94,14 @@ beforeAll(() => {
   mkdirSync(join(dir, "vault"));
   symlinkSync(join(dir, "vault", "b"), join(dir, "vault", "a"));
   symlinkSync(join(dir, "vault", "a"), join(dir, "vault", "b"));
+  mkdirSync(join(dir, "deep", "keys"), { recursive: true });
+  writeFileSync(join(dir, "deep", "keys", "server.pem"), "x\n");
+  mkdirSync(join(dir, "elsewhere", "inner"), { recursive: true });
+  writeFileSync(join(dir, "elsewhere", ".env"), "TOKEN=abc\n");
+  // deep/linkdir -> elsewhere/inner, so deep/linkdir/.. is elsewhere/.
+  symlinkSync(join(dir, "elsewhere", "inner"), join(dir, "deep", "linkdir"));
+  // elsewhere/alias -> elsewhere/.env: a name that is not sensitive as written.
+  symlinkSync(join(dir, "elsewhere", ".env"), join(dir, "elsewhere", "alias"));
   mkdirSync(join(dir, "plain"));
   writeFileSync(join(dir, "plain", ".env"), "TOKEN=abc\n");
   writeFileSync(join(dir, "plain", "a.txt"), "a\n");
@@ -326,6 +334,32 @@ describe("shell commands that read a sensitive file", () => {
     expect(
       classifyCommand("cat .env", { cwd: dir, sensitive: DEFAULT_SENSITIVE }),
     ).toBe("shell_destructive");
+  });
+
+  it("search filters, globstar, many paths and symlink/.. tricks", () => {
+    // Run from a folder with no sensitive file in it.
+    const src = join(dir, "src");
+    for (const command of [
+      "find ~ -name id_rsa -exec cat {} \\;",
+      "find . -name .env -exec cat {} +",
+      "grep -r --include=.env TOKEN .",
+      "rg -g .npmrc token /",
+      "fd .git-credentials ~",
+    ]) {
+      ask(command, src);
+    }
+    // `**` reaches files, not just folders.
+    ask("shopt -s globstar dotglob; cat **", dir);
+    ask("cat **/*.pem", join(dir, "deep"));
+    // A symlink followed by `..` is resolved as the system opens it.
+    ask("cat linkdir/../alias", join(dir, "deep"));
+    expect(read(`${dir}/deep/linkdir/../alias`)?.toolName).toBe(
+      "shell_destructive",
+    );
+    // Past the bound on paths checked, the command goes to the Ask tier.
+    ask(`cat ${Array.from({ length: 2_100 }, (_, i) => `f${i}`).join(" ")}`);
+    // A huge brace range does not hang the hook; it counts as unresolved.
+    ask("echo {9007199254740992..9007199254740994}");
   });
 
   it("Codex and DeepSeek Harness shell tools get the same treatment", () => {

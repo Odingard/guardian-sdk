@@ -285,9 +285,14 @@ export function checkPath(
   const absolute = isAbsolute(expanded)
     ? normalize(expanded)
     : resolve(options.cwd ?? process.cwd(), expanded);
+  // As the operating system reads it: a symlink before `..` is followed
+  // first (`normalize` would drop it).
+  const asOpened = isAbsolute(expanded)
+    ? expanded
+    : `${options.cwd ?? process.cwd()}/${expanded}`;
   if (options.onlyIfExists) {
     try {
-      lstatSync(absolute);
+      lstatSync(asOpened);
     } catch (err) {
       if (isMissing(err)) return undefined;
       return { path, pattern: UNRESOLVED };
@@ -298,7 +303,7 @@ export function checkPath(
   if (resolved) return { path, pattern: resolved };
   let real: string;
   try {
-    real = realpathSync(absolute);
+    real = realpathSync.native(asOpened);
   } catch (err) {
     if (isMissing(err)) return undefined;
     return { path, pattern: UNRESOLVED };
@@ -370,7 +375,13 @@ function sequence(a: string, b: string): string[] {
   const numeric = /\d/.test(a) && /\d/.test(b);
   const from = numeric ? Number(a) : a.charCodeAt(0);
   const to = numeric ? Number(b) : b.charCodeAt(0);
-  if (Math.abs(to - from) >= MAX_BRACES) throw new BraceOverflow();
+  if (
+    !Number.isSafeInteger(from) ||
+    !Number.isSafeInteger(to) ||
+    Math.abs(to - from) >= MAX_BRACES
+  ) {
+    throw new BraceOverflow();
+  }
   const step = from <= to ? 1 : -1;
   const out: string[] = [];
   for (let v = from; v !== to + step; v += step) {
@@ -419,15 +430,16 @@ function expandGlob(word: string, cwd: string, dots: boolean): string[] {
     const part = parts[i]!;
     if (part === "") continue;
     if (part === "**") {
-      // Every folder below, and the folder itself.
+      // The folder itself and everything below it, files included (a
+      // later part applied to a file matches nothing).
       const all: string[] = [];
       const walk = (base: string, depth: number) => {
         all.push(base);
         if (depth > 16) throw new GlobOverflow();
         for (const e of list(base)) {
-          if (e.isDirectory() && (dots || !e.name.startsWith("."))) {
-            walk(join(base, e.name), depth + 1);
-          }
+          if (!dots && e.name.startsWith(".")) continue;
+          if (e.isDirectory()) walk(join(base, e.name), depth + 1);
+          else all.push(join(base, e.name));
         }
       };
       for (const base of bases) walk(base, 0);
@@ -461,7 +473,7 @@ function expandGlob(word: string, cwd: string, dots: boolean): string[] {
 // Shell commands.
 
 const MAX_HITS = 10;
-const MAX_RESOLVED = 256;
+const MAX_RESOLVED = 2_000;
 const MAX_NESTED_DEPTH = 4;
 /** Characters that end a path inside a word (`--file=.env`, `open('.env')`, `@.env`). */
 const TOKEN_SPLIT = /[\s'"`=:,;()<>{}|&@]+/;
@@ -473,6 +485,12 @@ const DOTGLOB = /dotglob|globdots|glob_dots|globignore|\(D/i;
  */
 const ELSEWHERE =
   /(?:^|[\s;&|(`])(?:cd|pushd|chdir|ssh|scp|sftp|rsync|docker|podman|nerdctl|kubectl|oc)(?=$|[\s;&|)`])|(?:^|\s)(?:-C|--chdir|--directory|--cwd|--git-dir|--work-tree)(?=$|[\s=])/;
+/**
+ * Search and archive tools take a bare name as a filter for files in other
+ * folders (`find ~ -name id_rsa`, `grep -r --include=.env`): it counts too.
+ */
+const SEARCHES =
+  /(?:^|[\s;&|(`/])(?:find|fd|fdfind|locate|mlocate|plocate|grep|egrep|fgrep|zgrep|rg|ag|ack|tar|zip|7z|rsync|cpio)(?=$|[\s;&|)`])/;
 const MAX_BARE_CHECKS = 512;
 
 /**
@@ -492,7 +510,7 @@ export function sensitiveInCommand(
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
-  const elsewhere = ELSEWHERE.test(command);
+  const elsewhere = ELSEWHERE.test(command) || SEARCHES.test(command);
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
@@ -560,12 +578,15 @@ export function sensitiveInCommand(
       path === "" ||
       path.startsWith("-") ||
       path.length > 4_096 ||
-      /[\n\0]/.test(path) ||
-      resolved >= MAX_RESOLVED
+      /[\n\0]/.test(path)
     ) {
       return;
     }
-    resolved++;
+    // Past the bound the rest cannot be checked: fail closed.
+    if (++resolved > MAX_RESOLVED) {
+      add({ path: "(more paths than the hook checks)", pattern: UNRESOLVED });
+      return;
+    }
     add(checkPath(path, config, { cwd, onlyIfExists: true }));
   };
   const walk = (parsed: Parsed, depth: number) => {
