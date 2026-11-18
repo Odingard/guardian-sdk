@@ -418,6 +418,13 @@ describe("the command entry", () => {
     );
   });
 
+  it("the workspace lockfile links the same entry", () => {
+    const lock = JSON.parse(
+      readFileSync(join(pkgDir, "../../package-lock.json"), "utf8"),
+    ) as { packages: Record<string, { bin?: Record<string, string> }> };
+    expect(lock.packages["packages/hook"]?.bin).toEqual(pkg.bin);
+  });
+
   it("has no static imports, so nothing can fail before its handlers are set", () => {
     const built = readFileSync(join(dirs.real!, "guardian-hook.mjs"), "utf8");
     expect(built).not.toMatch(/^\s*import\s[^(]/m);
