@@ -22,11 +22,13 @@ function payload(result: { content: { text: string }[] }): any {
 }
 
 describe("guardian-mcp dispatch", () => {
-  it("lists exactly the three governance tools", () => {
+  it("lists exactly the five governance tools", () => {
     expect(TOOLS.map((t) => t.name)).toEqual([
       "guardian_invoke_tool",
       "guardian_claim",
       "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
     ]);
   });
 
@@ -71,6 +73,18 @@ describe("guardian-mcp dispatch", () => {
       guardian_record: {
         readOnlyHint: true,
         destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_pending: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_cancel: {
+        readOnlyHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: false,
       },

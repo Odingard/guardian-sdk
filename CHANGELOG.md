@@ -1,5 +1,17 @@
 # Changelog
 
+## guardian-mcp 0.6.0, unreleased
+
+### Added: list and withdraw held requests
+
+- **`@odingard/guardian-mcp`**: two tools, in `guardian-mcp` and in `guardian-mcp proxy`.
+  - `guardian_pending` ("List my held requests") lists this agent's own requests that Guardian holds for a person's approval (ASK), from newest to oldest: `requestId`, `action`, `toolName`, `purpose`, `createdAtEpochMs` and `expiresAtEpochMs`, paged with `limit` (1 to 100, default 20) and `before`. It never shows other agents' requests or anything about the person or the account. In the proxy, each entry also says whether this proxy holds the call (`heldByThisProxy`). Annotations: `readOnlyHint`, `idempotentHint`.
+  - `guardian_cancel` ("Withdraw a held request") withdraws one of this agent's own held requests: the person no longer sees it, and it can never be approved, claimed or run. It takes authority away and runs nothing. Calling it again gives the same `withdrawn` answer. A request the person already decided, or one that expired, answers `ALREADY_DECIDED` with its state, and nothing changes (an approved request can still be claimed); an unknown request, or another agent's, answers `NOT_FOUND`. If the person approves at the same moment, exactly one of the two takes effect. In the proxy it also drops the held call, so a later `guardian_claim` forwards nothing. Annotations: `destructiveHint` (it cannot be undone), `idempotentHint`.
+  - An upstream tool named `guardian_pending` or `guardian_cancel` is hidden by the proxy, like the other governance tool names.
+- **`@odingard/guardian-sdk`**: `client.pending({ limit?, before? })` and `client.withdraw(requestId)`, with the types `GuardianHeldRequest`, `GuardianPendingResult` and `GuardianWithdrawResult`. Both are optional members of the `GuardianClient` interface, so a custom client written for an earlier version still type-checks. A listing with an entry the client cannot read, or a withdrawal answer that is not a clear `withdrawn`, is reported as `MALFORMED_RESPONSE`.
+- **Python**: `GuardianClient.pending(limit=None, before=None)` and `GuardianClient.withdraw(request_id)`, and the same on `AsyncGuardianClient`, with `HeldRequest`, `PendingResult` and `WithdrawResult`.
+- guardian-mcp 0.6.0 needs the `@odingard/guardian-sdk` release that adds these methods; with an earlier SDK both tools answer `NOT_SUPPORTED` and change nothing.
+
 ## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions

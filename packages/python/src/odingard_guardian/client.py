@@ -21,6 +21,9 @@ __all__ = [
     "ExecuteResult",
     "ReceiptsResult",
     "PortableReceiptResult",
+    "HeldRequest",
+    "PendingResult",
+    "WithdrawResult",
     "GuardianClient",
     "AsyncGuardianClient",
     "build_proposal",
@@ -116,6 +119,53 @@ class ReceiptsResult:
 class PortableReceiptResult:
     ok: bool
     receipt: Optional[Dict[str, Any]] = None
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HeldRequest:
+    """One of the agent's own requests waiting for a person (ASK)."""
+
+    request_id: str
+    action: str
+    #: The tool named in the request (tool.invoke, mcp.enable); else None.
+    tool_name: Optional[str]
+    #: The purpose the agent gave with the request.
+    purpose: str
+    created_at_epoch_ms: int
+    expires_at_epoch_ms: int
+
+
+@dataclass(frozen=True)
+class PendingResult:
+    """Outcome of ``pending``: the agent's held requests, newest to oldest.
+
+    ``next`` is passed as ``before`` for the next page; None on the last
+    page. An answer with an entry this client cannot read is ``ok=False``
+    with ``reason_code="MALFORMED_RESPONSE"``.
+    """
+
+    ok: bool
+    requests: list = field(default_factory=list)
+    next: Optional[str] = None
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class WithdrawResult:
+    """Outcome of ``withdraw``.
+
+    ``ok=True`` means the request is withdrawn (``state="withdrawn"``); a
+    repeat answers the same. Otherwise ``reason_code`` says why nothing
+    changed: ``NOT_FOUND`` (no held request of this agent with that id),
+    ``ALREADY_DECIDED`` (with ``state``: approved, denied, expired …) or
+    ``SERVICE_UNAVAILABLE`` (safe to retry).
+    """
+
+    ok: bool
+    request_id: Optional[str] = None
+    state: Optional[str] = None
+    withdrawn_at_epoch_ms: Optional[int] = None
     reason_code: Optional[str] = None
 
 
@@ -293,6 +343,92 @@ def _receipts_result(status: int, data: Any) -> ReceiptsResult:
     return ReceiptsResult(ok=True, request_id=data.get("requestId"), receipts=data["receipts"])
 
 
+def _refusal_code(status: int, data: Any) -> str:
+    if isinstance(data, dict):
+        for key in ("reasonCode", "code"):
+            if isinstance(data.get(key), str):
+                return data[key]
+    return f"HTTP_{status}"
+
+
+def _is_epoch(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 2**53
+
+
+def _held_request(entry: Any) -> Optional[HeldRequest]:
+    if not isinstance(entry, dict):
+        return None
+    tool_name = entry.get("toolName")
+    if (
+        not isinstance(entry.get("requestId"), str)
+        or not isinstance(entry.get("action"), str)
+        or not (tool_name is None or isinstance(tool_name, str))
+        or not isinstance(entry.get("purpose"), str)
+        or not _is_epoch(entry.get("createdAtEpochMs"))
+        or not _is_epoch(entry.get("expiresAtEpochMs"))
+    ):
+        return None
+    return HeldRequest(
+        request_id=entry["requestId"],
+        action=entry["action"],
+        tool_name=tool_name,
+        purpose=entry["purpose"],
+        created_at_epoch_ms=entry["createdAtEpochMs"],
+        expires_at_epoch_ms=entry["expiresAtEpochMs"],
+    )
+
+
+def _pending_path(limit: Optional[int], before: Optional[str]) -> str:
+    from urllib.parse import urlencode
+
+    query: Dict[str, str] = {"status": "pending"}
+    if limit is not None:
+        query["limit"] = str(limit)
+    if before is not None:
+        query["before"] = before
+    return f"/v1/agent/requests?{urlencode(query)}"
+
+
+def _pending_result(status: int, data: Any) -> PendingResult:
+    if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("requests"), list):
+        return PendingResult(ok=False, reason_code=_refusal_code(status, data))
+    requests = []
+    for entry in data["requests"]:
+        held = _held_request(entry)
+        if held is None:
+            # An entry this client cannot read fails the whole answer closed.
+            return PendingResult(ok=False, reason_code="MALFORMED_RESPONSE")
+        requests.append(held)
+    next_page = data.get("next")
+    return PendingResult(ok=True, requests=requests, next=next_page if isinstance(next_page, str) else None)
+
+
+def _withdraw_result(status: int, data: Any) -> WithdrawResult:
+    if (
+        isinstance(data, dict)
+        and data.get("ok") is True
+        and data.get("state") == "withdrawn"
+        and isinstance(data.get("requestId"), str)
+        and _is_epoch(data.get("withdrawnAtEpochMs"))
+    ):
+        return WithdrawResult(
+            ok=True,
+            request_id=data["requestId"],
+            state="withdrawn",
+            withdrawn_at_epoch_ms=data["withdrawnAtEpochMs"],
+        )
+    # Anything else is not a withdrawal, whatever ``ok`` says.
+    ok_answer = isinstance(data, dict) and data.get("ok") is True
+    request_id = data.get("requestId") if isinstance(data, dict) else None
+    state = data.get("state") if isinstance(data, dict) else None
+    return WithdrawResult(
+        ok=False,
+        reason_code="MALFORMED_RESPONSE" if ok_answer else _refusal_code(status, data),
+        request_id=request_id if isinstance(request_id, str) else None,
+        state=state if isinstance(state, str) else None,
+    )
+
+
 def _portable_result(status: int, data: Any) -> PortableReceiptResult:
     if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("receipt"), dict):
         reason = None
@@ -422,6 +558,25 @@ class GuardianClient(_Base):
         status, data = self._call(f"/v1/agent/receipts/{_quote(request_id)}/portable", method="GET")
         return _portable_result(status, data)
 
+    def pending(self, *, limit: Optional[int] = None, before: Optional[str] = None) -> PendingResult:
+        """This agent's own requests waiting for a person (ASK), newest to oldest.
+
+        It reads and changes nothing, and never returns another agent's
+        requests. ``limit`` is 1 to 100 (default 20); pass the previous
+        page's ``next`` as ``before``.
+        """
+        status, data = self._call(_pending_path(limit, before), method="GET")
+        return _pending_result(status, data)
+
+    def withdraw(self, request_id: str) -> WithdrawResult:
+        """Withdraw one of this agent's own held requests.
+
+        The person no longer sees it and it can never be claimed. It takes
+        authority away and runs nothing; a repeat answers "withdrawn" again.
+        """
+        status, data = self._call(f"/v1/agent/requests/{_quote(request_id)}/withdraw", {})
+        return _withdraw_result(status, data)
+
 
 class AsyncGuardianClient(_Base):
     """``asyncio`` Guardian agent client — same surface as :class:`GuardianClient`."""
@@ -485,6 +640,14 @@ class AsyncGuardianClient(_Base):
             f"/v1/agent/receipts/{_quote(request_id)}/portable", method="GET"
         )
         return _portable_result(status, data)
+
+    async def pending(self, *, limit: Optional[int] = None, before: Optional[str] = None) -> PendingResult:
+        status, data = await self._call(_pending_path(limit, before), method="GET")
+        return _pending_result(status, data)
+
+    async def withdraw(self, request_id: str) -> WithdrawResult:
+        status, data = await self._call(f"/v1/agent/requests/{_quote(request_id)}/withdraw", {})
+        return _withdraw_result(status, data)
 
 
 def _quote(value: str) -> str:

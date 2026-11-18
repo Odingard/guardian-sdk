@@ -5,8 +5,11 @@ export {
   type GuardianClient,
   type GuardianClientConfig,
   type GuardianGovernedInvocation,
+  type GuardianHeldRequest,
   type GuardianInvocation,
+  type GuardianPendingResult,
   type GuardianRequestResult,
+  type GuardianWithdrawResult,
   type GuardianToolInvocation,
   type GuardianMcpInvocation,
 } from "./client.js";
