@@ -1,6 +1,6 @@
 # Changelog
 
-## guardian-hook (unreleased)
+## guardian-hook 0.4.4, released 2026-11-18
 
 ### Added: reads of sensitive files are governed
 

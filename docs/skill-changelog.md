@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.13
+
+- Date: 2026-11-18
+- SHA-256: `bb85b11a2d0f25b39f3f24ebdeff0dad3ad31247a4112869a764c60fef0af23f`
+- Pins: `@odingard/guardian-hook` 0.4.4. The other pins are unchanged from 1.0.12.
+- Pins the hook release that governs reads of sensitive files and asks before commands that can print the agent's environment. The Claude Code matcher in 4A adds `WebSearch`, `Read`, `NotebookRead`, `Grep`, `Glob` and `LS`. 4A says that `"onFailure": "block"` blocks the call when the hook cannot start or times out. 4D points at `examples/agents/deepseek-harness`. No other change.
+
 ## 1.0.12
 
 - Date: 2026-11-18
