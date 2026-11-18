@@ -6,6 +6,9 @@ updates:
       interval: weekly
     ignore:
       - dependency-name: "@odingard/*"
+      # Node type definitions follow the oldest supported Node (engines >=22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
     groups:
       npm-minor-patch:
