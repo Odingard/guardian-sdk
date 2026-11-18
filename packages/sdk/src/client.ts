@@ -197,6 +197,48 @@ export type GuardianRequestResult =
       requestId?: string;
     };
 
+/** One of the agent's own requests that is waiting for a person (ASK). */
+export type GuardianHeldRequest = Readonly<{
+  requestId: string;
+  /** The action requested, e.g. "tool.invoke". */
+  action: string;
+  /** The tool named in the request (tool.invoke, mcp.enable); else null. */
+  toolName: string | null;
+  /** The purpose the agent gave with the request. */
+  purpose: string;
+  createdAtEpochMs: number;
+  expiresAtEpochMs: number;
+}>;
+
+export type GuardianPendingResult =
+  | {
+      ok: true;
+      /** From newest to oldest. */
+      requests: readonly GuardianHeldRequest[];
+      /** Pass as `before` for the next page; null on the last page. */
+      next: string | null;
+    }
+  | { ok: false; reasonCode: string };
+
+export type GuardianWithdrawResult =
+  | {
+      ok: true;
+      requestId: string;
+      state: "withdrawn";
+      withdrawnAtEpochMs: number;
+    }
+  | {
+      ok: false;
+      /**
+       * NOT_FOUND (no held request of this agent with that id),
+       * ALREADY_DECIDED (with `state`: approved, denied, expired …),
+       * SERVICE_UNAVAILABLE (nothing changed; safe to retry), and others.
+       */
+      reasonCode: string;
+      requestId?: string;
+      state?: string;
+    };
+
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
@@ -214,6 +256,44 @@ const LenientExecutionReceiptSchema =
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** The refusal code of an answer: reasonCode, then code, then the status. */
+function refusalCode(
+  data: Record<string, unknown> | null,
+  status: number,
+): string {
+  return typeof data?.reasonCode === "string"
+    ? data.reasonCode
+    : typeof data?.code === "string"
+      ? data.code
+      : `HTTP_${status}`;
+}
+
+/** One listed held request, every field checked; null when one is off. */
+function heldRequest(value: unknown): GuardianHeldRequest | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  if (
+    typeof entry.requestId !== "string" ||
+    typeof entry.action !== "string" ||
+    !(entry.toolName === null || typeof entry.toolName === "string") ||
+    typeof entry.purpose !== "string" ||
+    !Number.isSafeInteger(entry.createdAtEpochMs) ||
+    !Number.isSafeInteger(entry.expiresAtEpochMs)
+  ) {
+    return null;
+  }
+  return {
+    requestId: entry.requestId,
+    action: entry.action,
+    toolName: entry.toolName as string | null,
+    purpose: entry.purpose,
+    createdAtEpochMs: entry.createdAtEpochMs as number,
+    expiresAtEpochMs: entry.expiresAtEpochMs as number,
+  };
 }
 
 function randomId(prefix: "req" | "cor"): string {
@@ -262,6 +342,25 @@ export interface GuardianClient {
     | { ok: true; requestId: string; receipts: readonly unknown[] }
     | { ok: false; reasonCode: string }
   >;
+  /**
+   * This agent's own requests still waiting for a person (held as ASK),
+   * from newest to oldest, at most `limit` (1 to 100, default 20) per page.
+   * It reads and changes nothing, and never returns another agent's
+   * requests. Present on clients from `createGuardianClient`; optional so a
+   * custom client still type-checks.
+   */
+  pending?(options?: {
+    limit?: number;
+    before?: string;
+  }): Promise<GuardianPendingResult>;
+  /**
+   * Withdraw one of this agent's own held requests: the person no longer
+   * sees it and it can never be claimed. It takes authority away and runs
+   * nothing. Withdrawing again answers "withdrawn" again; a request the
+   * person already decided answers ALREADY_DECIDED and nothing changes.
+   * Present on clients from `createGuardianClient`.
+   */
+  withdraw?(requestId: string): Promise<GuardianWithdrawResult>;
 }
 
 function materialParametersFor(
@@ -571,6 +670,70 @@ export function createGuardianClient(
         };
       }
       return { ok: true, receipt: data.receipt };
+    },
+
+    async pending(options = {}) {
+      const query = new URLSearchParams({ status: "pending" });
+      if (options.limit !== undefined)
+        query.set("limit", String(options.limit));
+      if (options.before !== undefined) query.set("before", options.before);
+      const response = await call(
+        `/v1/agent/requests?${query.toString()}`,
+        undefined,
+        "GET",
+      );
+      const data = response.body;
+      if (!data || data.ok !== true || !Array.isArray(data.requests)) {
+        return { ok: false, reasonCode: refusalCode(data, response.status) };
+      }
+      const requests: GuardianHeldRequest[] = [];
+      for (const entry of data.requests as unknown[]) {
+        const held = heldRequest(entry);
+        // An entry this SDK cannot read fails the whole answer closed.
+        if (held === null) {
+          return { ok: false, reasonCode: "MALFORMED_RESPONSE" };
+        }
+        requests.push(held);
+      }
+      return {
+        ok: true,
+        requests,
+        next: typeof data.next === "string" ? data.next : null,
+      };
+    },
+
+    async withdraw(requestId) {
+      const response = await call(
+        `/v1/agent/requests/${encodeURIComponent(requestId)}/withdraw`,
+        {},
+        "POST",
+      );
+      const data = response.body;
+      if (
+        data?.ok === true &&
+        data.state === "withdrawn" &&
+        typeof data.requestId === "string" &&
+        typeof data.withdrawnAtEpochMs === "number"
+      ) {
+        return {
+          ok: true,
+          requestId: data.requestId,
+          state: "withdrawn",
+          withdrawnAtEpochMs: data.withdrawnAtEpochMs,
+        };
+      }
+      // Anything else is not a withdrawal, whatever `ok` says.
+      return {
+        ok: false,
+        reasonCode:
+          data?.ok === true
+            ? "MALFORMED_RESPONSE"
+            : refusalCode(data, response.status),
+        ...(typeof data?.requestId === "string"
+          ? { requestId: data.requestId }
+          : {}),
+        ...(typeof data?.state === "string" ? { state: data.state } : {}),
+      };
     },
 
     async receipts(requestId) {

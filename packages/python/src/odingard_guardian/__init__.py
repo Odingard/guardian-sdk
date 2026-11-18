@@ -11,9 +11,12 @@ from .client import (
     AsyncGuardianClient,
     ExecuteResult,
     GuardianClient,
+    HeldRequest,
+    PendingResult,
     PortableReceiptResult,
     ReceiptsResult,
     RequestResult,
+    WithdrawResult,
     build_proposal,
 )
 from .guard import (
@@ -112,6 +115,9 @@ __all__ = [
     "EXECUTION_OUTCOME_UNKNOWN",
     "PortableReceiptResult",
     "ReceiptsResult",
+    "HeldRequest",
+    "PendingResult",
+    "WithdrawResult",
     "RequestResult",
     "ResumeResult",
     "afetch_receipt_verification_keys",
