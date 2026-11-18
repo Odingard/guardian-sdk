@@ -10,7 +10,7 @@ tools the matcher in `guardian-hooks.json` names, so keep it as shipped:
 - everyday commands and file edits run under **Allow**;
 - deploys, destructive commands and pushes wait until a person approves;
 - anything denied, or not approved within 5 minutes, does not run;
-- every allowed call leaves a receipt you can verify offline.
+- every allowed call leaves a signed record you can verify offline.
 
 ## See what dsh would receive (no account needed)
 

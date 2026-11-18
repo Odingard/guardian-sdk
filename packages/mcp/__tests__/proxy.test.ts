@@ -63,7 +63,7 @@ const text = (r: unknown) =>
   JSON.parse((r as { content: { text: string }[] }).content[0]!.text);
 
 describe("governed MCP proxy", () => {
-  it("lists upstream tools as governed, hides name collisions, adds guardian_claim/receipt", async () => {
+  it("lists upstream tools as governed, hides name collisions, adds the governance tools", async () => {
     const { up } = upstream();
     const { client } = guardian({ ok: true, requestId: "r", decision: "DENY" });
     const proxy = createGovernedProxy({
@@ -76,10 +76,130 @@ describe("governed MCP proxy", () => {
     expect(tools.map((t) => t.name)).toEqual([
       "send_message",
       "guardian_claim",
-      "guardian_receipt",
+      "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
     ]);
     expect(tools[0]!.description).toMatch(/Guardian-governed/);
+    for (const tool of tools.slice(1)) {
+      expect(`${tool.name} ${tool.description}`).not.toMatch(/receipt/i);
+      const properties = (
+        tool.inputSchema as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      for (const [name, schema] of Object.entries(properties)) {
+        expect(schema.description, `${tool.name}.${name}`).toMatch(/\S/);
+      }
+      expect(tool.title).toBe(
+        (tool.annotations as { title?: string } | undefined)?.title,
+      );
+    }
+    for (const tool of tools.filter((t) =>
+      ["guardian_claim", "guardian_record", "guardian_cancel"].includes(t.name),
+    )) {
+      const properties = (
+        tool.inputSchema as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      expect(properties.requestId!.description).toMatch(/requestId|req_/);
+    }
+    expect(
+      Object.fromEntries(tools.slice(1).map((t) => [t.name, t.annotations])),
+    ).toEqual({
+      guardian_claim: {
+        title: "Forward an approved call",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_record: {
+        title: "Get the records for a request",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_pending: {
+        title: "List my held requests",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_cancel: {
+        title: "Withdraw a held request",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
   });
+
+  it("hides upstream tools named like a governance tool", async () => {
+    const logs: string[] = [];
+    const up: Upstream = {
+      async listTools() {
+        return [
+          { name: "send_message", inputSchema: { type: "object" } },
+          { name: "guardian_record", inputSchema: { type: "object" } },
+          { name: "guardian_receipt", inputSchema: { type: "object" } },
+          { name: "guardian_pending", inputSchema: { type: "object" } },
+          { name: "guardian_cancel", inputSchema: { type: "object" } },
+        ];
+      },
+      async callTool() {
+        throw new Error("must not be forwarded");
+      },
+    };
+    const { client } = guardian({ ok: true, requestId: "r", decision: "DENY" });
+    const proxy = createGovernedProxy({
+      client,
+      connectionId: CONNECTION,
+      upstream: up,
+      log: (m) => logs.push(m),
+    });
+    const tools = await proxy.listTools();
+    expect(tools.map((t) => t.name)).toEqual([
+      "send_message",
+      "guardian_claim",
+      "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
+    ]);
+    for (const name of [
+      "guardian_record",
+      "guardian_receipt",
+      "guardian_pending",
+      "guardian_cancel",
+    ]) {
+      expect(logs.join("\n")).toMatch(`"${name}" collides`);
+    }
+  });
+
+  it.each(["guardian_record", "guardian_receipt"])(
+    "%s fetches the records from Guardian and forwards nothing",
+    async (name) => {
+      const { up, calls } = upstream();
+      const { client } = guardian({
+        ok: true,
+        requestId: "r",
+        decision: "DENY",
+      });
+      const proxy = createGovernedProxy({
+        client,
+        connectionId: CONNECTION,
+        upstream: up,
+      });
+      const result = await proxy.callTool(name, { requestId: "req_r" });
+      expect(client.receipts).toHaveBeenCalledWith("req_r");
+      expect(text(result)).toEqual({ requestId: "req_r", receipts: [] });
+      expect(calls).toHaveLength(0);
+    },
+  );
 
   it("ALLOW forwards the call, then redeems the capability", async () => {
     const { up, calls } = upstream();

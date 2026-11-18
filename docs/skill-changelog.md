@@ -10,6 +10,27 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.15
+
+- Date: 2026-11-18
+- SHA-256: `0cc5846cc1ce0611deda606de52830cc5000328e556bc50f4a3cd48e9f960a8d`
+- Pins: `@odingard/guardian-mcp` 0.5.2. The other pins are unchanged from 1.0.14.
+- Pins the guardian-mcp release with clearer tool definitions, whose `guardian-mcp tools` labels the Ask mode "Ask me". 4D points at the tag `skill-v1.0.15`. No other change.
+
+## 1.0.14
+
+- Date: 2026-11-18
+- SHA-256: `24a809d7d01647c7f6b91bea56c12370c97972099c22083c108d64c0634735eb`
+- Pins: `@odingard/guardian-mcp` 0.5.1. The other pins are unchanged from 1.0.13.
+- Pins the guardian-mcp release that lists `guardian_record`. The Ask mode label is quoted as "Ask me", as in the console. 4D points at the tag `skill-v1.0.14`. No other change.
+
+## 1.0.13
+
+- Date: 2026-11-18
+- SHA-256: `bb85b11a2d0f25b39f3f24ebdeff0dad3ad31247a4112869a764c60fef0af23f`
+- Pins: `@odingard/guardian-hook` 0.4.4. The other pins are unchanged from 1.0.12.
+- Pins the hook release that governs reads of sensitive files and asks before commands that can print the agent's environment. The Claude Code matcher in 4A adds `WebSearch`, `Read`, `NotebookRead`, `Grep`, `Glob` and `LS`. 4A says that `"onFailure": "block"` blocks the call when the hook cannot start or times out. 4D points at `examples/agents/deepseek-harness`. No other change.
+
 ## 1.0.12
 
 - Date: 2026-11-18

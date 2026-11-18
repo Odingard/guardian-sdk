@@ -10,6 +10,14 @@
  * Anything Guardian does not confirm — unreachable service, bad config,
  * timeout, failed redemption — is a deny (fail closed).
  *
+ * Watch mode: while the agent is watched, Guardian records what it would
+ * have decided and issues no capability for a call it would have asked
+ * about or denied. With `watchAware`, the hook asks for that answer and,
+ * for such a call, answers `watched`: Guardian approved nothing and
+ * performs nothing, and the agent's own permissions decide whether the
+ * call runs, as without the hook. An edit's pinned target is still
+ * checked. Without `watchAware` (the default) such a call is denied.
+ *
  * A redemption whose answer was lost (no answer, a 5xx, an unreadable
  * answer) is looked up in Guardian's record of the request: a verified
  * execution means Guardian redeemed the capability, so the call runs; an
@@ -24,12 +32,20 @@ import { verifyPin, type GuardianClient } from "@odingard/guardian-sdk";
 import type { GovernedCall } from "./classify.js";
 
 export type HookVerdict = Readonly<{
-  decision: "allow" | "deny";
+  /**
+   * `watched`: the agent is in watch mode and Guardian would have asked
+   * about or denied the call. Guardian approved nothing and performs
+   * nothing; the hook gives no permission decision, so the agent's own
+   * permissions apply.
+   */
+  decision: "allow" | "deny" | "watched";
   /** Shown to the agent (and the developer). Plain words. */
   reason: string;
   requestId?: string;
   guardianDecision?: "ALLOW" | "ASK" | "DENY";
   approvedByHuman?: boolean;
+  /** Watch mode: what Guardian would have decided under the current rules. */
+  wouldDecision?: "ASK" | "DENY";
 }>;
 
 export type DecideOptions = Readonly<{
@@ -59,6 +75,12 @@ export type DecideOptions = Readonly<{
   now?: () => number;
   /** Progress lines (stderr) — e.g. "waiting for approval". */
   log?: (line: string) => void;
+  /**
+   * Ask Guardian for the watched answer (watch mode). Set it only when the
+   * caller lets the agent run the call on a `watched` verdict; without it
+   * Guardian answers such a call as not run, and the hook denies it.
+   */
+  watchAware?: boolean;
 }>;
 
 type RequestResult = Awaited<ReturnType<GuardianClient["request"]>>;
@@ -72,6 +94,8 @@ const PLAIN: Record<string, string> = {
   INVALID_REQUEST:
     'this tool is not allowed for the agent yet. In the Guardian console: Agents → this agent → the connection\'s card → "Allow a tool by name"',
   SERVICE_UNAVAILABLE: "Guardian could not be reached",
+  WATCHED_NOT_RUN:
+    "this agent is in watch mode, and Guardian does not carry out a call it would have held or denied. To leave such calls to the agent's own permissions while it is watched, set GUARDIAN_HOOK_WATCH_MODE=on",
   REQUEST_CONFLICT: "Guardian saw a conflicting request",
   EXECUTION_NOT_SENT: "Guardian did not complete the redemption",
 };
@@ -170,6 +194,20 @@ async function lookUpExecution(
 /** How long before the window closes the hook makes its final check. */
 export const FINAL_CHECK_LEAD_MS = 1_500;
 
+/**
+ * The watched answer: Guardian would have asked (`"ASK"`) or denied
+ * (`"DENY"`) the call, and issued no capability. Only for a request sent
+ * with `watchAware`, and only an exact answer.
+ */
+function watchedDecision(
+  r: RequestResult,
+  watchAware: boolean | undefined,
+): "ASK" | "DENY" | undefined {
+  if (watchAware !== true || !r.ok) return undefined;
+  if (r.decision !== "DENY" || r.reasonCode !== "WATCHED") return undefined;
+  return r.watched === "ASK" || r.watched === "DENY" ? r.watched : undefined;
+}
+
 const isPending = (r: RequestResult) =>
   (!r.ok &&
     (r.reasonCode === "APPROVAL_REQUIRED" ||
@@ -196,9 +234,33 @@ export async function decide(
       ...(options.requestTtlMs !== undefined
         ? { ttlMs: options.requestTtlMs }
         : {}),
+      ...(options.watchAware === true ? { watchAware: true } : {}),
     });
   } catch {
     return denied(call, "SERVICE_UNAVAILABLE");
+  }
+  const wouldDecision = watchedDecision(result, options.watchAware);
+  if (wouldDecision !== undefined && result.ok) {
+    // The edit's target must still be the file the hook pinned.
+    const pinRefusal = await contentPinRefusal(call);
+    if (pinRefusal !== undefined) {
+      return {
+        decision: "deny",
+        reason: `Guardian hook: ${call.contentPin!.path} could not be checked against its pin (${pinRefusal}). Nothing ran.`,
+        requestId: result.requestId,
+        wouldDecision,
+      };
+    }
+    const would =
+      wouldDecision === "ASK" ? "held it for a person's approval" : "denied it";
+    return {
+      decision: "watched",
+      reason:
+        `Guardian is watching this agent: under the current rules it would have ${would} ` +
+        `(${call.toolName}, request ${result.requestId}). Guardian approved nothing; the agent's own permissions apply.`,
+      requestId: result.requestId,
+      wouldDecision,
+    };
   }
   if (!result.ok && result.reasonCode === "SERVICE_UNAVAILABLE") {
     // Guardian did not answer: there is no request on its side to quote.

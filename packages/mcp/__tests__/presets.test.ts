@@ -38,6 +38,20 @@ describe("governed MCP setups: tool suggestions", () => {
     expect(text).toContain("get_me");
   });
 
+  it("labels the suggested modes as the console does", () => {
+    const lines = renderSuggestions("srv", [
+      tool("write_file"),
+      tool("read_file", { readOnlyHint: true }),
+    ]).split("\n");
+    expect(lines).toContain(
+      'write_file  Ask me        "write" may change something',
+    );
+    expect(lines).toContain(
+      "read_file   Allow         server marks it read-only",
+    );
+    expect(lines.join("\n")).not.toMatch(/Ask me \S/);
+  });
+
   it("parses `tools` without any Guardian settings", () => {
     const parsed = parseCli(["tools", "--json", "--", "npx", "-y", "srv"], {});
     expect(parsed).toEqual({

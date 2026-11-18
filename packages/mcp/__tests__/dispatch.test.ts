@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GuardianClient } from "@odingard/guardian-sdk";
-import { TOOLS, handleToolCall } from "../src/dispatch.js";
+import {
+  LEGACY_RECORD_TOOL,
+  RECORD_TOOL,
+  TOOLS,
+  handleToolCall,
+} from "../src/dispatch.js";
 
 function stubClient(overrides: Partial<GuardianClient>): GuardianClient {
   return {
@@ -17,13 +22,103 @@ function payload(result: { content: { text: string }[] }): any {
 }
 
 describe("guardian-mcp dispatch", () => {
-  it("lists exactly the three governance tools", () => {
+  it("lists exactly the five governance tools", () => {
     expect(TOOLS.map((t) => t.name)).toEqual([
       "guardian_invoke_tool",
       "guardian_claim",
-      "guardian_receipt",
+      "guardian_record",
+      "guardian_pending",
+      "guardian_cancel",
     ]);
   });
+
+  it("listed tool names and descriptions say record", () => {
+    for (const tool of TOOLS) {
+      expect(`${tool.name} ${tool.description}`).not.toMatch(/receipt/i);
+    }
+  });
+
+  it("describes every parameter and sets truthful annotations", () => {
+    for (const tool of TOOLS) {
+      for (const [name, schema] of Object.entries(
+        tool.inputSchema.properties,
+      )) {
+        expect(
+          (schema as { description?: string } | undefined)?.description,
+          `${tool.name}.${name}`,
+        ).toMatch(/\S/);
+      }
+      expect(tool.annotations.title).toBe(tool.title);
+    }
+    expect(
+      Object.fromEntries(
+        TOOLS.map(({ name, annotations: { title: _title, ...hints } }) => [
+          name,
+          hints,
+        ]),
+      ),
+    ).toEqual({
+      guardian_invoke_tool: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_claim: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      guardian_record: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_pending: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      guardian_cancel: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
+  });
+
+  it.each([RECORD_TOOL, LEGACY_RECORD_TOOL])(
+    "%s fetches the records for a request id",
+    async (name) => {
+      const receipts = vi
+        .fn()
+        .mockResolvedValue({ ok: true, receipts: [{ id: "rcpt_1" }] });
+      const client = stubClient({ receipts });
+      const result = await handleToolCall({ client }, name, {
+        requestId: "req_1",
+      });
+      expect(receipts).toHaveBeenCalledWith("req_1");
+      expect(payload(result)).toEqual({
+        requestId: "req_1",
+        receipts: [{ id: "rcpt_1" }],
+      });
+    },
+  );
+
+  it.each([RECORD_TOOL, LEGACY_RECORD_TOOL])(
+    "%s requires a requestId",
+    async (name) => {
+      const receipts = vi.fn();
+      const client = stubClient({ receipts });
+      const result = await handleToolCall({ client }, name, {});
+      expect(result.isError).toBe(true);
+      expect(receipts).not.toHaveBeenCalled();
+    },
+  );
 
   it("ALLOW executes the held capability and returns the receipt", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -143,6 +238,26 @@ describe("guardian-mcp dispatch", () => {
     expect(payload(result as any)).toMatchObject({
       decision: "ASK",
       requestId: "req_held",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("a claim before the person approves (APPROVAL_PENDING) stays held as ASK", async () => {
+    const claim = vi.fn().mockResolvedValue({
+      ok: false,
+      reasonCode: "APPROVAL_PENDING",
+      requestId: "req_held",
+    });
+    const execute = vi.fn();
+    const client = stubClient({ claim, execute });
+    const result = await handleToolCall({ client }, "guardian_claim", {
+      requestId: "req_held",
+    });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result as any)).toMatchObject({
+      decision: "ASK",
+      requestId: "req_held",
+      reasonCode: "APPROVAL_PENDING",
     });
     expect(execute).not.toHaveBeenCalled();
   });

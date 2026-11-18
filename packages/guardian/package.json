@@ -1,0 +1,51 @@
+{
+  "name": "@odingard/guardian",
+  "version": "0.1.0",
+  "description": "guardian init: set Guardian up for an agent project in one command. Signs you in in the browser, creates the agent and its tool server, saves the agent credential to an env file and sends one test action through Guardian.",
+  "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
+  "type": "module",
+  "bin": {
+    "guardian": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "esbuild src/bin.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --outfile=dist/cli.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@odingard/guardian-sdk": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "guardian",
+    "ai-agents",
+    "authorization",
+    "authority",
+    "human-in-the-loop",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/guardian"
+  },
+  "homepage": "https://odingard.com/guardian"
+}

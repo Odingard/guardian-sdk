@@ -11,7 +11,7 @@ node examples/payments/ap2/simulated-payments.mjs
 
 What is real: `@odingard/guardian-ap2`, its SD-JWT and ES256 code, and the
 AP2 v0.2 mandate formats. What is fake: Guardian is an in-memory stand-in (no
-real receipts), and the Trusted Surface, merchant and payment processor are
+real signed records), and the Trusted Surface, merchant and payment processor are
 stand-ins with throwaway P-256 keys made on each run. Nothing leaves the
 process and no money moves.
 
@@ -23,8 +23,8 @@ It does four things:
    Trusted Surface sign.
 2. **19.99 USD mug.** Below `askAbove` and under an open mandate a person
    approved here, so a rule allows `ap2.pay`; Guardian redeems it, then the
-   agent key signs the closed Checkout and Payment Mandates. A processor
-   receipt is verified.
+   agent key signs the closed Checkout and Payment Mandates. The processor's
+   result is verified.
 3. **30.00 USD for two mugs.** Above `askAbove`, so it goes to
    `ap2.pay.above_cap` and waits for a person.
 4. **Gift card.** Guardian denies it; nothing is signed.
