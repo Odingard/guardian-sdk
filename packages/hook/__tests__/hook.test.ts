@@ -572,6 +572,11 @@ describe("setup completeness", () => {
     expect(setupText()).toMatch(/Allow a tool by name/);
   });
 
+  it("setup uses the console's mode labels", () => {
+    expect(setupText()).toContain("set Allow on (a) and Ask me on (b);");
+    expect(setupText()).not.toContain("Ask me first");
+  });
+
   it("an INVALID_REQUEST denial says how to fix it", async () => {
     const { client } = fakeClient({
       request: { ok: false, reasonCode: "INVALID_REQUEST" },

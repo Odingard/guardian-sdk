@@ -146,7 +146,7 @@ tool called from inside a Code Mode script is blocked.
 
 Guardian modes are per connection, so the plugin uses two record-only
 connections: everyday tools go to `connectionId` (set it to Allow), Ask-tier
-tools to `askConnectionId` (set it to Ask me first). `allowTierTools` moves
+tools to `askConnectionId` (set it to Ask me). `allowTierTools` moves
 named Guardian tools (for example `openclaw.tool_call`) to the everyday
 connection.
 
