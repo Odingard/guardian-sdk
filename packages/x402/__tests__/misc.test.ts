@@ -150,6 +150,23 @@ describe("x402 version check", () => {
     }
   });
 
+  it.each(["@x402/fetch", "@x402/axios", "@x402/mcp", "@x402/evm"])("requires %s to match core's minor line", (name) => {
+    for (const [core, version] of [["2.30.0", "2.30.7"], ["2.31.0", "2.31.7"]]) {
+      const readVersion = (pkg: string) => pkg === "@x402/core" ? core! : version!;
+      expect(assertSupportedX402(name, readVersion)).toBe(version);
+    }
+    for (const [core, version] of [["2.30.0", "2.31.0"], ["2.31.0", "2.30.0"]]) {
+      const readVersion = (pkg: string) => pkg === "@x402/core" ? core! : version!;
+      expect(() => assertSupportedX402(name, readVersion)).toThrow(
+        `requires ${name} and @x402/core on the same major.minor line; found ${name} ${version} and @x402/core ${core}`,
+      );
+    }
+    for (const core of [null, "", "2.32.0", "2.31.0-beta.1"]) {
+      const readVersion = (pkg: string) => pkg === "@x402/core" ? core : "2.31.0";
+      expect(() => assertSupportedX402(name, readVersion)).toThrow(/supports @x402\/core/);
+    }
+  });
+
   it("the installed x402 packages pass", () => {
     for (const name of ["@x402/core", "@x402/evm", "@x402/fetch", "@x402/axios", "@x402/mcp"]) {
       expect(isSupportedX402Version(assertSupportedX402(name))).toBe(true);

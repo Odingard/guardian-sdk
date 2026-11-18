@@ -49,7 +49,8 @@ export function isSupportedX402Version(version: string | null | undefined): bool
 
 /**
  * Refuses an x402 package outside the tested range (another major or minor
- * line, a prerelease, or none installed). Throws; the guard is not built.
+ * line, a prerelease, or none installed), or on a different minor line
+ * from core. Throws; the guard is not built.
  */
 export function assertSupportedX402(
   name: string,
@@ -62,6 +63,14 @@ export function assertSupportedX402(
     throw new Error(
       `guardian-x402 supports ${name} ${TESTED_X402_RANGE}; found ${version ?? "none"}.`,
     );
+  }
+  if (name !== "@x402/core") {
+    const coreVersion = assertSupportedX402("@x402/core", readVersion);
+    if (version!.split(".").slice(0, 2).join(".") !== coreVersion.split(".").slice(0, 2).join(".")) {
+      throw new Error(
+        `guardian-x402 requires ${name} and @x402/core on the same major.minor line; found ${name} ${version} and @x402/core ${coreVersion}.`,
+      );
+    }
   }
   if (readVersion === installedVersion) checked.set(name, version!);
   return version!;
