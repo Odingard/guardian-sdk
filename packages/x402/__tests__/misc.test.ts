@@ -134,19 +134,19 @@ describe("timing options", () => {
 });
 
 describe("x402 version check", () => {
-  const read = (version: string | null) => () => version;
-  it("accepts only plain 2.30.x releases, the same range as the peer dependencies", async () => {
+  const read = (version: string | null | undefined) => () => version ?? null;
+  it("accepts only plain 2.30.x and 2.31.x releases, the same range as the peer dependencies", async () => {
     const pkg = JSON.parse(
       readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"),
     ) as { peerDependencies: Record<string, string> };
     for (const name of ["@x402/core", "@x402/evm", "@x402/fetch", "@x402/axios", "@x402/mcp"]) {
       expect(pkg.peerDependencies[name]).toBe(TESTED_X402_RANGE);
     }
-    for (const ok of ["2.30.0", "2.30.7"]) {
+    for (const ok of ["2.30.0", "2.30.7", "2.31.0", "2.31.7"]) {
       expect(assertSupportedX402("@x402/core", read(ok))).toBe(ok);
     }
-    for (const refused of ["2.29.9", "2.31.0", "3.0.0", "1.30.0", "2.30.0-beta.1", "2.30", "x", null]) {
-      expect(() => assertSupportedX402("@x402/core", read(refused))).toThrow(/supports @x402\/core ~2\.30\.0/);
+    for (const refused of ["2.29.9", "2.32.0", "3.0.0", "1.30.0", "2.30.0-beta.1", "2.31.0-beta.1", "2.30", "", "x", null, undefined]) {
+      expect(() => assertSupportedX402("@x402/core", read(refused))).toThrow(/supports @x402\/core >=2\.30\.0 <2\.32\.0/);
     }
   });
 
