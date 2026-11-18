@@ -380,7 +380,7 @@ Anything else refuses with a reason code such as `REQUEST_MISMATCH` or `AMOUNT_M
 
 `fetchReceiptStatus` calls the public `POST /v1/receipts/status`. The signed record itself is the credential, and the reply is only a status (`active`, `pending`, `revoked`, `expired`, `used`, `paused` or `unknown`), never identities.
 
-## Missions
+## Missions (unreleased)
 
 A person approves one mission card in the Guardian console: an agent, a total
 budget, an end time, and the connections, actions and sites it covers. The
@@ -421,8 +421,10 @@ const result = await guardian.request({
   refused with `MISSION_REQUEST_UNKNOWN`.
 - `verifyMissionRecordOffline(record, keys)` checks a signed mission record
   (`guardian.mission-record.v1`: the approved card, its limits, the
-  permissions the approval issued, who approved it and when) against the key
-  set from `fetchReceiptVerificationKeys`. The record is signed under its own
+  permissions the approval issued, who approved it and when) against
+  Guardian's published keys (the key set in
+  [Verify a decision without an account](#verify-a-decision-without-an-account)).
+  The record is signed under its own
   domain (`MISSION_RECORD_DOMAIN`). It returns `{ valid: true, keyId }` or
   `{ valid: false, reasonCode }` with `RECORD_MALFORMED`,
   `RECORD_KEY_UNKNOWN`, `RECORD_SIGNATURE_INVALID` or `RECORD_DIGEST_MISMATCH`.
