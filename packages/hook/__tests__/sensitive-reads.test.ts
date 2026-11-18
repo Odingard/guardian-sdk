@@ -368,6 +368,11 @@ describe("shell commands that read a sensitive file", () => {
       "grep -r --include=.env TOKEN .",
       "rg -g .npmrc token /",
       "fd .git-credentials ~",
+      "git show HEAD~1:.env",
+      "git cat-file -p HEAD~1:.env",
+      "git log -p -- .env",
+      "git -c core.pager=cat show HEAD:.npmrc",
+      "git checkout HEAD~3 -- .env",
     ]) {
       ask(command, src);
     }

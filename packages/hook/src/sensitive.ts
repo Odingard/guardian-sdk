@@ -491,6 +491,12 @@ const ELSEWHERE =
  */
 const SEARCHES =
   /(?:^|[\s;&|(`/])(?:find|fd|fdfind|locate|mlocate|plocate|grep|egrep|fgrep|zgrep|rg|ag|ack|tar|zip|7z|rsync|cpio)(?=$|[\s;&|)`])/;
+/**
+ * Git subcommands that read a file by name from history, not from the
+ * working tree (`git show HEAD~1:.env`, `git log -p -- .env`).
+ */
+const GIT_HISTORY =
+  /(?:^|[\s;&|(`/])git\s(?:[^;&|\n`]*\s)?(?:show|cat-file|log|diff|archive|blame|grep|checkout|restore|ls-tree|whatchanged|format-patch|stash|cherry-pick|bundle)(?=$|[\s;&|)`])/;
 const MAX_BARE_CHECKS = 512;
 
 /**
@@ -510,7 +516,10 @@ export function sensitiveInCommand(
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
-  const elsewhere = ELSEWHERE.test(command) || SEARCHES.test(command);
+  const elsewhere =
+    ELSEWHERE.test(command) ||
+    SEARCHES.test(command) ||
+    GIT_HISTORY.test(command);
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
