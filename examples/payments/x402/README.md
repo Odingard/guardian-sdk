@@ -11,7 +11,7 @@ node examples/payments/x402/simulated-payments.mjs
 
 What is real: the official x402 client, its fetch wrapper, the exact EVM
 scheme and `@odingard/guardian-x402`. What is fake: Guardian is an in-memory
-stand-in (no real receipts), the paid API is an in-memory 402 server, and the
+stand-in (no real signed records), the paid API is an in-memory 402 server, and the
 wallet is a throwaway Base Sepolia test key made on each run. Nothing leaves
 the process and no money moves.
 

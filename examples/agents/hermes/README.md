@@ -10,7 +10,7 @@ Hermes plugin `guardian`. It asks Guardian before the tool runs:
   changes, sub-agents, MCP tools and changes to Hermes' own settings wait until
   a person approves that exact call;
 - anything Guardian denies, or that nobody approves in time, does not run;
-- every allowed call leaves a receipt you can verify offline.
+- every allowed call leaves a signed record you can verify offline.
 
 ## Try it without Hermes
 
@@ -35,9 +35,9 @@ it, against a local demo policy (`[SIMULATED guardian]`). Set
      `git_push`, `code_exec`, `browser`, `computer_use`, `scheduled_task`,
      `delegate`, `hermes_config`, `hermes_other`, and any MCP tools as
      `mcp.<server>.<tool>`.
-2. Agents → your Hermes agent: Allow on the first, Ask me first on the second,
-   and allow every tool above by name on both connection cards. Without that
-   step every call is denied as `INVALID_REQUEST`.
+2. Agents → your Hermes agent: Allow on the everyday connection, Ask me on the
+   needs-approval one, and allow every tool above by name on both connection
+   cards. Without that step every call is denied as `INVALID_REQUEST`.
 
 ## Run it in Hermes (LIVE)
 
@@ -166,6 +166,6 @@ approval).
   tools can read that copy.
 - **`hook_callback_timeout` under 17 s** blocks every governed call: the hook
   only starts a Guardian call when it and the redeem after it (up to 8 s each)
-  finish inside Hermes' timeout, so Guardian never records a receipt for a
-  call Hermes already gave up on. httpx's timeout is per phase, so a server
+  finish inside Hermes' timeout, so Guardian never writes a signed record for
+  a call Hermes already gave up on. httpx's timeout is per phase, so a server
   that trickles bytes can still stretch one call past 8 s.

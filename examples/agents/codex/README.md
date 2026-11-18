@@ -10,7 +10,7 @@ Guardian before it runs (input typed into an already open session with
   `git push`) wait until a person approves that exact action;
 - anything Guardian denies, or that nobody approves within 5 minutes, does
   not run;
-- every allowed call leaves a receipt you can verify offline.
+- every allowed call leaves a signed record you can verify offline.
 
 Guardian sees the command, or for a patch only its target paths and
 operations plus a size and SHA-256 digest. It never sees file contents.

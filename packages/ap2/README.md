@@ -138,7 +138,7 @@ signature, for example one backed by a KMS or HSM.
    the agent key signs. Any other signing call is refused. The signature is
    verified under the agent's public key.
 7. **Present once.** `presentPayment` and `presentCheckout` each send their
-   chain once. A pair already released by a verified Error receipt is not
+   chain once. A pair already released by a verified Error result is not
    presented (`PAIR_RELEASED`).
 
 ASK needs a person (`ap2.pay.above_cap`) when the amount is above
@@ -252,7 +252,7 @@ was sent but its outcome is unknown, nothing is signed, the refusal
 (`EXECUTE_FAILED`) carries `outcomeUnknown: true` and the request id, and the
 guard records "redeemed or unknown, not signed". The guard's records link the
 Guardian request id to the closed mandate references
-(base64url(SHA-256(closed mandate JWT)), the AP2 receipt `reference`) and
+(base64url(SHA-256(closed mandate JWT)), the AP2 result's `reference`) and
 then to the Checkout and Payment Receipts (`order_id`, `payment_id`,
 `psp_confirmation_id`). They never hold a key, a signature, a mandate, a
 token, buyer details or risk data values.
@@ -272,16 +272,16 @@ interface Ap2GuardStore {
 
 - **At most one outstanding pair per open mandate.** AP2 says an agent MUST
   NOT present a subsequent pair under an open mandate before a rejection
-  receipt for the previous one. While a pair is signed or presented with no
-  verified receipt that settles it, another pair from the same open mandate
+  result for the previous one. While a pair is signed or presented with no
+  verified result that settles it, another pair from the same open mandate
   is refused (`OUTSTANDING_PRESENTATION`) before Guardian is asked; no
   approval overrides this. Two at once: the second is refused
-  (`MANDATE_IN_USE`). A pair whose receipt never comes keeps the open
+  (`MANDATE_IN_USE`). A pair whose result never comes keeps the open
   mandate locked; ask the user for a new one. Human present works the same
   way per checkout.
 - **Single use.** Without `payment.agent_recurrence`, an open mandate signs
   one pair. After a verified Success Payment Receipt it is used up
-  (`MANDATE_ALREADY_USED`); before any receipt the outstanding-pair rule
+  (`MANDATE_ALREADY_USED`); before any result the outstanding-pair rule
   refuses a second.
 - **Recurrence.** The guard enforces both `max_occurrences` and `frequency`
   (DAILY, WEEKLY = ISO week, MONTHLY, QUARTERLY, ANNUALLY = UTC calendar
@@ -292,15 +292,15 @@ interface Ap2GuardStore {
   currency whose exponent is 2; anything else is refused
   (`BUDGET_UNIT_AMBIGUOUS`).
 - **Issuer keys by role.** `receiptIssuerKeys.checkout` pins the merchant's
-  receipt keys, `receiptIssuerKeys.payment` the processor's. A receipt is
-  accepted only for the side its issuer is pinned for: a merchant key cannot
+  signing keys, `receiptIssuerKeys.payment` the processor's. A result is
+  accepted for the side its issuer is pinned for and no other: a merchant key cannot
   sign a Payment Receipt, nor a processor key a Checkout Receipt.
 - **Release.** The amount stays spent unless a verified Error Payment
   Receipt references the closed payment mandate, or a verified Error
   Checkout Receipt arrives before the payment mandate was ever presented. A
   checkout Error after the payment mandate went to the credential provider
   does not release the pair: the payment may still settle, so only the
-  payment side can release it. A timeout or a missing receipt keeps it.
+  payment side can release it. A timeout or a missing result keeps it.
   `unresolved_constraint` is treated as an error; `recordReceipt` returns
   `returnToHumanPresent: true`, and any new pair needs a new decision.
 - **Conflicting outcomes.** A verified Success Payment Receipt for a pair

@@ -844,7 +844,7 @@ def setup_text() -> str:
         rows("ask"),
         "      plus any MCP tools you use, named mcp.<server>.<tool>.",
         "",
-        "2. Agents → your Hermes agent: Allow on (a), Ask me first on (b), and allow each tool",
+        "2. Agents → your Hermes agent: Allow on (a), Ask me on (b), and allow each tool",
         '   by name on both connection cards ("Allow a tool by name"). Otherwise every call is',
         "   denied as INVALID_REQUEST.",
         "",

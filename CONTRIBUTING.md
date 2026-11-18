@@ -31,8 +31,8 @@ shared triad cannot give them these guarantees today:
 - **Request fields.** The triad sends no `ttlMs` (the guards bound the wait
   with it) and no `amountArgument` (the link guard sends it so console dollar
   limits apply).
-- **Receipt binding.** After a person approves, the guard reads the portable
-  receipt. It refuses unless the receipt names that request, tool,
+- **Record binding.** After a person approves, the guard reads the portable
+  signed record. It refuses unless the record names that request, tool,
   connection and the exact arguments. It also refuses a claim answer that
   names another request. The triad has neither check.
 - **Bounded calls.** Each Guardian call has a timeout.
@@ -66,8 +66,8 @@ npm run fixtures:python  # regenerate the Python SDK's cross-language golden fix
 ```
 
 `packages/sdk/src/contracts/`, `packages/sdk/src/evidence/`, the SDK client,
-guard, lifecycle, receipts and embedded-approval sources, the catalog JSON and the
-Steel adapter sources are generated. Don't edit them here; open an issue
+guard, lifecycle, signed-record and embedded-approval sources, the catalog JSON
+and the Steel adapter sources are generated. Don't edit them here; open an issue
 instead.
 
 Rules that matter:

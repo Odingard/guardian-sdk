@@ -206,7 +206,7 @@ export function setupText(dialect: Dialect = "claude-code"): string {
     "      (`npx @odingard/guardian-mcp tools -- <server>` lists them).",
     "",
     "2. Agents → your coding agent:",
-    "   - set Allow on (a) and Ask me first on (b);",
+    "   - set Allow on (a) and Ask me on (b);",
     "   - on each of the two connection cards, type every tool name above into",
     '     "Allow a tool by name" and press Allow tool (once per tool).',
     "     Without this step every call is denied as INVALID_REQUEST.",

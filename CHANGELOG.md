@@ -76,6 +76,8 @@
 
 ## Docs (unreleased)
 
+- **Ask mode label.** `guardian-hook setup` and `python -m odingard_guardian.hermes` print the Ask mode as "Ask me", as in the console, and the guardian-hook, guardian-openclaw and Hermes READMEs say the same. Mode values are unchanged. They ship with each package's next release.
+- **"Signed record" in the READMEs.** The guardian-ap2 README, the agent and payment example READMEs and CONTRIBUTING say "signed record" for what Guardian signs, and "result" for AP2 merchant and processor results. Identifiers, API paths, JSON fields, file names and the `greceipt.v1` format are unchanged.
 - **Package descriptions.** The descriptions of `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-steel` and `odingard-guardian` say "record". They ship with each package's next release.
 - **Listings.** `glama.json` names the maintainers of the Glama listing. `.github/workflows/publish-mcp.yml` publishes `packages/mcp/server.json` to the MCP Registry when an `mcp-v<version>` tag is pushed.
 - **Dependency maintenance.** Dependabot checks npm workspaces, the Python package and GitHub Actions weekly, grouping minor/patch updates per ecosystem with a five-PR limit each.
