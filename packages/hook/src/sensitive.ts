@@ -546,9 +546,12 @@ const baseOf = (word: string) =>
 function runsElsewhere(command: string): {
   elsewhere: boolean;
   interpreter: boolean;
+  /** Code given inline to Python, Node and the like (`-c`, `-e` strings). */
+  code: string[];
 } {
   const parsed = parseShell(command);
   let interpreter = false;
+  const code: string[] = [];
   const visit = (p: Parsed, depth: number): boolean => {
     for (const cmd of p.commands) {
       const words = cmd.words.map((w) => w.value);
@@ -559,6 +562,12 @@ function runsElsewhere(command: string): {
       if (switchesHome(bases, words)) return true;
       if (words.some((w) => CHDIR_OPTION.test(w))) return true;
       if (bases.some((b) => INTERPRETER_NAME.test(b))) interpreter = true;
+      const coder = bases.findIndex((b) => CODE_INTERPRETER.test(b));
+      if (coder >= 0) {
+        code.push(...words.slice(coder + 1).filter((w) => /[\s'"(;]/.test(w)));
+        // `python3 - <<EOF … EOF`: the body is code too.
+        if (command.includes("<<")) code.push(command);
+      }
       const git = bases.indexOf("git");
       if (git >= 0 && words.slice(git + 1).some((w) => GIT_HISTORY.has(w))) {
         return true;
@@ -577,7 +586,7 @@ function runsElsewhere(command: string): {
     }
     return false;
   };
-  if (visit(parsed, 0)) return { elsewhere: true, interpreter };
+  if (visit(parsed, 0)) return { elsewhere: true, interpreter, code };
   return {
     elsewhere:
       interpreter &&
@@ -586,8 +595,13 @@ function runsElsewhere(command: string): {
         // Inline code that changes folder (`os.chdir`, `process.chdir`).
         CODE_CHDIR.test(command)),
     interpreter,
+    code,
   };
 }
+
+/** Interpreters whose code builds paths (`os.path.join(home, ".npmrc")`). */
+const CODE_INTERPRETER =
+  /^(?:python[0-9.]*|node|nodejs|deno|bun|ruby|perl|php|lua|osascript|pwsh|powershell)$/;
 
 const CODE_CHDIR =
   /\bchdir\b|\bSet-Location\b|\bPush-Location\b|(?:^|[\s;'"(])cd\s/i;
@@ -621,7 +635,7 @@ export function sensitiveInCommand(
   const dots = DOTGLOB.test(command);
   const found = runsElsewhere(command);
   const elsewhere = folderUnknown || found.elsewhere;
-  const { interpreter } = found;
+
   let bareChecks = 0;
   /**
    * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
@@ -630,9 +644,6 @@ export function sensitiveInCommand(
    */
   const counts = (token: string): boolean => {
     if (elsewhere || /[/\\]/.test(token) || GLOB_CHARS.test(token)) return true;
-    // Interpreter code can build the folder (`path.join(home, ".npmrc")`):
-    // a dot-file name counts there (`obj.key` does not).
-    if (interpreter && token.startsWith(".")) return true;
     if (++bareChecks > MAX_BARE_CHECKS) return true;
     try {
       lstatSync(resolve(cwd, token));
@@ -657,6 +668,15 @@ export function sensitiveInCommand(
   };
   // 1. The raw text, token by token.
   literal(command, false);
+  // Interpreter code can build the folder (`path.join(home, ".npmrc")`):
+  // a dot-file name in it counts (`obj.key` does not start with a dot).
+  for (const text of found.code) {
+    for (const token of text.split(TOKEN_SPLIT)) {
+      if (!token.startsWith(".")) continue;
+      const pattern = matchSensitive(token, config);
+      if (pattern) add({ path: token, pattern });
+    }
+  }
 
   // 2. Each word as the shell would see it.
   const word = (value: string, depth: number) => {

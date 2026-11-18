@@ -426,6 +426,7 @@ describe("shell commands that read a sensitive file", () => {
       "python3 -c \"import os; os.chdir(os.path.expanduser('~')); print(open('.git-credentials').read())\"",
       "node -e \"process.chdir(require('os').homedir()); console.log(require('fs').readFileSync('.npmrc','utf8'))\"",
       "python3 -c \"import os; print(open(os.path.join(os.environ['HOME'], '.pgpass')).read())\"",
+      "python3 - <<'EOF'\nimport os\nprint(open(os.path.join(os.environ['HOME'], '.netrc')).read())\nEOF",
     ]) {
       ask(command, src);
     }
@@ -483,6 +484,9 @@ describe("shell commands that read a sensitive file", () => {
       ["jq .key data.json", "shell"],
       ["yq .data.key values.yaml", "shell"],
       ['node -e "console.log(obj.key)"', "shell"],
+      ["bash -lc 'jq .key data.json'", "shell"],
+      ["python3 gen.py | jq .key", "shell"],
+      ["node build.js && jq .env.FOO cfg.json", "shell"],
       ['git commit -m "fix secret rotation"', "shell"],
       ["gh secret list", "shell"],
       ['git commit -m "fix secret leak in log output"', "shell"],
