@@ -232,11 +232,19 @@ export type GuardianWithdrawResult =
       /**
        * NOT_FOUND (no held request of this agent with that id),
        * ALREADY_DECIDED (with `state`: approved, denied, expired …),
-       * SERVICE_UNAVAILABLE (nothing changed; safe to retry), and others.
+       * SERVICE_UNAVAILABLE (with `outcomeUnknown`), and others.
        */
       reasonCode: string;
       requestId?: string;
       state?: string;
+      /**
+       * Set when no clear answer came back: the connection failed, Guardian
+       * answered 5xx, or an answer could not be read. The request may or may
+       * not have been withdrawn; withdrawing it again with the same
+       * requestId is safe and gives a clear answer. Without it, the failure
+       * is Guardian's refusal and nothing changed.
+       */
+      outcomeUnknown?: true;
     };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -358,6 +366,8 @@ export interface GuardianClient {
    * sees it and it can never be claimed. It takes authority away and runs
    * nothing. Withdrawing again answers "withdrawn" again; a request the
    * person already decided answers ALREADY_DECIDED and nothing changes.
+   * A failure with `outcomeUnknown: true` (no clear answer came back) may
+   * or may not have withdrawn it; retrying with the same requestId is safe.
    * Present on clients from `createGuardianClient`.
    */
   withdraw?(requestId: string): Promise<GuardianWithdrawResult>;
@@ -722,7 +732,15 @@ export function createGuardianClient(
           withdrawnAtEpochMs: data.withdrawnAtEpochMs,
         };
       }
-      // Anything else is not a withdrawal, whatever `ok` says.
+      // Anything else is not a confirmed withdrawal, whatever `ok` says.
+      // A readable refusal (a 2xx to 4xx answer with `ok: false`) says
+      // nothing changed; without one (no answer, a 5xx, an unreadable
+      // answer) Guardian may have withdrawn the request.
+      const definitiveRefusal =
+        response.status >= 200 &&
+        response.status < 500 &&
+        data !== null &&
+        data.ok === false;
       return {
         ok: false,
         reasonCode:
@@ -733,6 +751,7 @@ export function createGuardianClient(
           ? { requestId: data.requestId }
           : {}),
         ...(typeof data?.state === "string" ? { state: data.state } : {}),
+        ...(definitiveRefusal ? {} : { outcomeUnknown: true as const }),
       };
     },
 

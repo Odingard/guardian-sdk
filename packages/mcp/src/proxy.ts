@@ -777,7 +777,9 @@ export function createGovernedProxy(
 
   /**
    * Guardian confirmed the withdrawal: forget the held call (or held setup
-   * step) and any capability kept for it, so no claim here forwards it.
+   * step) and any capability kept for it, so no claim here forwards it, and
+   * the SDK's memory of the held call, so the same call proposed again
+   * becomes a new request instead of claiming the withdrawn one.
    */
   function dropHeld(requestId: string): void {
     withdrawnRequests.add(requestId);
@@ -788,6 +790,11 @@ export function createGovernedProxy(
     }
     pendingCalls.delete(requestId);
     claimedCapabilities.delete(requestId);
+    if (ctx.heldInvocations) {
+      for (const [key, held] of [...ctx.heldInvocations]) {
+        if (held === requestId) ctx.heldInvocations.delete(key);
+      }
+    }
     const installFor = pendingInstalls.get(requestId);
     if (installFor !== undefined) {
       pendingInstalls.delete(requestId);
