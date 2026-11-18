@@ -137,6 +137,8 @@ export type InitIo = Readonly<{
   home: string;
   now(): number;
   runInstall?(command: string, args: readonly string[]): boolean;
+  /** Waits between checks for the person's approval (tests pass a fake). */
+  sleep?(ms: number): Promise<void>;
   client?(baseUrl: string, credential: string): GuardianClient;
   startServer?: typeof startHandoffServer;
 }>;
@@ -436,11 +438,16 @@ export async function runInit(
         client,
         connectionId: handoff.connectionId,
         onWaiting: (requestId) => io.out(INIT_WORDS.testWaiting(requestId)),
+        now: () => io.now(),
+        ...(io.sleep === undefined ? {} : { sleep: io.sleep }),
       });
       if (outcome.kind === "allowed") io.out(INIT_WORDS.testAllowed);
       else if (outcome.kind === "approved") io.out(INIT_WORDS.testApproved);
-      else if (outcome.kind === "expired") io.out(INIT_WORDS.testExpired);
-      else if (outcome.kind === "unknown") {
+      else if (outcome.kind === "expired") {
+        // Nothing was recorded: the setup is not confirmed.
+        io.err(INIT_WORDS.testExpired);
+        return 1;
+      } else if (outcome.kind === "unknown") {
         // It may have been recorded: never sent again.
         io.err(INIT_WORDS.testUnknown(outcome.reasonCode, outcome.requestId));
         return 1;

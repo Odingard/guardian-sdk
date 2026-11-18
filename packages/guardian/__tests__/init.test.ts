@@ -574,6 +574,23 @@ describe("guardian init, end to end with a stand-in browser", () => {
     expect(run.out.some((line) => line.startsWith("Done in"))).toBe(false);
   });
 
+  it("fails when no one approves the held test action in time", async () => {
+    const run = setup(["", ""], {
+      request: {
+        ok: false,
+        reasonCode: "APPROVAL_REQUIRED",
+        requestId: "req_t9",
+      },
+    });
+    const code = await runInit(["--tools", "send_reply"], {
+      ...run.io,
+      sleep: async () => undefined,
+    });
+    expect(code).toBe(1);
+    expect(run.err).toContain(INIT_WORDS.testExpired);
+    expect(run.out.some((line) => line.startsWith("Done in"))).toBe(false);
+  });
+
   it("never sends the test action again when its record is unknown", async () => {
     const run = setup(["", "", ""], {
       request: {
