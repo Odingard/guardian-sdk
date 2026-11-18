@@ -8,8 +8,9 @@
  * GUARDIAN_HOOK_SENSITIVE_MODE=deny the hook refuses it without asking.
  * Ordinary paths are not sent anywhere.
  *
- * Patterns (gitignore-like):
- *   - a pattern without `/` matches the file or folder name (`.env*`);
+ * Patterns:
+ *   - a pattern without `/` matches the last part of the path, the file
+ *     name (`.env*`); `name/**` also covers everything in a folder;
  *   - a pattern with `/` matches the end of the path (`.aws/credentials`);
  *   - `*` and `?` match within one name, `[abc]` one character, `**` any
  *     number of folders (also none);
@@ -52,6 +53,7 @@ export const DEFAULT_SENSITIVE_PATHS: readonly string[] = [
   ".docker/config.json",
   ".config/gh/hosts.yml",
   "*secret*",
+  "secrets/**",
   ".npmrc",
   ".pypirc",
   ".netrc",
@@ -276,7 +278,8 @@ export function checkPath(
   options: PathOptions = {},
 ): SensitiveHit | undefined {
   const asWritten = matchSensitive(path, config);
-  if (asWritten) return { path, pattern: asWritten };
+  // A shell word that names no existing file reads nothing (`jq .key`).
+  if (asWritten && !options.onlyIfExists) return { path, pattern: asWritten };
   if (path === "" || path.includes("\0")) return undefined;
   const expanded = expandTilde(path);
   const absolute = isAbsolute(expanded)
@@ -289,6 +292,7 @@ export function checkPath(
       if (isMissing(err)) return undefined;
       return { path, pattern: UNRESOLVED };
     }
+    if (asWritten) return { path, pattern: asWritten };
   }
   const resolved = matchSensitive(absolute, config);
   if (resolved) return { path, pattern: resolved };
@@ -462,12 +466,21 @@ const MAX_NESTED_DEPTH = 4;
 /** Characters that end a path inside a word (`--file=.env`, `open('.env')`, `@.env`). */
 const TOKEN_SPLIT = /[\s'"`=:,;()<>{}|&@]+/;
 const DOTGLOB = /dotglob|globdots|glob_dots|globignore|\(D/i;
+/**
+ * The command may read files from another folder or machine (`cd`, `git
+ * -C`, `ssh`, `docker exec`): a bare name is checked as written, whether or
+ * not it exists here.
+ */
+const ELSEWHERE =
+  /(?:^|[\s;&|(`])(?:cd|pushd|chdir|ssh|scp|sftp|rsync|docker|podman|nerdctl|kubectl|oc)(?=$|[\s;&|)`])|(?:^|\s)(?:-C|--chdir|--directory|--cwd|--git-dir|--work-tree)(?=$|[\s=])/;
+const MAX_BARE_CHECKS = 512;
 
 /**
  * The sensitive paths a shell command names: in its raw text (also inside
  * here-documents and code given to interpreters), in each word after
  * quotes and escapes are removed, after brace and glob expansion, and
- * through symlinks. A command that builds a path at run time (`$(…)`,
+ * through symlinks. A bare name (`.env`) counts when that file exists in
+ * the working directory or the command may run elsewhere (see ELSEWHERE). A command that builds a path at run time (`$(…)`,
  * `$VAR`) is not seen.
  */
 export function sensitiveInCommand(
@@ -479,6 +492,23 @@ export function sensitiveInCommand(
   const seen = new Set<string>();
   let resolved = 0;
   const dots = DOTGLOB.test(command);
+  const elsewhere = ELSEWHERE.test(command);
+  let bareChecks = 0;
+  /**
+   * A bare name (no `/`, no glob) counts when it names a file: `jq .key`
+   * and a commit message that says "secret" read nothing. It counts when it
+   * exists in the working directory, or when the command may run elsewhere.
+   */
+  const counts = (token: string): boolean => {
+    if (elsewhere || /[/\\]/.test(token) || GLOB_CHARS.test(token)) return true;
+    if (++bareChecks > MAX_BARE_CHECKS) return true;
+    try {
+      lstatSync(resolve(cwd, token));
+      return true;
+    } catch (err) {
+      return !isMissing(err); // cannot tell: count it (fail closed)
+    }
+  };
   const add = (hit: SensitiveHit | undefined) => {
     if (hit && !seen.has(hit.path) && hits.length < MAX_HITS) {
       seen.add(hit.path);
@@ -490,7 +520,7 @@ export function sensitiveInCommand(
     for (const token of whole ? [text, ...tokens] : tokens) {
       if (token === "") continue;
       const pattern = matchSensitive(token, config);
-      if (pattern) add({ path: token, pattern });
+      if (pattern && counts(token)) add({ path: token, pattern });
     }
   };
   // 1. The raw text, token by token.

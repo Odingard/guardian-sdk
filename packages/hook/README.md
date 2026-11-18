@@ -56,11 +56,11 @@ Read, NotebookRead, Grep, Glob and LS go through the hook too. A read of an ordi
 
 The patterns are checked on your machine, deterministically. The defaults:
 
-`.env*` (except `.env.example`, `.env.sample` and `.env.template`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `.aws/sso/cache/**`, `.config/gcloud/**`, `.azure/**`, `.kube/config`, `.docker/config.json`, `.config/gh/hosts.yml`, `*secret*`, `.npmrc`, `.pypirc`, `.netrc`, `.pgpass`, `.git-credentials`, `proc/*/environ`.
+`.env*` (except `.env.example`, `.env.sample` and `.env.template`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `.ssh/**`, `.aws/credentials`, `.aws/sso/cache/**`, `.config/gcloud/**`, `.azure/**`, `.kube/config`, `.docker/config.json`, `.config/gh/hosts.yml`, `*secret*`, `secrets/**`, `.npmrc`, `.pypirc`, `.netrc`, `.pgpass`, `.git-credentials`, `proc/*/environ`.
 
-- A pattern without `/` matches a file or folder name; a pattern with `/` matches the end of the path. `*` and `?` match within a name, `[abc]` one character, `**` any number of folders. Case is ignored.
+- A pattern without `/` matches the last part of the path (the file name); write `name/**` to cover a folder and everything in it. A pattern with `/` matches the end of the path. `*` and `?` match within a name, `[abc]` one character, `**` any number of folders. Case is ignored.
 - A path is checked as written, as an absolute path (`./`, `..` and `~` resolved against the working directory) and, when it exists, with symlinks followed. A path that exists but cannot be resolved counts as sensitive.
-- In a shell command the hook checks every word after quotes and escapes are removed, brace and glob expansion as the shell would do it (`.en?`, `.{e,x}nv`, `*` with `dotglob`), code given to `sh -c`, interpreters and here-documents, and redirections (`< .env`).
+- In a shell command the hook checks every word after quotes and escapes are removed (a bare name such as `.env` counts when that file exists in the working directory, or when the command changes folder or runs elsewhere: `cd`, `git -C`, `ssh`, `docker`), brace and glob expansion as the shell would do it (`.en?`, `.{e,x}nv`, `*` with `dotglob`), code given to `sh -c`, interpreters and here-documents, and redirections (`< .env`).
 - For Grep and Glob, the path and the file filter (`glob`, `pattern`) are checked as written.
 
 You set:

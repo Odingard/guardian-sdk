@@ -139,6 +139,7 @@ describe("the default patterns", () => {
       "/home/u/.kube/config",
       "/home/u/.docker/config.json",
       "/repo/config/secrets.yaml",
+      "/repo/secrets/prod.yml",
       "/repo/client_secret.json",
       "/home/u/.npmrc",
       "/home/u/.netrc",
@@ -294,7 +295,10 @@ describe("shell commands that read a sensitive file", () => {
       "cat notes.txt",
       "cat src/../.env",
       `cat ${dir}/.env`,
-      "cat .ENV",
+      "cd sub && cat .npmrc",
+      "ssh host cat .pgpass",
+      "docker exec app cat /app/.env",
+      "git -C ../other show HEAD:.netrc",
       "python3 -c \"print(open('.env').read())\"",
       "node -e \"console.log(require('fs').readFileSync('.env','utf8'))\"",
       "python3 - <<'EOF'\nprint(open('.env').read())\nEOF",
@@ -346,6 +350,12 @@ describe("shell commands that read a sensitive file", () => {
       ["npm test", "shell"],
       ["git status", "shell"],
       ["cat .env.example", "shell"],
+      ["jq .key data.json", "shell"],
+      ["yq .data.key values.yaml", "shell"],
+      ['node -e "console.log(obj.key)"', "shell"],
+      ['git commit -m "fix secret rotation"', "shell"],
+      ["gh secret list", "shell"],
+      ["cat .npmrc", "shell"], // no such file here: nothing to read
       ["echo $HOME", "shell"],
       ["git push origin main", "git_push"],
       ["terraform apply", "shell_deploy"],
@@ -380,6 +390,13 @@ describe("owner settings", () => {
     );
     expect(matchSensitive("/r/.env.test", extra)).toBeUndefined();
     expect(matchSensitive("/r/.env", extra)).toBe(".env*");
+    // A name pattern matches the file name; `name/**` covers a folder.
+    const vault = sensitiveConfigFromEnv({
+      GUARDIAN_HOOK_SENSITIVE_PATHS: "vault,keys/**",
+    });
+    expect(matchSensitive("/r/vault", vault)).toBe("vault");
+    expect(matchSensitive("/r/vault/token.txt", vault)).toBeUndefined();
+    expect(matchSensitive("/r/keys/token.txt", vault)).toBe("keys/**");
     // `!*` drops every default; later patterns still apply.
     const replaced = sensitiveConfigFromEnv({
       GUARDIAN_HOOK_SENSITIVE_PATHS: "!*,vault.json",
