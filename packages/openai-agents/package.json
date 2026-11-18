@@ -28,11 +28,11 @@
   },
   "peerDependencies": {
     "@odingard/guardian-sdk": "^0.6.0",
-    "@openai/agents": ">=0.21.0 <0.22.0"
+    "@openai/agents": ">=0.21.0 <0.23.0"
   },
   "devDependencies": {
     "@odingard/guardian-sdk": "^0.6.0",
-    "@openai/agents": "0.21.0",
+    "@openai/agents": "0.22.0",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
