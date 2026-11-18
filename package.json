@@ -7,6 +7,7 @@
     "packages/sdk",
     "packages/mcp",
     "packages/hook",
+    "packages/guardian",
     "packages/openclaw",
     "packages/langchain",
     "packages/vercel-ai",

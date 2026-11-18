@@ -1,5 +1,13 @@
 import type { GuardianClient } from "@odingard/guardian-sdk";
 
+import {
+  CANCEL_TOOL,
+  PENDING_TOOL,
+  cancelHeld,
+  heldRequestTools,
+  listHeld,
+} from "./held.js";
+
 /** The tool that fetches Guardian's records for a request id. */
 export const RECORD_TOOL = "guardian_record";
 /**
@@ -138,6 +146,7 @@ export const TOOLS = [
       openWorldHint: false,
     },
   },
+  ...heldRequestTools("dispatch"),
 ];
 
 export type DispatchOptions = Readonly<{
@@ -333,6 +342,10 @@ export async function handleToolCall(
         : { ok: false, reasonCode: result.reasonCode },
     );
   }
+
+  if (name === PENDING_TOOL) return listHeld(client, arguments_);
+
+  if (name === CANCEL_TOOL) return cancelHeld(client, arguments_);
 
   return errorResult(`unknown tool: ${name}`);
 }

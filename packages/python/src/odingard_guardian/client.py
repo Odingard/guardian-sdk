@@ -21,6 +21,9 @@ __all__ = [
     "ExecuteResult",
     "ReceiptsResult",
     "PortableReceiptResult",
+    "HeldRequest",
+    "PendingResult",
+    "WithdrawResult",
     "GuardianClient",
     "AsyncGuardianClient",
     "build_proposal",
@@ -76,6 +79,15 @@ class RequestResult:
     decision: Optional[Decision] = None
     capability_token: Optional[str] = None
     reason_code: Optional[str] = None
+    #: Watch mode, for a request sent with ``watch_aware=True``: the agent
+    #: is in watch mode and Guardian would have asked (``"ASK"``) or denied
+    #: (``"DENY"``) the call under the current rules. It comes with
+    #: ``decision="DENY"`` and ``reason_code="WATCHED"``: Guardian issued no
+    #: capability and performs nothing for the call. The guard runs an
+    #: in-process tool anyway when ``Guard(watch_mode=True)``, because watch
+    #: mode lets the agent's own tools run while Guardian watches. Set only
+    #: on an answer to a request sent with ``watch_aware=True``.
+    watched: Optional[Literal["ASK", "DENY"]] = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +119,53 @@ class ReceiptsResult:
 class PortableReceiptResult:
     ok: bool
     receipt: Optional[Dict[str, Any]] = None
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HeldRequest:
+    """One of the agent's own requests waiting for a person (ASK)."""
+
+    request_id: str
+    action: str
+    #: The tool named in the request (tool.invoke, mcp.enable); else None.
+    tool_name: Optional[str]
+    #: The purpose the agent gave with the request.
+    purpose: str
+    created_at_epoch_ms: int
+    expires_at_epoch_ms: int
+
+
+@dataclass(frozen=True)
+class PendingResult:
+    """Outcome of ``pending``: the agent's held requests, newest to oldest.
+
+    ``next`` is passed as ``before`` for the next page; None on the last
+    page. An answer with an entry this client cannot read is ``ok=False``
+    with ``reason_code="MALFORMED_RESPONSE"``.
+    """
+
+    ok: bool
+    requests: list = field(default_factory=list)
+    next: Optional[str] = None
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class WithdrawResult:
+    """Outcome of ``withdraw``.
+
+    ``ok=True`` means the request is withdrawn (``state="withdrawn"``); a
+    repeat answers the same. Otherwise ``reason_code`` says why nothing
+    changed: ``NOT_FOUND`` (no held request of this agent with that id),
+    ``ALREADY_DECIDED`` (with ``state``: approved, denied, expired …) or
+    ``SERVICE_UNAVAILABLE`` (safe to retry).
+    """
+
+    ok: bool
+    request_id: Optional[str] = None
+    state: Optional[str] = None
+    withdrawn_at_epoch_ms: Optional[int] = None
     reason_code: Optional[str] = None
 
 
@@ -209,7 +268,9 @@ def build_proposal(invocation: Mapping[str, Any]) -> Dict[str, Any]:
     return proposal
 
 
-def _request_result(status: int, data: Any, request_id: Optional[str]) -> RequestResult:
+def _request_result(
+    status: int, data: Any, request_id: Optional[str], asked_for_watch: bool = False
+) -> RequestResult:
     if status >= 500:
         # A server error is Guardian failing to answer, not a decision: the
         # call is still refused (fail closed) but reported as an outage.
@@ -231,13 +292,29 @@ def _request_result(status: int, data: Any, request_id: Optional[str]) -> Reques
     if not isinstance(token, str):
         token = data.get("token") if isinstance(data.get("token"), str) else None
     rid = data.get("requestId")
+    reason = data.get("reasonCode") if isinstance(data.get("reasonCode"), str) else None
     return RequestResult(
         ok=True,
         request_id=rid if isinstance(rid, str) else (request_id or ""),
         decision="ALLOW" if decision is None else decision,
         capability_token=token,
-        reason_code=data.get("reasonCode") if isinstance(data.get("reasonCode"), str) else None,
+        reason_code=reason,
+        # A watched answer counts only when this call asked for it.
+        watched=_watched(data) if asked_for_watch and decision == "DENY" and reason == "WATCHED" else None,
     )
+
+
+def _watched(data: Mapping[str, Any]) -> Optional[Literal["ASK", "DENY"]]:
+    """Watch mode: only an exact ``"ASK"`` or ``"DENY"`` is kept."""
+    watch = data.get("watch")
+    if not isinstance(watch, dict):
+        return None
+    would = watch.get("wouldDecision")
+    if would == "ASK":
+        return "ASK"
+    if would == "DENY":
+        return "DENY"
+    return None
 
 
 def _execute_result(status: int, data: Any) -> ExecuteResult:
@@ -266,6 +343,92 @@ def _receipts_result(status: int, data: Any) -> ReceiptsResult:
     return ReceiptsResult(ok=True, request_id=data.get("requestId"), receipts=data["receipts"])
 
 
+def _refusal_code(status: int, data: Any) -> str:
+    if isinstance(data, dict):
+        for key in ("reasonCode", "code"):
+            if isinstance(data.get(key), str):
+                return data[key]
+    return f"HTTP_{status}"
+
+
+def _is_epoch(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 2**53
+
+
+def _held_request(entry: Any) -> Optional[HeldRequest]:
+    if not isinstance(entry, dict):
+        return None
+    tool_name = entry.get("toolName")
+    if (
+        not isinstance(entry.get("requestId"), str)
+        or not isinstance(entry.get("action"), str)
+        or not (tool_name is None or isinstance(tool_name, str))
+        or not isinstance(entry.get("purpose"), str)
+        or not _is_epoch(entry.get("createdAtEpochMs"))
+        or not _is_epoch(entry.get("expiresAtEpochMs"))
+    ):
+        return None
+    return HeldRequest(
+        request_id=entry["requestId"],
+        action=entry["action"],
+        tool_name=tool_name,
+        purpose=entry["purpose"],
+        created_at_epoch_ms=entry["createdAtEpochMs"],
+        expires_at_epoch_ms=entry["expiresAtEpochMs"],
+    )
+
+
+def _pending_path(limit: Optional[int], before: Optional[str]) -> str:
+    from urllib.parse import urlencode
+
+    query: Dict[str, str] = {"status": "pending"}
+    if limit is not None:
+        query["limit"] = str(limit)
+    if before is not None:
+        query["before"] = before
+    return f"/v1/agent/requests?{urlencode(query)}"
+
+
+def _pending_result(status: int, data: Any) -> PendingResult:
+    if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("requests"), list):
+        return PendingResult(ok=False, reason_code=_refusal_code(status, data))
+    requests = []
+    for entry in data["requests"]:
+        held = _held_request(entry)
+        if held is None:
+            # An entry this client cannot read fails the whole answer closed.
+            return PendingResult(ok=False, reason_code="MALFORMED_RESPONSE")
+        requests.append(held)
+    next_page = data.get("next")
+    return PendingResult(ok=True, requests=requests, next=next_page if isinstance(next_page, str) else None)
+
+
+def _withdraw_result(status: int, data: Any) -> WithdrawResult:
+    if (
+        isinstance(data, dict)
+        and data.get("ok") is True
+        and data.get("state") == "withdrawn"
+        and isinstance(data.get("requestId"), str)
+        and _is_epoch(data.get("withdrawnAtEpochMs"))
+    ):
+        return WithdrawResult(
+            ok=True,
+            request_id=data["requestId"],
+            state="withdrawn",
+            withdrawn_at_epoch_ms=data["withdrawnAtEpochMs"],
+        )
+    # Anything else is not a withdrawal, whatever ``ok`` says.
+    ok_answer = isinstance(data, dict) and data.get("ok") is True
+    request_id = data.get("requestId") if isinstance(data, dict) else None
+    state = data.get("state") if isinstance(data, dict) else None
+    return WithdrawResult(
+        ok=False,
+        reason_code="MALFORMED_RESPONSE" if ok_answer else _refusal_code(status, data),
+        request_id=request_id if isinstance(request_id, str) else None,
+        state=state if isinstance(state, str) else None,
+    )
+
+
 def _portable_result(status: int, data: Any) -> PortableReceiptResult:
     if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("receipt"), dict):
         reason = None
@@ -278,6 +441,7 @@ def _portable_result(status: int, data: Any) -> PortableReceiptResult:
 
 
 _UNAVAILABLE = (0, {"ok": False, "reasonCode": "SERVICE_UNAVAILABLE"})
+_WATCH_AWARE_HEADER = "x-guardian-watch-aware"
 
 
 class _Base:
@@ -305,6 +469,13 @@ class _Base:
         ):
             merged["adapter_id"] = self.adapter_id
         return build_proposal(merged)
+
+    @staticmethod
+    def _watch_headers(invocation: Mapping[str, Any]) -> Dict[str, str]:
+        """Watch mode: ``watch_aware=True`` says this caller handles the
+        watched answer. ``Guard(watch_mode=True)`` sets it for in-process
+        tools; a claim never asks for it."""
+        return {_WATCH_AWARE_HEADER: "1"} if invocation.get("watch_aware") is True else {}
 
     @staticmethod
     def _parse(response: httpx.Response) -> tuple:
@@ -346,12 +517,14 @@ class GuardianClient(_Base):
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _call(self, path: str, body: Any = None, method: str = "POST") -> tuple:
+    def _call(
+        self, path: str, body: Any = None, method: str = "POST", headers: Optional[Mapping[str, str]] = None
+    ) -> tuple:
         try:
             if method == "GET":
                 response = self._http.get(f"{self.base_url}{path}")
             else:
-                response = self._http.post(f"{self.base_url}{path}", json=body)
+                response = self._http.post(f"{self.base_url}{path}", json=body, headers=dict(headers or {}))
         except httpx.HTTPError:
             return _UNAVAILABLE  # fail closed
         return self._parse(response)
@@ -359,8 +532,9 @@ class GuardianClient(_Base):
     def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         """Request a capability. ALLOW → token; ASK → held for a human; DENY → refused."""
         proposal = self._proposal(invocation)
-        status, data = self._call("/v1/agent/requests", proposal)
-        return _request_result(status, data, proposal["requestId"])
+        headers = self._watch_headers(invocation)
+        status, data = self._call("/v1/agent/requests", proposal, headers=headers)
+        return _request_result(status, data, proposal["requestId"], asked_for_watch=bool(headers))
 
     def claim(self, request_id: str) -> RequestResult:
         """Collect the capability after a human approved a prior ASK."""
@@ -383,6 +557,25 @@ class GuardianClient(_Base):
         """The signed ``greceipt.v1`` for a completed request (verify it offline)."""
         status, data = self._call(f"/v1/agent/receipts/{_quote(request_id)}/portable", method="GET")
         return _portable_result(status, data)
+
+    def pending(self, *, limit: Optional[int] = None, before: Optional[str] = None) -> PendingResult:
+        """This agent's own requests waiting for a person (ASK), newest to oldest.
+
+        It reads and changes nothing, and never returns another agent's
+        requests. ``limit`` is 1 to 100 (default 20); pass the previous
+        page's ``next`` as ``before``.
+        """
+        status, data = self._call(_pending_path(limit, before), method="GET")
+        return _pending_result(status, data)
+
+    def withdraw(self, request_id: str) -> WithdrawResult:
+        """Withdraw one of this agent's own held requests.
+
+        The person no longer sees it and it can never be claimed. It takes
+        authority away and runs nothing; a repeat answers "withdrawn" again.
+        """
+        status, data = self._call(f"/v1/agent/requests/{_quote(request_id)}/withdraw", {})
+        return _withdraw_result(status, data)
 
 
 class AsyncGuardianClient(_Base):
@@ -409,20 +602,23 @@ class AsyncGuardianClient(_Base):
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    async def _call(self, path: str, body: Any = None, method: str = "POST") -> tuple:
+    async def _call(
+        self, path: str, body: Any = None, method: str = "POST", headers: Optional[Mapping[str, str]] = None
+    ) -> tuple:
         try:
             if method == "GET":
                 response = await self._http.get(f"{self.base_url}{path}")
             else:
-                response = await self._http.post(f"{self.base_url}{path}", json=body)
+                response = await self._http.post(f"{self.base_url}{path}", json=body, headers=dict(headers or {}))
         except httpx.HTTPError:
             return _UNAVAILABLE  # fail closed
         return self._parse(response)
 
     async def request(self, invocation: Mapping[str, Any]) -> RequestResult:
         proposal = self._proposal(invocation)
-        status, data = await self._call("/v1/agent/requests", proposal)
-        return _request_result(status, data, proposal["requestId"])
+        headers = self._watch_headers(invocation)
+        status, data = await self._call("/v1/agent/requests", proposal, headers=headers)
+        return _request_result(status, data, proposal["requestId"], asked_for_watch=bool(headers))
 
     async def claim(self, request_id: str) -> RequestResult:
         status, data = await self._call("/v1/agent/claims", {"schemaVersion": 1, "requestId": request_id})
@@ -444,6 +640,14 @@ class AsyncGuardianClient(_Base):
             f"/v1/agent/receipts/{_quote(request_id)}/portable", method="GET"
         )
         return _portable_result(status, data)
+
+    async def pending(self, *, limit: Optional[int] = None, before: Optional[str] = None) -> PendingResult:
+        status, data = await self._call(_pending_path(limit, before), method="GET")
+        return _pending_result(status, data)
+
+    async def withdraw(self, request_id: str) -> WithdrawResult:
+        status, data = await self._call(f"/v1/agent/requests/{_quote(request_id)}/withdraw", {})
+        return _withdraw_result(status, data)
 
 
 def _quote(value: str) -> str:

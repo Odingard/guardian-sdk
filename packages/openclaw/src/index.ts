@@ -22,6 +22,8 @@
  *     agentName        [GUARDIAN_HOOK_AGENT_NAME]  label approvers see
  *     approvalTimeoutMs  how long an ASK waits (max and default 300000)
  *     allowTierTools   extra Guardian tool names for the everyday connection
+ *     watchMode        [GUARDIAN_HOOK_WATCH_MODE=on]  watch mode: a call
+ *                      Guardian would have held or denied runs (default off)
  *   plugins.entries.guardian.hooks.timeouts.before_tool_call: 330000
  *
  * Tamper-resistance is a deployment precondition: while the OpenClaw process
