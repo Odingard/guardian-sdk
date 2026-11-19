@@ -52,7 +52,6 @@
     "ai-agents",
     "agent-security",
     "authorization",
-    "human-in-the-loop",
-    "x402"
+    "human-in-the-loop"
   ]
 }
