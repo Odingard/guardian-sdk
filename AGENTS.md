@@ -15,20 +15,20 @@ Guardian is the trust layer for agent commerce. It sits **outside** the model as
 
 Install the narrowest adapter that matches the user's stack:
 
-| Stack / use case                        | Install / run                                                                         |
-| :-------------------------------------- | :------------------------------------------------------------------------------------ |
-| Any MCP server, see its tools (no code) | `npx -y @odingard/guardian-mcp tools -- <server command>`                             |
-| Any MCP server, governed                | `guardian-mcp proxy -- <server command>` (or `--url <https url>` for a remote server) |
-| Coding agents (Claude Code, Codex)      | `npm i -g @odingard/guardian-hook`, then configure it as `skill.md` describes         |
-| LangChain.js / LangGraph                | `npm i @odingard/guardian-langchain`                                                  |
-| Vercel AI SDK                           | `npm i @odingard/guardian-vercel-ai`                                                  |
-| OpenAI Agents SDK                       | `npm i @odingard/guardian-openai-agents`                                              |
-| x402 payments                           | `npm i @odingard/guardian-x402`                                                       |
-| AP2 payments                            | `npm i @odingard/guardian-ap2`                                                        |
-| OpenClaw                                | `npm i @odingard/guardian-openclaw`                                                   |
-| Steel browser checkout                  | `npm i @odingard/guardian-steel`                                                      |
-| Custom JS/TS agent                      | `npm i @odingard/guardian-sdk`                                                        |
-| Custom Python agent                     | `pip install odingard-guardian`                                                       |
+| Stack / use case                        | Install / run                                                                                          |
+| :-------------------------------------- | :----------------------------------------------------------------------------------------------------- |
+| Any MCP server, see its tools (no code) | `npx -y @odingard/guardian-mcp tools -- <server command>`                                              |
+| Any MCP server, governed                | `npx -y @odingard/guardian-mcp proxy -- <server command>` (or `--url <https url>` for a remote server) |
+| Coding agents (Claude Code, Codex)      | `npm i -g @odingard/guardian-hook`, then configure it as `skill.md` describes                          |
+| LangChain.js / LangGraph                | `npm i @odingard/guardian-langchain`                                                                   |
+| Vercel AI SDK                           | `npm i @odingard/guardian-vercel-ai`                                                                   |
+| OpenAI Agents SDK                       | `npm i @odingard/guardian-openai-agents`                                                               |
+| x402 payments                           | `npm i @odingard/guardian-x402`                                                                        |
+| AP2 payments                            | `npm i @odingard/guardian-ap2`                                                                         |
+| OpenClaw                                | `npm i @odingard/guardian-openclaw`                                                                    |
+| Steel browser checkout                  | `npm i @odingard/guardian-steel`                                                                       |
+| Custom JS/TS agent                      | `npm i @odingard/guardian-sdk`                                                                         |
+| Custom Python agent                     | `pip install odingard-guardian`                                                                        |
 
 ## Integration rules
 
@@ -38,5 +38,5 @@ Install the narrowest adapter that matches the user's stack:
    - `ALLOW`: run the action. The SDK guard handles the returned `capabilityToken`; with the raw API, execute with it.
    - `ASK`: stop, keep the `requestId`, and wait for the person to approve; then claim that `requestId`.
    - `DENY`: don't run it, and don't retry with rephrased arguments.
-4. **Try it without an account:** from the repository root run `npm install && npm run build`, then `cd examples` and run `node verify-receipt.mjs` (verifies a real signed decision record offline). `node prompt-injection-deny.mjs` and `node coding-agent-ask.mjs` show DENY and ASK with a local demo policy.
+4. **Try it without an account:** from the repository root run `npm install && npm run build`, then `cd examples` and run `node verify-receipt.mjs` (fetches Guardian's published keys, then verifies a real signed decision record offline; the key fetch needs network). `node prompt-injection-deny.mjs` and `node coding-agent-ask.mjs` show DENY and ASK with a local demo policy.
 5. **Generated files:** don't hand-edit `packages/sdk/src/contracts/`, `packages/sdk/src/evidence/`, any `packages/sdk/src/*.ts` file that starts with `// Generated file — do not edit.`, the catalog JSON or the Steel adapter sources. See `CONTRIBUTING.md`.
