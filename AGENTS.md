@@ -6,7 +6,7 @@ Instructions for coding agents (Claude Code, Cursor, Codex, Grok, OpenClaw) on c
 
 Guardian is the trust layer for agent commerce. It sits **outside** the model as a deterministic policy gate: before a consequential tool call, shell command or payment runs, it answers `ALLOW`, `ASK` or `DENY` from rules the owner sets. It fails closed if it can't be reached, and every decision is a signed record you can verify offline.
 
-- **Product page and free plan:** https://odingard.com/guardian
+- **Product page and free plan** (2 connections, 1 agent, 500 protected actions a month; no card needed): https://odingard.com/guardian
 - **Agent setup guide:** https://odingard.com/guardian/skill.md
 - **Repository:** https://github.com/Odingard/guardian-sdk
 - **Glama MCP listing:** https://glama.ai/mcp/servers/Odingard/guardian-sdk
