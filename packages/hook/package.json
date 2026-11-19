@@ -48,5 +48,16 @@
     "url": "https://github.com/Odingard/guardian-sdk.git",
     "directory": "packages/hook"
   },
-  "homepage": "https://odingard.com/guardian"
+  "homepage": "https://odingard.com/guardian",
+  "keywords": [
+    "guardian",
+    "claude-code",
+    "codex",
+    "claude-code-hooks",
+    "coding-agents",
+    "ai-agents",
+    "agent-security",
+    "authorization",
+    "human-in-the-loop"
+  ]
 }

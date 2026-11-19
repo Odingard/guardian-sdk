@@ -80,7 +80,10 @@
     "payments",
     "ai-agents",
     "authorization",
-    "human-in-the-loop"
+    "human-in-the-loop",
+    "agent-payments",
+    "agent-security",
+    "mcp"
   ],
   "repository": {
     "type": "git",

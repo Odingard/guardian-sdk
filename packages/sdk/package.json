@@ -52,7 +52,9 @@
     "authorization",
     "authority",
     "mcp",
-    "human-in-the-loop"
+    "human-in-the-loop",
+    "agent-security",
+    "agent-payments"
   ],
   "repository": {
     "type": "git",
