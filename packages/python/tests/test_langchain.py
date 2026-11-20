@@ -620,6 +620,42 @@ def test_remote_mode_held_then_approved_is_performed_by_guardian():
     assert json.loads(texts(state)[1])["guardian"]["receipt"]["requestId"] == "req_ask"
 
 
+def test_remote_mode_an_error_after_guardian_was_asked_is_never_reported_as_not_run():
+    def broken_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store down")
+
+    guardian = FakeClient(ALLOW)
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, mode="remote", on_receipt=broken_receipt)
+    state = create_agent(model(CALL), [governed]).invoke(START_INPUT)
+    message = tool_messages(state)[0]
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert "Guardian may have performed it. Do not call it again" in message.content
+    assert message.status == "error"
+    assert message.artifact["guardian"]["reason_code"] == "EXECUTION_OUTCOME_UNKNOWN"
+
+
+async def test_remote_mode_an_error_after_guardian_was_asked_async():
+    def broken_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store down")
+
+    for client in (FakeClient(ALLOW), AsyncFake(FakeClient(ALLOW))):
+        governed = guardian_tool(
+            refund_order_async, client, connection_id=CONNECTION, mode="remote", on_receipt=broken_receipt
+        )
+        out = await governed.ainvoke(CALL[1])
+        assert ran == [] and "Guardian may have performed it. Do not call it again" in out
+
+
+def test_a_generator_tool_is_refused_when_wrapped():
+    def rows(order_id: str):
+        """Yield rows."""
+        yield order_id
+
+    stream = StructuredTool.from_function(rows, name="rows", description="Rows.")
+    with pytest.raises(TypeError, match="generator function"):
+        guardian_tool(stream, FakeClient(ALLOW), connection_id=CONNECTION)
+
+
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError, match="mode"):
         GuardianGate(FakeClient(ALLOW), connection_id=CONNECTION, mode="local")

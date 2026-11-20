@@ -56,7 +56,6 @@ import asyncio
 import copy
 import functools
 import inspect
-import json
 from typing import (
     Annotated,
     Any,
@@ -89,7 +88,9 @@ from ._framework import (
     build_guard,
     decide_and_run,
     decide_and_run_sync,
+    is_stream_function,
     json_record,
+    performed_remotely,
     resolve_tool_name,
 )
 from .client import AsyncGuardianClient, GuardianClient
@@ -280,9 +281,6 @@ class GuardianGate:
             raise ValueError('on_ask takes "result" or "interrupt"')
         if on_ask == "interrupt" and _interrupt is None:
             raise ImportError('on_ask="interrupt" needs langgraph: pip install "odingard-guardian[langchain]"')
-        for value in (mode, *(modes or {}).values()):
-            if value not in ("in_process", "remote"):
-                raise ValueError('mode takes "in_process" or "remote"')
 
         def build(guardian_client: Any) -> Any:
             return build_guard(
@@ -431,15 +429,16 @@ class GuardianGate:
         pair = tool.response_format == "content_and_artifact"
         if outcome.ran and outcome.message is None:
             return output[0]  # the tool's own result
-        if outcome.decision == "ALLOW" and outcome.message is None:
-            # remote: Guardian made the call; its result carries the receipt.
-            result = {"guardian": outcome.info}
-            return (json.dumps(result), result) if pair else result
-        info = outcome.info or {
-            "decision": outcome.decision,
-            "tool_name": name,
-            **({"reason_code": outcome.reason_code} if outcome.reason_code else {}),
-        }
+        info = (outcome.result or {}).get("guardian")
+        if performed_remotely(outcome):
+            # remote: Guardian made the call; the model gets its result, with the receipt.
+            return (outcome.message, outcome.result) if pair else outcome.message
+        if not isinstance(info, dict):
+            info = {
+                "decision": outcome.decision,
+                "tool_name": name,
+                **({"reason_code": outcome.reason_code} if outcome.reason_code else {}),
+            }
         message = outcome.message or f"{name} did not run."
         content: Any = message
         if call_id is not None:
@@ -626,6 +625,15 @@ def _govern(inner: BaseTool, gate: GuardianGate) -> GuardianTool:
         raise TypeError(
             f'"{inner.name}" is a single-string Tool without an args_schema. '
             "Give it an args_schema, or build it with @tool / StructuredTool."
+        )
+    if any(is_stream_function(getattr(inner, name, None)) for name in ("func", "coroutine")) or any(
+        is_stream_function(getattr(type(inner), name, None)) for name in ("_run", "_arun")
+    ):
+        # Calling a generator function runs none of its body, so the call
+        # would be recorded before (or without) the tool running.
+        raise TypeError(
+            f'"{inner.name}" is a generator function. A LangChain tool returns its result; '
+            "collect the items and return them."
         )
     governed = GuardianTool(
         name=inner.name,
