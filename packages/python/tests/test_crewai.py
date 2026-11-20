@@ -32,6 +32,7 @@ from crewai.llms.base_llm import BaseLLM  # noqa: E402
 from crewai.tools import BaseTool, tool  # noqa: E402
 from crewai.tools.tool_failure import ToolExecutionFailedError, ToolFailure  # noqa: E402
 
+import odingard_guardian.crewai as guardian_crewai  # noqa: E402
 from odingard_guardian import ExecuteResult, RequestResult  # noqa: E402
 from odingard_guardian.crewai import GuardianTool, guardian_tool, guardian_tools, kickoff_scope  # noqa: E402
 
@@ -919,3 +920,94 @@ def test_usage_limits_are_counted_per_session():
     session.reset(token)
     assert isinstance(call_as("alice", **other), ToolFailure)
     assert call_as("bob", order_id="o44", amount_cents=1) == "refunded o44"
+
+
+# --- the per-session usage table is bounded and never forgets a budget -------------
+
+
+def _as(user, wrapped, **arguments):
+    token = session.set(user)
+    try:
+        return wrapped._run(**arguments)
+    finally:
+        session.reset(token)
+
+
+def _order(n):
+    return {"order_id": f"o{n}", "amount_cents": 1}
+
+
+def test_a_spent_budget_stays_spent_when_the_usage_table_is_full(monkeypatch):
+    monkeypatch.setattr(guardian_crewai, "_MAX_COUNTED_SCOPES", 2)
+    refund_order.max_usage_count = 1
+    guardian = FakeClient(ALLOW)
+    (wrapped,) = governed(guardian, scope=lambda tool: session.get())
+    assert _as("alice", wrapped, **_order(1)) == "refunded o1"
+    assert _as("bob", wrapped, **_order(2)) == "refunded o2"
+    # The table is full of spent budgets: a further session is refused, nothing is forgotten.
+    refused = _as("carol", wrapped, **_order(3))
+    assert isinstance(refused, ToolFailure) and refused.code == "USAGE_TABLE_FULL"
+    assert "did not run" in refused.message and refused.retryable is False
+    assert _as("dave", wrapped, **_order(4)).code == "USAGE_TABLE_FULL"
+    assert len(wrapped._used) == 2  # bounded
+    # alice's and bob's one use each is still spent.
+    for user in ("alice", "bob"):
+        again = _as(user, wrapped, **_order(5))
+        assert isinstance(again, ToolFailure) and "reached its usage limit of 1" in again.message
+    assert ran == [("o1", 1), ("o2", 1)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"] * 2  # nothing proposed for the refused
+
+
+def test_a_call_in_flight_keeps_its_use_when_the_usage_table_is_full(monkeypatch):
+    monkeypatch.setattr(guardian_crewai, "_MAX_COUNTED_SCOPES", 2)
+    entered, release = threading.Event(), threading.Event()
+
+    @tool("refund_order", max_usage_count=1)
+    def slow(order_id: str, amount_cents: int) -> str:
+        """Refund an order."""
+        if order_id == "o1":
+            entered.set()
+            release.wait(5)
+        ran.append(order_id)
+        return f"refunded {order_id}"
+
+    guardian = SlowExecute(ALLOW)
+    (wrapped,) = governed(guardian, tools=(slow,), scope=lambda tool: session.get())
+    results = {}
+    worker = threading.Thread(target=lambda: results.update(alice=_as("alice", wrapped, **_order(1))))
+    worker.start()
+    assert entered.wait(5)  # alice's call is in flight
+    assert _as("bob", wrapped, **_order(2)) == "refunded o2"
+    assert _as("carol", wrapped, **_order(3)).code == "USAGE_TABLE_FULL"  # alice is not evicted
+    release.set()
+    worker.join(5)
+    assert results["alice"] == "refunded o1"
+    again = _as("alice", wrapped, **_order(4))
+    assert isinstance(again, ToolFailure) and "reached its usage limit of 1" in again.message
+    assert sorted(ran) == ["o1", "o2"]
+
+
+def test_a_reset_or_a_call_that_did_not_happen_frees_its_place_in_the_usage_table(monkeypatch):
+    monkeypatch.setattr(guardian_crewai, "_MAX_COUNTED_SCOPES", 2)
+    refund_order.max_usage_count = 1
+    guardian = FakeClient(ALLOW)
+    (wrapped,) = governed(guardian, scope=lambda tool: session.get())
+    _as("alice", wrapped, **_order(1))
+    _as("bob", wrapped, **_order(2))
+    assert _as("carol", wrapped, **_order(3)).code == "USAGE_TABLE_FULL"
+    # crewAI prepares the tool for alice's next task: her count is released.
+    token = session.set("alice")
+    wrapped.reset_usage_count()
+    session.reset(token)
+    assert _as("carol", wrapped, **_order(3)) == "refunded o3"
+    # The app can release a session that will not come back.
+    wrapped.reset_usage("bob")
+    assert _as("dave", wrapped, **_order(4)) == "refunded o4"
+    assert len(wrapped._used) == 2
+
+    # A refused call gives its use back and does not take a place.
+    denied = FakeClient(DENIED)
+    (other,) = governed(denied, scope=lambda tool: session.get())
+    for user in ("u1", "u2", "u3", "u4"):
+        assert _as(user, other, **_order(9)).code == "POLICY_DENY"
+    assert len(other._used) == 0

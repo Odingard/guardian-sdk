@@ -53,7 +53,6 @@ governed tool; Guardian decides inside the tool, after every before hook.
 from __future__ import annotations
 
 import asyncio
-import collections
 import concurrent.futures
 import contextvars
 import copy
@@ -90,7 +89,9 @@ from .guard import (
 
 __all__ = ["GuardianTool", "guardian_tool", "guardian_tools", "kickoff_scope"]
 
-#: Sessions whose usage count is kept per wrapped tool; the oldest go first.
+#: Sessions whose usage count is kept per wrapped tool at one time. Only
+#: counts above zero are kept, and none is ever dropped to make room: when the
+#: table is full, a call from a further session is refused.
 _MAX_COUNTED_SCOPES = 4096
 
 
@@ -180,7 +181,7 @@ class GuardianTool(BaseTool):
     #: Calls counted against the wrapped tool's ``max_usage_count`` since
     #: crewAI last reset this tool, by scope (session): calls in flight, and
     #: calls that ran. One session cannot spend or reset another's budget.
-    _used: Any = PrivateAttr(default_factory=collections.OrderedDict)
+    _used: Any = PrivateAttr(default_factory=dict)
     _usage_lock: Any = PrivateAttr(default_factory=threading.Lock)
 
     @property
@@ -241,11 +242,34 @@ class GuardianTool(BaseTool):
                     ),
                     reason=ToolFailureReason.USAGE_LIMIT,
                 )
+            if used == 0 and len(self._used) >= _MAX_COUNTED_SCOPES:
+                # Every entry is a spent or in-flight budget of another
+                # session. Forgetting one would let that session pass its
+                # limit, so this call is refused instead.
+                return ToolFailure(
+                    message=(
+                        f"Tool '{self.name}' did not run: its usage limit is counted for too many "
+                        "sessions at once. Do not call it again; tell the user."
+                    ),
+                    reason=ToolFailureReason.USAGE_LIMIT,
+                    code="USAGE_TABLE_FULL",
+                )
             self._used[scope] = used + 1
-            self._used.move_to_end(scope)
-            while len(self._used) > _MAX_COUNTED_SCOPES:
-                self._used.popitem(last=False)
             return None
+
+    def reset_usage(self, scope: Any) -> None:
+        """Start the usage budget of one session again, by its scope.
+
+        ``reset_usage_count()`` does this for the session it is called in.
+        Use this for a session that will not come back (a finished kickoff
+        under :func:`kickoff_scope`, a user who signed out), so that its
+        count no longer takes a place.
+        """
+        try:
+            with self._usage_lock:
+                self._used.pop(scope, None)
+        except TypeError:  # a value that cannot be hashed names no session
+            pass
 
     def _release_use(self, scope: Any) -> None:
         with self._usage_lock:
