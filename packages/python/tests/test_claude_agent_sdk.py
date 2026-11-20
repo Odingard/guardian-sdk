@@ -336,6 +336,35 @@ def test_a_link_whose_own_name_contains_a_backslash(linked):
     lands(str(proj / "c\\d"), proj / ".mcp.json")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a backslash is a separator on Windows")
+@pytest.mark.parametrize("name", ["\\s", "m\\n", "x\\", "y\\\\", "a\\\\b", "\\", "\\\\"])
+def test_a_backslash_anywhere_in_a_links_own_name(linked, name):
+    proj, _hooks, lands = linked
+    # At the start, in the middle, at the end, repeated, or the whole name.
+    target = proj / ".claude" / f"settings.{len(name)}{name.count(chr(92))}.json"
+    os.symlink(str(target), os.path.join(str(proj), name))
+    lands(os.path.join(str(proj), name), target)
+    # A relative path, and a folder link on the way with such a name.
+    relative = proj / ".claude" / "settings.rel.json"
+    os.symlink(str(relative), os.path.join(str(proj), "r" + name))
+    lands("r" + name, relative)
+    os.symlink(str(proj / ".claude"), os.path.join(str(proj), "cfg" + name), target_is_directory=True)
+    lands(os.path.join(str(proj), "cfg" + name, "settings.dir.json"), proj / ".claude" / "settings.dir.json")
+    # A link whose target does not exist yet, inside a linked folder.
+    os.symlink("../../settings.nested.json", os.path.join(str(proj), "d", "n" + name))
+    lands(os.path.join(str(proj), "d", "n" + name), proj / ".claude" / "settings.nested.json")
+    # An ordinary file with such a name stays an ordinary write.
+    plain = governed_call("Write", {"file_path": os.path.join(str(proj), "plain" + name), "content": "x"},
+                          cwd=str(proj))
+    assert plain.tool_name == "file_write"
+
+
+def test_a_backslash_written_as_a_separator_is_still_caught_by_the_text_check():
+    for path in ("/work/.claude\\settings.json", ".claude\\settings.json", "\\work\\.claude\\hooks\\pre.sh",
+                 "/work/.claude\\\\settings.json", "/work/.claude\\"):
+        assert cas.is_agent_config_path(path, "/work"), path
+
+
 def test_an_ordinary_file_reached_through_links_stays_on_file_write(linked):
     proj, _hooks, _lands = linked
     (proj / "src").mkdir()
