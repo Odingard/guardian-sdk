@@ -7,6 +7,9 @@ calling and the text/ReAct path) are crewAI's own.
 
 import json
 import os
+import threading
+import time
+import types
 import warnings
 from typing import List
 
@@ -28,7 +31,7 @@ from crewai.llms.base_llm import BaseLLM  # noqa: E402
 from crewai.tools import BaseTool, tool  # noqa: E402
 from crewai.tools.tool_failure import ToolExecutionFailedError, ToolFailure  # noqa: E402
 
-from odingard_guardian import RequestResult  # noqa: E402
+from odingard_guardian import ExecuteResult, RequestResult  # noqa: E402
 from odingard_guardian.crewai import GuardianTool, guardian_tool, guardian_tools  # noqa: E402
 
 from test_guard import ALLOW, CONNECTION, HELD, AsyncFake, FakeClient  # noqa: E402
@@ -64,7 +67,13 @@ class ScriptedLLM(BaseLLM):
     def call(self, messages, tools=None, callbacks=None, available_functions=None, **kwargs):
         self.messages = [dict(m) for m in messages]
         if self._calls:
-            name, args = self._calls.pop(0)
+            turn = self._calls.pop(0)
+            if isinstance(turn, list):  # several native tool calls in one model turn
+                return [
+                    {"id": f"call_{i}", "type": "function", "function": {"name": n, "arguments": json.dumps(a)}}
+                    for i, (n, a) in enumerate(turn)
+                ]
+            name, args = turn
             if self._native:
                 call = {"name": name, "arguments": json.dumps(args)}
                 return [{"id": f"call_{len(self._calls)}", "type": "function", "function": call}]
@@ -423,18 +432,17 @@ def test_remote_mode_an_unverified_send_is_a_failure_not_a_result():
 
 
 @BOTH
-def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_did_not_run(path):
+def test_remote_mode_a_raising_on_receipt_keeps_guardians_verified_result(path):
     def broken_receipt(tool_name, request_id, receipt):
         raise RuntimeError("receipt store is down")
 
     guardian = FakeClient(ALLOW)
     llm, output = run([CALL], governed(guardian, mode="remote", on_receipt=broken_receipt), path)
     assert ran == [] and guardian.calls == ["request:tool.invoke", "execute:req_allow"]
-    text = llm.results()[0]
-    assert "Guardian may have performed it. Do not call it again" in text
-    assert "did not run" not in text
-    assert output.tasks_output[0].tool_failures[0].failure.code == "EXECUTION_OUTCOME_UNKNOWN"
-    assert not output.tasks_output[0].tool_failures[0].failure.retryable
+    answer = json.loads(llm.results()[0])["guardian"]
+    assert answer["decision"] == "ALLOW" and answer["receipt"]["status"] == "sent-verified"
+    assert "did not run" not in llm.results()[0]
+    assert not output.tasks_output[0].tool_failures
 
 
 def test_remote_mode_a_client_that_raises_is_reported_as_unknown():
@@ -442,8 +450,12 @@ def test_remote_mode_a_client_that_raises_is_reported_as_unknown():
         def execute(self, *, request_id, capability_token):
             raise ConnectionError("network down")
 
-    llm, _ = run([CALL], governed(Broken(ALLOW), mode="remote"))
-    assert ran == [] and "Guardian may have performed it" in llm.results()[0]
+    llm, output = run([CALL], governed(Broken(ALLOW), mode="remote"))
+    assert ran == []
+    assert "Guardian may have performed it. Do not call it again" in llm.results()[0]
+    assert "did not run" not in llm.results()[0]
+    failure = output.tasks_output[0].tool_failures[0].failure
+    assert failure.code == "EXECUTION_OUTCOME_UNKNOWN" and failure.retryable is False
 
 
 def test_a_mistyped_mode_is_refused():
@@ -520,7 +532,7 @@ def test_a_held_call_does_not_spend_the_tools_usage_limit():
     refund_order.max_usage_count = 1
     guardian = FakeClient(HELD, claims=[APPROVED])
     llm, _ = run([CALL, CALL, CALL], governed(guardian))
-    assert ran == [("o42", 500)] and refund_order.current_usage_count == 1
+    assert ran == [("o42", 500)]
     # The third call is over the limit: nothing is proposed for it.
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
     assert "reached its usage limit of 1" in llm.results()[2]
@@ -651,3 +663,129 @@ def test_a_copy_keeps_the_guardian_client_and_the_held_requests():
     wrapped.run(order_id="o42", amount_cents=500)
     assert copy.deepcopy(wrapped).run(order_id="o42", amount_cents=500) == "refunded o42"
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
+
+
+# --- a call that ran is never retryable, and never runs again by itself ------------
+
+
+def test_a_call_that_ran_is_not_retryable_when_guardian_could_not_record_it():
+    class LostRedemption(FakeClient):
+        def execute(self, *, request_id, capability_token):
+            self.calls.append(f"execute:{request_id}")
+            return ExecuteResult(ok=False, reason_code="SERVICE_UNAVAILABLE")
+
+        def receipts(self, request_id):
+            return types.SimpleNamespace(ok=True, receipts=[{"state": "aborted"}])
+
+    guardian = LostRedemption(ALLOW)
+    llm, output = run([CALL], governed(guardian))
+    assert ran == [("o42", 500)]
+    failure = output.tasks_output[0].tool_failures[0].failure
+    assert failure.code == "SERVICE_UNAVAILABLE" and failure.details["guardian"]["local_effect_ran"]
+    assert failure.retryable is False
+    assert "Do not call it again" in llm.results()[0]
+
+
+@BOTH
+def test_a_raising_on_receipt_does_not_make_a_recorded_call_run_again(path):
+    def broken_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store is down")
+
+    guardian = FakeClient(ALLOW)
+    llm, output = run([CALL], governed(guardian, on_receipt=broken_receipt), path)
+    assert ran == [("o42", 500)]  # once: crewAI is not handed an error to retry
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert llm.results() == ["refunded o42"]
+    assert not output.tasks_output[0].tool_failures
+
+
+@BOTH
+def test_an_error_after_the_tool_ran_is_reported_as_ran_and_never_retried(path):
+    class Broken(FakeClient):
+        def execute(self, *, request_id, capability_token):
+            self.calls.append(f"execute:{request_id}")
+            raise ConnectionError("network down")
+
+    guardian = Broken(ALLOW)
+    errors = []
+    llm, output = run([CALL], governed(guardian, on_execution_error=errors.append), path)
+    assert ran == [("o42", 500)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert "refund_order ran, but Guardian could not confirm that it recorded it" in llm.results()[0]
+    assert "Do not call it again" in llm.results()[0]
+    failure = output.tasks_output[0].tool_failures[0].failure
+    assert failure.code == "EXECUTION_OUTCOME_UNKNOWN" and failure.retryable is False
+    assert errors and errors[0].local_effect_ran and errors[0].outcome_unknown
+
+
+# --- usage limits: concurrent calls, and a fresh budget per task -------------------
+
+
+class SlowExecute(FakeClient):
+    """Guardian takes a moment to perform a call, so parallel calls overlap."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = threading.Lock()
+
+    def request(self, invocation):
+        with self._lock:
+            return super().request(invocation)
+
+    def execute(self, *, request_id, capability_token):
+        time.sleep(0.2)
+        with self._lock:
+            return super().execute(request_id=request_id, capability_token=capability_token)
+
+
+def test_parallel_remote_calls_cannot_exceed_the_usage_limit():
+    refund_order.max_usage_count = 1
+    guardian = SlowExecute(ALLOW)
+    other = ("refund_order", {"order_id": "o43", "amount_cents": 700})
+    llm, _ = run([[CALL, other]], governed(guardian, mode="remote"))
+    assert guardian.calls.count("execute:req_allow") == 1
+    assert sum("reached its usage limit of 1" in text for text in llm.results()) == 1
+
+
+def test_parallel_in_process_calls_cannot_exceed_the_usage_limit():
+    @tool("refund_order", max_usage_count=1)
+    def slow(order_id: str, amount_cents: int) -> str:
+        """Refund an order."""
+        time.sleep(0.2)
+        ran.append(order_id)
+        return f"refunded {order_id}"
+
+    guardian = SlowExecute(ALLOW)
+    other = ("refund_order", {"order_id": "o43", "amount_cents": 700})
+    run([[CALL, other]], governed(guardian, tools=(slow,)))
+    assert len(ran) == 1 and guardian.calls.count("execute:req_allow") == 1
+
+
+@pytest.mark.parametrize("mode", ["in_process", "remote"])
+@BOTH
+def test_each_task_and_each_kickoff_gets_a_fresh_usage_budget(path, mode):
+    refund_order.max_usage_count = 1
+    guardian = FakeClient(ALLOW)
+    tools = governed(guardian, mode=mode)
+    other = ("refund_order", {"order_id": "o43", "amount_cents": 700})
+
+    # Two tasks in one kickoff, one call each.
+    llm = ScriptedLLM([CALL], native=path == NATIVE)
+    llm2 = ScriptedLLM([other], native=path == NATIVE)
+    first = Agent(role="billing", goal="refund orders", backstory="b", llm=llm, tools=tools)
+    second = Agent(role="billing two", goal="refund orders", backstory="b", llm=llm2, tools=tools)
+    tasks = [
+        Task(description="refund order 42", expected_output="done", agent=first),
+        Task(description="refund order 43", expected_output="done", agent=second),
+    ]
+    Crew(agents=[first, second], tasks=tasks).kickoff()
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"] * 2
+
+    # The next kickoff with the same wrapped tools.
+    llm3, _ = run([CALL, other], tools, path)
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"] * 3
+    assert "reached its usage limit of 1" in llm3.results()[1]  # the second call of that task
+
+    (wrapped,) = tools
+    wrapped.reset_usage_count()
+    assert not isinstance(wrapped.run(order_id="o44", amount_cents=1), ToolFailure)

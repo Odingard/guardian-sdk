@@ -74,7 +74,7 @@ from ._framework import (
     unchecked,
 )
 from .client import AsyncGuardianClient
-from .guard import Guard, GuardianExecutionFailed, Mode
+from .guard import EXECUTION_OUTCOME_UNKNOWN, Guard, GuardianExecutionFailed, Mode, execution_failed_message
 
 __all__ = ["GuardianTool", "guardian_tool", "guardian_tools"]
 
@@ -86,10 +86,6 @@ class _Ran:
 
     def __init__(self, value: Any) -> None:
         self.value = value
-
-
-class _UsageLimitReached(Exception):
-    """The wrapped tool's ``max_usage_count`` is spent. Nothing ran."""
 
 
 class _CacheGate:
@@ -152,7 +148,10 @@ class GuardianTool(BaseTool):
     _guard: Optional[Guard] = PrivateAttr(default=None)
     _guardian_name: str = PrivateAttr(default="")
     _on_approval_pending: Optional[Callable[[str, str], Any]] = PrivateAttr(default=None)
-    _inner_usage_lock: Any = PrivateAttr(default_factory=threading.Lock)
+    #: Calls counted against the wrapped tool's ``max_usage_count`` since
+    #: crewAI last reset this tool: calls in flight, and calls that ran.
+    _used: int = PrivateAttr(default=0)
+    _usage_lock: Any = PrivateAttr(default_factory=threading.Lock)
 
     @property
     def guardian_tool_name(self) -> str:
@@ -162,6 +161,14 @@ class GuardianTool(BaseTool):
     def __deepcopy__(self, memo: Optional[Dict[int, Any]] = None) -> "GuardianTool":
         # A copy keeps the same Guardian client, held requests and wrapped tool.
         return self.model_copy()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "current_usage_count" and value == 0:
+            # crewAI resets a tool's count when it prepares the tool for a task
+            # (and in reset_usage_count()): the budget starts again.
+            with self._usage_lock:
+                self._used = 0
 
     def _bind(self, args: tuple, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """Positional arguments (a direct ``tool.run("x")``) by schema field order, validated."""
@@ -175,22 +182,42 @@ class GuardianTool(BaseTool):
         record.update(kwargs)
         return self._validate_kwargs(record)
 
-    def _usage_limit(self) -> Optional[ToolFailure]:
-        inner = self._inner
-        limit = getattr(inner, "max_usage_count", None)
-        if limit is None or getattr(inner, "current_usage_count", 0) < limit:
-            return None
-        return ToolFailure(
-            message=f"Tool '{self.name}' has reached its usage limit of {limit} times and cannot be used anymore.",
-            reason=ToolFailureReason.USAGE_LIMIT,
-        )
+    def _reserve_use(self) -> Optional[ToolFailure]:
+        """Take one use of the wrapped tool's ``max_usage_count``, or say it is spent.
 
-    def _claim_inner_usage(self) -> None:
-        """Count a run of the wrapped tool against its ``max_usage_count``."""
-        with self._inner_usage_lock:
-            if self._usage_limit() is not None:
-                raise _UsageLimitReached()
-            self._inner.current_usage_count += 1  # type: ignore[union-attr]
+        Taken before Guardian is asked, in one step with the check, so calls
+        that run at the same time cannot pass the limit together. A call that
+        ends without the action having happened gives its use back.
+        """
+        limit = getattr(self._inner, "max_usage_count", None)
+        with self._usage_lock:
+            if limit is not None and self._used >= limit:
+                return ToolFailure(
+                    message=(
+                        f"Tool '{self.name}' has reached its usage limit of {limit} times "
+                        "and cannot be used anymore."
+                    ),
+                    reason=ToolFailureReason.USAGE_LIMIT,
+                )
+            self._used += 1
+            return None
+
+    def _release_use(self) -> None:
+        with self._usage_lock:
+            self._used = max(0, self._used - 1)
+
+    def _report_unconfirmed(self, tool_name: str) -> ToolFailure:
+        """The tool ran, and what Guardian did afterwards is not known."""
+        err = GuardianExecutionFailed(
+            tool_name, "", EXECUTION_OUTCOME_UNKNOWN, local_effect_ran=True, outcome_unknown=True
+        )
+        hook = self._guard._on_execution_error if self._guard is not None else None
+        if hook is not None:
+            try:
+                hook(err)
+            except Exception:  # noqa: BLE001 - the hook only observes
+                pass
+        return _failure(execution_failed_message(err), EXECUTION_OUTCOME_UNKNOWN)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         guard, inner, tool_name = self._guard, self._inner, self._guardian_name
@@ -211,51 +238,71 @@ class GuardianTool(BaseTool):
                 "proposed and did not run.",
                 "ARGUMENTS_NOT_READABLE",
             )
-        spent = self._usage_limit()
+        spent = self._reserve_use()
         if spent is not None:
             return spent  # nothing is proposed for a tool that may not run
+        used = False  # whether this call keeps its use: the action happened, or may have
+        try:
+            result, used = self._governed(guard, inner, tool_name, proposed, decided)
+            return result
+        except BaseException:
+            used = True  # only the wrapped tool's own error leaves _governed
+            raise
+        finally:
+            if not used:
+                self._release_use()
 
-        started = False
+    def _governed(
+        self, guard: Guard, inner: BaseTool, tool_name: str, proposed: Dict[str, Any], decided: Dict[str, Any]
+    ) -> Any:
+        """One governed call: ``(tool result, whether the action happened or may have)``."""
+        remote = guard._opts.mode_for(tool_name) == "remote"
+        started = finished = False
 
         def body() -> Any:
-            nonlocal started
-            self._claim_inner_usage()
+            nonlocal started, finished
             started = True
             # The wrapped tool's own _run, with the arguments Guardian decided
             # on: nothing validates or changes them again on the way.
-            return _Ran(_finish(inner._run(**decided)))
+            value = _Ran(_finish(inner._run(**decided)))
+            finished = True
+            return value
 
         try:
             out = guard.run(tool_name, proposed, body)
-        except _UsageLimitReached:
-            return self._usage_limit() or _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE")
         except Exception:
+            if finished:
+                # The tool ran to its end and the error came afterwards, while
+                # Guardian was recording it. Raising would make crewAI report a
+                # tool error, and on the text path call the tool again.
+                _logger.warning("Guardian could not confirm the record of %s; it ran", tool_name, exc_info=True)
+                return self._report_unconfirmed(tool_name), True
             if started:
                 raise  # the tool's own error: crewAI reports it to the model
-            if guard._opts.mode_for(tool_name) == "remote":
+            if remote:
                 # The wrapped tool never starts for a remote tool, so the error
-                # may have come after Guardian performed the call (a raising
-                # on_receipt, for example). Never tell the model it did not run.
+                # may have come after Guardian performed the call. Never tell
+                # the model it did not run.
                 _logger.warning(
                     "Guardian call for remote tool %s raised; it may have been performed", tool_name, exc_info=True
                 )
                 unknown = outcome_unknown(tool_name)
-                return _failure(unknown.message or "", unknown.reason_code or "EXECUTION_OUTCOME_UNKNOWN")
+                return _failure(unknown.message or "", unknown.reason_code or EXECUTION_OUTCOME_UNKNOWN), True
             _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
-            return _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE", retryable=True)
+            return _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE", retryable=True), False
         if isinstance(out, _Ran):
-            return out.value
+            return out.value, True
         info = out.get("guardian") if isinstance(out, dict) else None
         if not isinstance(info, dict):  # pragma: no cover - Guard results always carry it
-            return _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE", retryable=True)
+            if started or remote:
+                return _failure(outcome_unknown(tool_name).message or "", EXECUTION_OUTCOME_UNKNOWN), True
+            return _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE", retryable=True), False
         message = info.get("message")
+        decision = info.get("decision")
         if message is None:
             # Remote mode: Guardian performed the call. Its answer, with the
             # receipt, is the tool result.
-            with self._inner_usage_lock:
-                inner.current_usage_count += 1
-            return json.dumps(out, sort_keys=True, default=str)
-        decision = info.get("decision")
+            return json.dumps(out, sort_keys=True, default=str), True
         if decision == "ASK":
             request_id = info.get("request_id")
             if self._on_approval_pending is not None and request_id:
@@ -263,9 +310,14 @@ class GuardianTool(BaseTool):
                     self._on_approval_pending(tool_name, request_id)
                 except Exception:  # noqa: BLE001 - the callback only observes
                     _logger.warning("on_approval_pending raised for %s", tool_name, exc_info=True)
-            return _failure(message, "APPROVAL_REQUIRED", retryable=True, guardian=info)
+            return _failure(message, "APPROVAL_REQUIRED", retryable=True, guardian=info), False
         code = str(info.get("reason_code") or decision or "DENY")
-        return _failure(message, code, retryable=code == "SERVICE_UNAVAILABLE", guardian=info)
+        if decision != "DENY":
+            # Allowed, then it ran or may have run but could not be confirmed:
+            # never retryable, whatever the reason code. Only a file check that
+            # refused before the tool started ("not_run") gives the use back.
+            return _failure(message, code, guardian=info), info.get("outcome") != "not_run"
+        return _failure(message, code, retryable=code == "SERVICE_UNAVAILABLE", guardian=info), False
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """``await tool.arun(...)``: the same governed call, in a worker thread."""
@@ -361,7 +413,9 @@ def guardian_tools(
     :param on_approval_pending: ``callback(tool_name, request_id)`` when a
         call is held, so the app can show the request to a person. Errors it
         raises are ignored.
-    :param on_receipt / on_execution_error: as for :class:`Guard`.
+    :param on_receipt / on_execution_error: as for :class:`Guard`. Errors
+        ``on_receipt`` raises are logged and ignored: the call is recorded by
+        then.
     """
     if isinstance(client, AsyncGuardianClient) or inspect.iscoroutinefunction(getattr(client, "request", None)):
         raise TypeError("use a GuardianClient (sync): crewAI calls tools synchronously")
@@ -369,6 +423,16 @@ def guardian_tools(
     for value in (mode, *(modes or {}).values()):
         if value not in ("in_process", "remote"):
             raise ValueError('mode takes "in_process" or "remote"')
+
+    def receipt_recorded(tool_name: str, request_id: str, receipt: Optional[Dict[str, Any]]) -> None:
+        # The call ran (or Guardian performed it) and is recorded by now. An
+        # error in the app's callback must not turn that into a tool error:
+        # crewAI would tell the model the call failed, and may call it again.
+        try:
+            on_receipt(tool_name, request_id, receipt)  # type: ignore[misc]
+        except Exception:  # noqa: BLE001 - the callback only observes
+            _logger.warning("on_receipt raised for %s (request %s)", tool_name, request_id, exc_info=True)
+
     guard = Guard(
         client,
         connection_id=connection_id,
@@ -380,7 +444,7 @@ def guardian_tools(
         on_ask="result",
         on_deny="result",
         on_execution_failed="result",
-        on_receipt=on_receipt,
+        on_receipt=receipt_recorded if on_receipt is not None else None,
         on_execution_error=on_execution_error,
         amount_args=amount_args,
     )
