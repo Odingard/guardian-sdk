@@ -23,6 +23,7 @@ Install the narrowest adapter that matches the user's stack:
 | LangChain.js / LangGraph                | `npm i @odingard/guardian-langchain`                                                                   |
 | Vercel AI SDK                           | `npm i @odingard/guardian-vercel-ai`                                                                   |
 | OpenAI Agents SDK                       | `npm i @odingard/guardian-openai-agents`                                                               |
+| Mastra (TypeScript)                     | `@odingard/guardian-mastra` (unreleased: not on npm yet; build it from this repository, `packages/mastra`) |
 | x402 payments                           | `npm i @odingard/guardian-x402`                                                                        |
 | AP2 payments                            | `npm i @odingard/guardian-ap2`                                                                         |
 | OpenClaw                                | `npm i @odingard/guardian-openclaw`                                                                    |
