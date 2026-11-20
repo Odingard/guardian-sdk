@@ -51,6 +51,9 @@ jobs:
       - name: Microsoft Agent Framework and Semantic Kernel (Python 3.11+)
         if: matrix.python-version == '3.13'
         run: pip install "agent-framework-core==1.26.0" "semantic-kernel==1.47.0"
+      - name: Google ADK (Python 3.11+)
+        if: matrix.python-version == '3.13'
+        run: pip install "google-adk==2.15.0"
       - run: python -m pytest -q
       - name: Build and check Python distributions
         if: matrix.python-version == '3.13'
@@ -61,3 +64,6 @@ jobs:
           python scripts/check-dist.py
       - name: Python example runs (local demo policy)
         run: python ../../examples/python/invoice_agent.py > /dev/null
+      - name: Google ADK example runs (local demo policy)
+        if: matrix.python-version == '3.13'
+        run: python ../../examples/python/google_adk_agent.py > /dev/null
