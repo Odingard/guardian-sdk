@@ -31,6 +31,8 @@ test = ["pytest>=8; python_version < '3.10'", "pytest>=9.2.0; python_version >= 
 # 1.26.0 and semantic-kernel 1.47.0.
 agent-framework = ["agent-framework-core>=1.26,<2"]
 semantic-kernel = ["semantic-kernel>=1.47,<2"]
+# Python 3.10+ (the SDK's own minimum). Tested with claude-agent-sdk 0.2.186.
+claude-agent-sdk = ["claude-agent-sdk>=0.2.186,<0.3"]
 
 # Hermes Agent discovers this as the plugin "guardian"; it stays off until
 # listed in Hermes' plugins.enabled.
