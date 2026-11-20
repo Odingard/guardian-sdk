@@ -12,6 +12,13 @@
 - **Python**: `GuardianClient.pending(limit=None, before=None)` and `GuardianClient.withdraw(request_id)`, and the same on `AsyncGuardianClient`, with `HeldRequest`, `PendingResult` and `WithdrawResult` (`outcome_unknown=True` when no clear answer to a withdrawal comes back, as in TypeScript).
 - guardian-mcp 0.6.0 needs the `@odingard/guardian-sdk` release that adds these methods; with an earlier SDK both tools answer `NOT_SUPPORTED` and change nothing.
 
+### Added: a time limit and an abort signal for Guardian calls
+
+- **`@odingard/guardian-sdk`**: `withRequestTimeout(clientConfig, { timeoutMs?, signal? })` and `createTimeoutFetch({ timeoutMs?, signal?, fetch? })`, with `GUARDIAN_DEFAULT_CALL_TIMEOUT_MS` (15,000), `GUARDIAN_MAX_CALL_TIMEOUT_MS` and the type `GuardianTimeoutOptions`. `createGuardianClient(withRequestTimeout({ baseUrl, credential }, { timeoutMs: 10_000 }))` gives a client whose every HTTP call ends after the time limit at the latest, reading the answer included, and at once when the signal aborts. Without it the client sets no time limit, as before.
+  - An ended call is reported as an unreachable Guardian is. `request` and `claim` answer `SERVICE_UNAVAILABLE` (or `HTTP_<status>` when the answer started and could not be read to its end): `createGuard` and the adapters refuse the call, nothing runs, and a held request stays held. `execute` answers `outcomeUnknown: true`: the guard looks the request up on a new time limit, and if that does not settle it the call throws `GuardianExecutionFailed` with `outcomeUnknown: true`. `withdraw` answers `outcomeUnknown: true`.
+  - The limit is per HTTP call, not per guarded tool call, and it does not limit your own function or the time a person takes to approve. A `request` that is not answered in time may still be held by Guardian; `client.pending()` lists it.
+  - A `timeoutMs` that is not a whole number from 1 to 2,147,483,647 throws a `RangeError` when the client config is built.
+
 ## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions

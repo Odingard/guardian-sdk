@@ -268,6 +268,42 @@ await purchase({ sku: "mug-1", amount: 2000 }); // $20.00
 - `readToolAmount(declaration, args)` and `ToolAmountDeclarationSchema` (from `@odingard/guardian-sdk/contracts`) are the reader and the schema Guardian uses.
 - Supported in `@odingard/guardian-sdk` 0.6.0, `@odingard/guardian-mcp` 0.5.0, `@odingard/guardian-langchain` 0.6.0, `@odingard/guardian-vercel-ai` 0.6.0 and `@odingard/guardian-openai-agents` 0.4.0. Through any other integration or an earlier version (guardian-hook, OpenClaw, x402, AP2, the Python SDK 0.4.0 and earlier), a tool with an amount set in the console is refused. The Python SDK in this repository adds `amount_args` (not yet released).
 
+## A time limit and an abort signal for Guardian calls (unreleased)
+
+`createGuardianClient` sets no time limit of its own: a Guardian call that is never answered waits for as long as the connection stays open. The client takes a `fetch`, and `withRequestTimeout` bounds it:
+
+```ts
+import {
+  createGuardianClient,
+  withRequestTimeout,
+} from "@odingard/guardian-sdk";
+
+const client = createGuardianClient(
+  withRequestTimeout(
+    {
+      baseUrl: "https://guardian-api.odingard.com",
+      credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
+    },
+    { timeoutMs: 10_000, signal: shutdown.signal }, // both optional
+  ),
+);
+```
+
+Every HTTP call the client makes then ends after `timeoutMs` at the latest (default 15,000), reading the answer included, and at once when `signal` aborts. `createTimeoutFetch({ timeoutMs, signal, fetch })` returns the bounded `fetch` itself, for a transport of your own. The client reports an ended call as it reports an unreachable Guardian:
+
+| Call                                       | When it is not answered in time, or is aborted                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `request`, `claim`                         | `{ ok: false, reasonCode: "SERVICE_UNAVAILABLE" }` (`HTTP_<status>` when the answer started and could not be read to its end). `createGuard` and the adapters refuse the call and nothing runs. A held request stays held: the same call made again claims it.                                                                                         |
+| `execute`                                  | `{ ok: false, outcomeUnknown: true }`: it was sent, and Guardian may have redeemed the capability. `createGuard` and the adapters then look the request up, on a new time limit. A verified attempt is the result; an attempt that was not sent is a failure; otherwise the call throws `GuardianExecutionFailed` with `outcomeUnknown: true`. Do not retry that as a new request. |
+| `withdraw`                                 | `{ ok: false, outcomeUnknown: true }`; withdrawing again with the same `requestId` is safe.                                                                                                                                                                                                                                                      |
+| `receipts`, `portableReceipt`, `pending`   | `{ ok: false }`.                                                                                                                                                                                                                                                                                                                                 |
+
+What it does not do:
+
+- The limit is per HTTP call, not per guarded tool call, which makes several (the request, the redemption, and a lookup after a lost answer).
+- It does not limit your own function, or how long a person takes to approve: a held request is answered at once and claimed later.
+- A `request` that is not answered in time is refused locally, but Guardian may have received it and may hold it for a person. The SDK does not know its outcome and proposes a new request on a retry; `client.pending()` lists what is held and `client.withdraw(requestId)` withdraws one.
+
 ## What the agent can and cannot do
 
 - The agent only ever holds a scoped, revocable agent credential (`gak_…`).
