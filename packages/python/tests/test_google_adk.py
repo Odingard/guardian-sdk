@@ -1189,3 +1189,260 @@ async def test_a_sub_agent_governed_only_by_its_own_callback_asks_again_per_agen
     await harness.send()
     assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
     assert ran == []
+
+
+# --- task-mode sub-agents: a delegation that skips ADK's tool step ---------------
+#
+# ADK turns a ``mode="task"`` sub-agent into a marker tool. The model's call of
+# it is dispatched by ADK's agent wrapper, not by the tool step, so no
+# before-tool callback runs for it. Guardian's plugin decides it when the
+# sub-agent is about to start (``before_agent_callback``).
+
+DELEGATE = ("refunder", {"request": "refund o42"})
+FINISH = ("finish_task", {"result": "refunded"})
+
+
+class ByTool(FakeClient):
+    """Answers per Guardian tool name; ALLOW for the rest."""
+
+    def __init__(self, answers, **options):
+        super().__init__(ALLOW, **options)
+        self.answers = answers
+        self.tools = []
+
+    def request(self, invocation):
+        super().request(invocation)
+        self.tools.append(invocation["tool_name"])
+        return self.answers.get(invocation["tool_name"], ALLOW)
+
+
+def task_team(guardian_plugins, root_turns, inner_turns=(CALL, FINISH), **root_options):
+    inner = LlmAgent(name="refunder", mode="task", model=scripted(*inner_turns), tools=[refund_order])
+    harness = Harness(scripted(*root_turns), guardian_plugins, tools=(lookup_order,), sub_agents=[inner], **root_options)
+    return harness, inner
+
+
+def texts(events):
+    return [part.text for event in events for part in (event.content.parts if event.content else []) if part.text]
+
+
+async def test_an_allowed_task_delegation_is_decided_once_and_the_sub_agents_tools_too():
+    guardian = ByTool({})
+    harness, _ = task_team([plugin(guardian)], [DELEGATE])
+    await harness.send()
+    assert ran == [("o42", 500)]
+    # The delegation is proposed with the arguments the model wrote, and
+    # recorded when the sub-agent starts; then each of its tool calls.
+    assert guardian.tools == ["refunder", "refund_order", "finish_task"]
+    assert guardian.calls == [
+        "request:tool.invoke",
+        "execute:req_allow",
+        "request:tool.invoke",
+        "execute:req_allow",
+        "request:tool.invoke",
+        "execute:req_allow",
+    ]
+    assert harness.model.results() == [{"result": "refunded"}]
+
+
+async def test_the_delegation_is_proposed_with_the_models_arguments():
+    class Recording(ByTool):
+        def request(self, invocation):
+            if invocation["tool_name"] == "refunder":
+                self.delegation = invocation["arguments"]
+            return super().request(invocation)
+
+    guardian = Recording({})
+    harness, _ = task_team([plugin(guardian)], [DELEGATE])
+    await harness.send()
+    assert guardian.delegation == {"request": "refund o42"}
+
+
+async def test_a_denied_task_delegation_does_not_start_the_sub_agent():
+    guardian = ByTool({"refunder": DENIED})
+    harness, inner = task_team([plugin(guardian)], [DELEGATE])
+    events = await harness.send()
+    assert ran == []
+    assert guardian.tools == ["refunder"]  # the sub-agent's model and tools never ran
+    assert len(inner.model.turns) == 2
+    assert any("Guardian denied refunder (POLICY_DENY)" in text for text in texts(events))
+
+    # The delegation is answered with the refusal, so the next turn does not
+    # start it again and the coordinator's model is told.
+    await harness.send(user("and now?"))
+    assert ran == [] and guardian.tools == ["refunder"]
+    refusal = harness.model.results()[0]
+    assert "Guardian denied refunder (POLICY_DENY)" in refusal["error"]
+    assert refusal["guardian"]["decision"] == "DENY"
+
+
+async def test_a_denied_task_delegation_in_a_mixed_turn_does_not_start_the_sub_agent():
+    guardian = ByTool({"refunder": DENIED})
+    harness, inner = task_team([plugin(guardian)], [[("lookup_order", {"order_id": "o1"}), DELEGATE]])
+    await harness.send()
+    assert ("o42", 500) not in ran
+    assert len(inner.model.turns) == 2
+    assert guardian.tools.count("refunder") == 1  # decided once, wherever ADK routes the call
+    assert "refund_order" not in guardian.tools
+
+
+async def test_an_allowed_task_delegation_in_a_mixed_turn_is_decided_once():
+    guardian = ByTool({})
+    harness, _ = task_team([plugin(guardian)], [[("lookup_order", {"order_id": "o1"}), DELEGATE]])
+    await harness.send()
+    assert ("o42", 500) in ran
+    assert guardian.tools.count("refunder") == 1
+
+
+async def test_a_held_task_delegation_starts_after_approval_in_its_own_session_only():
+    guardian = ByTool({"refunder": HELD}, claims=[APPROVED])
+    pending = []
+    governed = plugin(guardian, on_approval_pending=lambda tool, request_id: pending.append((tool, request_id)))
+    harness, inner = task_team([governed], [DELEGATE])
+    events = await harness.send()
+    assert ran == [] and len(inner.model.turns) == 2
+    assert pending == [("refunder", "req_ask")]
+    assert any("held for human approval (request_id req_ask)" in text for text in texts(events))
+    assert guardian.calls == ["request:tool.invoke"]
+
+    # Another user's session makes the same delegation: a request of its own.
+    other = await harness.runner.session_service.create_session(app_name="billing_app", user_id="bob")
+    harness.model.turns.append([DELEGATE])
+    async for _ in harness.runner.run_async(user_id="bob", session_id=other.id, new_message=user()):
+        pass
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+
+    # The person approved. The first session's next turn resumes the held
+    # delegation: it claims the approved request and the sub-agent runs once.
+    await harness.send(user("approved, go on"))
+    assert guardian.calls[2:4] == ["claim:req_ask", "execute:req_ask"]
+    assert ran == [("o42", 500)]
+    assert guardian.tools.count("refunder") == 2  # one proposal per session, none after the claim
+
+
+async def test_a_held_task_delegation_that_is_not_approved_yet_stays_held():
+    guardian = ByTool({"refunder": HELD})
+    harness, inner = task_team([plugin(guardian)], [DELEGATE])
+    await harness.send()
+    await harness.send(user("go on"))
+    assert ran == [] and len(inner.model.turns) == 2
+    assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
+
+
+async def test_a_task_delegation_fails_closed_when_guardian_is_unreachable():
+    guardian = ByTool({"refunder": UNREACHABLE})
+    harness, inner = task_team([plugin(guardian)], [DELEGATE])
+    events = await harness.send()
+    assert ran == [] and len(inner.model.turns) == 2
+    assert any("could not be reached to check refunder" in text for text in texts(events))
+
+
+async def test_a_task_delegation_fails_closed_when_the_client_raises():
+    class Broken(ByTool):
+        def request(self, invocation):
+            raise ConnectionError("network down")
+
+    harness, inner = task_team([plugin(Broken({}))], [DELEGATE])
+    events = await harness.send()
+    assert ran == [] and len(inner.model.turns) == 2
+    assert any("Guardian could not check refunder" in text for text in texts(events))
+
+
+async def test_a_task_delegation_that_cannot_be_recorded_does_not_start():
+    class Unredeemable(ByTool):
+        def execute(self, *, request_id, capability_token):
+            self.calls.append(f"execute:{request_id}")
+            return ExecuteResult(ok=False, reason_code="CAPABILITY_REVOKED")
+
+    guardian = Unredeemable({})
+    harness, inner = task_team([plugin(guardian)], [DELEGATE])
+    events = await harness.send()
+    assert ran == [] and len(inner.model.turns) == 2
+    assert guardian.tools == ["refunder"]
+    assert any("did not start" in text and "CAPABILITY_REVOKED" in text for text in texts(events))
+
+
+async def test_remote_mode_refuses_a_task_delegation():
+    guardian = ByTool({})
+    harness, inner = task_team([plugin(guardian, modes={"refunder": "remote"})], [DELEGATE])
+    events = await harness.send()
+    assert ran == [] and guardian.calls == [] and len(inner.model.turns) == 2
+    assert any("remote" in text and "did not start" in text for text in texts(events))
+
+
+async def test_a_task_sub_agent_that_asks_the_user_is_decided_once_across_turns():
+    guardian = ByTool({})
+    inner_turns = [[], CALL, FINISH]  # first turn: a question to the user, no tool call
+    harness, inner = task_team([plugin(guardian)], [DELEGATE], inner_turns=inner_turns)
+    await harness.send()
+    assert ran == []
+    await harness.send(user("order o42, the full amount"))
+    assert ran == [("o42", 500)]
+    assert guardian.tools.count("refunder") == 1
+
+
+async def test_the_agent_level_callback_refuses_an_agent_with_task_sub_agents():
+    # Without the plugin on the App, a task delegation never reaches the
+    # agent's before-tool callback, so it cannot be governed that way.
+    guardian = ByTool({})
+    callback = plugin(guardian).agent_before_tool_callback
+    harness, _ = task_team([], [("lookup_order", {"order_id": "o1"})], before_tool_callback=callback)
+    await harness.send()
+    assert ran == [] and guardian.calls == []
+    result = harness.model.results()[0]
+    assert result["guardian"]["reason_code"] == "TASK_DELEGATION_NOT_GOVERNED"
+    assert "plugins=[" in result["error"]
+
+
+async def test_a_single_turn_sub_agent_is_a_tool_call_and_is_decided():
+    def team(guardian):
+        inner = LlmAgent(name="refunder", mode="single_turn", model=scripted(CALL), tools=[refund_order])
+        return Harness(scripted(DELEGATE), [plugin(guardian)], tools=(), sub_agents=[inner])
+
+    denied = ByTool({"refunder": DENIED})
+    harness = team(denied)
+    await harness.send()
+    assert ran == [] and denied.tools == ["refunder"]
+    assert "Guardian denied refunder" in text_of(harness.model.results()[0])
+
+    allowed = ByTool({})
+    await team(allowed).send()
+    assert ran == [("o42", 500)]
+    assert allowed.tools == ["refunder", "refund_order"]
+
+
+async def test_a_task_agent_with_a_parent_and_no_delegation_call_is_refused():
+    class Parent:
+        name = "pipeline"
+
+    class TaskAgent:
+        name = "refunder"
+        mode = "task"
+        parent_agent = Parent()
+
+    class NoCall:
+        isolation_scope = None
+
+    guardian = FakeClient(ALLOW)
+    content = await plugin(guardian).before_agent_callback(agent=TaskAgent(), callback_context=NoCall())
+    assert guardian.calls == []
+    assert "refunder did not start" in content.parts[0].text
+
+
+async def test_other_agent_runs_pass_the_before_agent_hook_without_a_decision():
+    guardian = FakeClient(DENIED)
+    harness = Harness(scripted(), [plugin(guardian)])
+    events = await harness.send()
+    assert texts(events) == ["done"] and guardian.calls == []
+
+
+async def test_the_agent_level_callback_does_not_see_a_turn_that_only_delegates():
+    # A documented limit of agent_before_tool_callback: without the plugin on
+    # the App, ADK starts the task-mode sub-agent with no Guardian check.
+    guardian = ByTool({"refunder": DENIED})
+    callback = plugin(guardian).agent_before_tool_callback
+    harness, _ = task_team([], [DELEGATE], before_tool_callback=callback)
+    await harness.send()
+    assert guardian.calls == []
+    assert ran == [("o42", 500)]
