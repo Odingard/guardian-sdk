@@ -654,6 +654,86 @@ describe('guardianTool onAsk: "suspend"', () => {
     ).rejects.toBeInstanceOf(GuardianApprovalPending);
   });
 
+  it("the arguments kept for a suspended call are dropped after 24 hours when the run is never resumed", async () => {
+    vi.useFakeTimers();
+    try {
+      let generated = 0;
+      let seq = 0;
+      const request = vi.fn(async () => ({
+        ok: true,
+        decision: "ASK",
+        requestId: `req_${++seq}`,
+      }));
+      const claim = vi.fn(async (requestId: string) => ({
+        ok: false,
+        requestId,
+        reasonCode: "APPROVAL_PENDING",
+      }));
+      const wrapped = guardianTool(
+        createTool({
+          id: "refund_order",
+          description: "Refund an order",
+          inputSchema: z.object({
+            orderId: z.string(),
+            reference: z.string().default(() => `ref_${++generated}`),
+          }),
+          execute: async () => ({ refunded: "o" }),
+        }),
+        {
+          client: stubClient({ request: request as never, claim: claim as never }),
+          connectionId: "con_1",
+          mode: "inProcess",
+          onAsk: "suspend",
+        },
+      );
+      const suspend = vi.fn().mockResolvedValue(undefined);
+      const first = (runId: string) =>
+        call(
+          wrapped,
+          { orderId: "o", reference: `first_${runId}` },
+          { runId, agent: { toolCallId: "call_1", suspend } },
+        );
+      const resume = (runId: string, requestId: string) =>
+        call(
+          wrapped,
+          { orderId: "o" },
+          {
+            runId,
+            agent: {
+              toolCallId: "call_1",
+              suspend,
+              resumeData: {},
+              suspendPayload: { guardian: { requestId } },
+            },
+          },
+        );
+
+      await first("run_a"); // req_1, never resumed in time
+      vi.advanceTimersByTime(23 * 60 * 60 * 1000);
+      await first("run_b"); // req_2: run_a is 23 hours old and is kept
+      await resume("run_a", "req_1");
+      // Kept: the resumed call claims req_1 on the first call's arguments.
+      expect(claim).toHaveBeenLastCalledWith("req_1");
+      expect(request).toHaveBeenCalledTimes(2);
+
+      // run_a was suspended again by that resume; now it is abandoned.
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+      await first("run_c"); // req_3: everything older than 24 hours goes
+      claim.mockClear();
+      await resume("run_a", "req_1");
+      // Dropped: the stored arguments are parsed again, a new reference is
+      // generated, and the call is proposed as a new request.
+      expect(claim).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(
+        (request.mock.calls[3] as unknown as [{ arguments: unknown }])[0]
+          .arguments,
+      ).toEqual({ orderId: "o", reference: "ref_1" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses a tool that declares its own suspend or resume schema", () => {
     const inner = createTool({
       id: "ask_user",
@@ -667,5 +747,71 @@ describe('guardianTool onAsk: "suspend"', () => {
       TypeError,
     );
     expect(() => guardianTool(inner, options)).not.toThrow();
+  });
+});
+
+describe("guardianTool abort after a setup step held by an earlier call", () => {
+  it("an abort while Guardian decides the tool call rejects, and a late ALLOW runs nothing and redeems nothing", async () => {
+    // `mcp.install` is held until approved, `mcp.enable` is already done,
+    // and the tool call's own decision waits for `decide`.
+    let approved = false;
+    let decide!: (value: unknown) => void;
+    const decision = new Promise((resolve) => (decide = resolve));
+    const request = vi.fn(async (input: { action: string }) => {
+      if (input.action === "mcp.install") {
+        return { ok: true, requestId: "req_setup", decision: "ASK" };
+      }
+      if (input.action === "mcp.enable") {
+        return { ok: false, reasonCode: "TOOL_ALREADY_ENABLED" };
+      }
+      return decision;
+    });
+    const claim = vi.fn(async (requestId: string) =>
+      approved
+        ? allow(requestId, "cap_setup")
+        : { ok: false, requestId, reasonCode: "APPROVAL_PENDING" },
+    );
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const run = vi.fn();
+    const wrapped = guardianTool(refundTool(run), {
+      client: stubClient({
+        request: request as never,
+        claim: claim as never,
+        execute,
+      }),
+      connectionId: "con_1",
+      mode: "inProcess",
+      installRecordTransport: true,
+    });
+    const input = { orderId: "o", amount: 1 };
+    // Call 1: the registration step is held for approval.
+    await expect(call(wrapped, input)).rejects.toBeInstanceOf(
+      GuardianApprovalPending,
+    );
+    approved = true;
+    // Call 2 claims and executes the approved step, then asks for the tool.
+    const controller = new AbortController();
+    const second = call(wrapped, input, {
+      abortSignal: controller.signal,
+    }).then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "tool.invoke" }),
+      ),
+    );
+    controller.abort(new Error("cancelled by caller"));
+    expect(await second).toBe("cancelled by caller");
+    decide(allow("req_tool", "cap_tool"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
+    // Only the setup step was executed.
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith({
+      requestId: "req_setup",
+      capabilityToken: "cap_setup",
+    });
   });
 });

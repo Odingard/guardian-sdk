@@ -87,6 +87,14 @@ function isResuming(context: ToolContext | undefined): boolean {
 }
 
 /**
+ * How long the arguments of a suspended call are kept for its resume. A
+ * request Guardian holds stays open for at most 5 minutes
+ * (`GUARDIAN_MAX_REQUEST_TTL_MS`), so a run resumed a day later has no held
+ * request left to claim with them.
+ */
+const SUSPENDED_KEPT_MS = 24 * 60 * 60 * 1000;
+
+/**
  * One suspended tool call of one agent run. Mastra gives both ids to the
  * first call and to the resumed one; without them nothing is remembered.
  */
@@ -202,7 +210,23 @@ function wrapWithContext<T extends MastraTool>(
 
   // Calls this wrapper suspended for a held request (onAsk "suspend"): the
   // arguments Guardian was asked about, kept until the run resumes.
-  const suspended = new Map<string, { requestId: string; input: unknown }>();
+  // A run that is never resumed (the request was denied or expired) would
+  // keep its entry for the life of the process, so each new entry removes
+  // the ones older than SUSPENDED_KEPT_MS. The map is in insertion order,
+  // oldest first.
+  const suspended = new Map<
+    string,
+    { requestId: string; input: unknown; at: number }
+  >();
+  const keepSuspended = (key: string, requestId: string, input: unknown) => {
+    const now = Date.now();
+    for (const [oldKey, entry] of suspended) {
+      if (now - entry.at <= SUSPENDED_KEPT_MS) break;
+      suspended.delete(oldKey);
+    }
+    suspended.delete(key);
+    suspended.set(key, { requestId, input, at: now });
+  };
 
   const execute: Execute = async (received, context) => {
     const toolContext = context as ToolContext | undefined;
@@ -291,6 +315,8 @@ function wrapWithContext<T extends MastraTool>(
               return output;
             },
           ),
+        // So a setup step held by an earlier call is not taken for the tool.
+        ctx,
       );
     } catch (err) {
       if (err instanceof InputRefusedByTool) {
@@ -311,7 +337,7 @@ function wrapWithContext<T extends MastraTool>(
             },
           };
           if (key !== undefined) {
-            suspended.set(key, { requestId: err.requestId, input: err.input });
+            keepSuspended(key, err.requestId, err.input);
           }
           await suspend(payload);
           return undefined;

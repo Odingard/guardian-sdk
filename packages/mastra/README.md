@@ -173,7 +173,11 @@ if (run.finishReason === "suspended") {
   current time): Mastra hands a resumed tool the model's unparsed
   arguments, and parsing them again would give other values. In another
   process the arguments are parsed again, so such a tool gets a new request
-  there.
+  there. They are kept for 24 hours and removed when the run resumes; a run
+  that is never resumed has its entry removed the next time a call of that
+  tool is suspended after those 24 hours. A request Guardian holds stays
+  open for at most 5 minutes, so nothing a pending approval needs is
+  dropped. There is no cap on the number of entries within the 24 hours.
 - A tool that declares its own `suspendSchema` or `resumeSchema` cannot be
   wrapped with `onAsk: "suspend"` (wrapping it throws): Mastra would validate
   Guardian's suspend payload against the tool's schema. Use `"throw"` or
