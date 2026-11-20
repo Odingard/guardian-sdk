@@ -167,6 +167,13 @@ if (run.finishReason === "suspended") {
   `guardianTools` call. A run resumed in another process, or after a
   restart, proposes the call again as a new request, which Guardian decides
   again.
+- The resumed call runs on the arguments Guardian was asked about, kept in
+  memory for that run and tool call. This matters for a schema that
+  generates a value while parsing (a default such as a new id or the
+  current time): Mastra hands a resumed tool the model's unparsed
+  arguments, and parsing them again would give other values. In another
+  process the arguments are parsed again, so such a tool gets a new request
+  there.
 - A tool that declares its own `suspendSchema` or `resumeSchema` cannot be
   wrapped with `onAsk: "suspend"` (wrapping it throws): Mastra would validate
   Guardian's suspend payload against the tool's schema. Use `"throw"` or
@@ -194,6 +201,12 @@ still asks Guardian, and the tool does not run on `ASK` or `DENY`.
   value you pass, and the tool's own schema parses it when the tool runs. If
   the schema refuses it, the body does not run, the capability is not
   redeemed, and you get Mastra's validation error.
+- Mastra also checks a call's request context (`requestContextSchema`) and
+  resume data (`resumeSchema`) before the tool body. A call those checks
+  refuse gets Mastra's validation error and Guardian is not asked. If they
+  only start refusing after Guardian's answer, the body does not run and the
+  capability is not redeemed. An output the tool's `outputSchema` refuses
+  comes after the body ran, so that call is recorded.
 - The input must be plain data (it is copied with `structuredClone`).
 
 ### Abort

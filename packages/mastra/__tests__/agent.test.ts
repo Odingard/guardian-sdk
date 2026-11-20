@@ -410,6 +410,47 @@ describe('onAsk: "suspend" in a Mastra Agent', () => {
     expect(guardian.redeemed).toEqual(["req_1"]);
   });
 
+  it("a schema that generates a value (a dynamic default): the resumed run claims the approved request and runs on the approved arguments", async () => {
+    const guardian = fakeGuardian(() => "ASK");
+    let generated = 0;
+    const { agent, body } = setup(
+      guardian,
+      [[toolCall("call_1", "refund", { orderId: "ord_9" })], [say("Refunded.")]],
+      { onAsk: "suspend" },
+      undefined,
+      ((run: (input: unknown, context: unknown) => unknown) =>
+        createTool({
+          id: "refund_order",
+          description: "Refund an order",
+          inputSchema: z.object({
+            orderId: z.string(),
+            reference: z.string().default(() => `ref_${++generated}`),
+          }),
+          execute: async (input, context) => run(input, context) as never,
+        })) as never,
+    );
+    const first = await agent.generate("Refund order ord_9");
+    expect(first.finishReason).toBe("suspended");
+    const approvedArguments = guardian.requests[0]!.arguments;
+    expect(approvedArguments).toMatchObject({
+      orderId: "ord_9",
+      reference: expect.stringMatching(/^ref_/),
+    });
+
+    guardian.approve("req_1");
+    const done = await agent.resumeGenerate(
+      {},
+      { runId: first.runId!, toolCallId: "call_1" },
+    );
+    expect(done.text).toBe("Refunded.");
+    // One request, one claim, one run, on the arguments the person approved.
+    expect(guardian.request).toHaveBeenCalledTimes(1);
+    expect(guardian.claim).toHaveBeenCalledTimes(1);
+    expect(body).toHaveBeenCalledTimes(1);
+    expect(body.mock.calls[0]![0]).toEqual(approvedArguments);
+    expect(guardian.redeemed).toEqual(["req_1"]);
+  });
+
   it("a request the person denied does not run on resume", async () => {
     const guardian = fakeGuardian(() => "ASK");
     const { agent, body } = setup(

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTool, isValidationError, Tool } from "@mastra/core/tools";
+import { RequestContext } from "@mastra/core/request-context";
 import { z } from "zod";
 
 import {
@@ -416,6 +417,103 @@ describe("guardianTool inProcess mode", () => {
     expect(isValidationError(out)).toBe(true);
     expect(run).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("a request context the tool's schema refuses: Guardian is not asked, the body does not run, nothing is recorded", async () => {
+    const run = vi.fn();
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const onReceipt = vi.fn();
+    const inner = createTool({
+      id: "refund_order",
+      description: "Refund an order",
+      inputSchema: z.object({ orderId: z.string() }),
+      requestContextSchema: z.object({ tenantId: z.string() }),
+      execute: async (input) => run(input) as never,
+    });
+    const wrapped = guardianTool(inner, {
+      ...options(stubClient({ request, execute })),
+      onReceipt,
+    });
+    const out = await call(wrapped, { orderId: "ord_9" });
+    expect(isValidationError(out)).toBe(true);
+    // The same answer the unwrapped tool gives.
+    expect(out).toEqual(await call(inner, { orderId: "ord_9" }));
+    expect(run).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(onReceipt).not.toHaveBeenCalled();
+  });
+
+  it("a request context that stops passing while Guardian decides: the body does not run and nothing is recorded", async () => {
+    const run = vi.fn();
+    const requestContext = new RequestContext<{ tenantId?: string }>();
+    requestContext.set("tenantId", "t_1");
+    const request = vi.fn(async () => {
+      requestContext.delete("tenantId");
+      return allow();
+    });
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const onReceipt = vi.fn();
+    const wrapped = guardianTool(
+      createTool({
+        id: "refund_order",
+        description: "Refund an order",
+        inputSchema: z.object({ orderId: z.string() }),
+        requestContextSchema: z.object({ tenantId: z.string() }),
+        execute: async (input) => run(input) as never,
+      }),
+      {
+        ...options(stubClient({ request: request as never, execute })),
+        onReceipt,
+      },
+    );
+    const out = await call(wrapped, { orderId: "ord_9" }, { requestContext });
+    expect(isValidationError(out)).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(onReceipt).not.toHaveBeenCalled();
+  });
+
+  it("resume data the tool's resumeSchema refuses: Guardian is not asked, the body does not run, nothing is recorded", async () => {
+    const run = vi.fn();
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(
+      createTool({
+        id: "refund_order",
+        description: "Refund an order",
+        inputSchema: z.object({ orderId: z.string() }),
+        resumeSchema: z.object({ confirmed: z.boolean() }),
+        execute: async (input) => run(input) as never,
+      }),
+      options(stubClient({ request, execute })),
+    );
+    const out = await call(
+      wrapped,
+      { orderId: "ord_9" },
+      { resumeData: { confirmed: "yes" } },
+    );
+    expect(isValidationError(out)).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("an output the tool's outputSchema refuses: the body ran, so the call is recorded", async () => {
+    const run = vi.fn().mockReturnValue({ refunded: 7 });
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({ request: vi.fn().mockResolvedValue(allow()), execute }),
+      ),
+    );
+    const out = await call(wrapped, { orderId: "o", amount: 1 });
+    expect(isValidationError(out)).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("the tool's own error propagates and nothing is redeemed", async () => {

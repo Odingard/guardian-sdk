@@ -1,4 +1,5 @@
 import {
+  createTool,
   isValidationError,
   validateToolInput,
   type Tool,
@@ -50,18 +51,26 @@ export type MastraTool = Tool<any, any, any, any, any, any, any>;
 
 type ToolContext = {
   abortSignal?: AbortSignal;
+  runId?: unknown;
   suspend?: Suspend;
   resumeData?: unknown;
-  agent?: { suspend?: Suspend; resumeData?: unknown };
+  suspendPayload?: unknown;
+  agent?: {
+    suspend?: Suspend;
+    resumeData?: unknown;
+    suspendPayload?: unknown;
+    toolCallId?: unknown;
+  };
   workflow?: { suspend?: Suspend; resumeData?: unknown };
 };
 type Suspend = (payload: unknown, options?: unknown) => Promise<unknown>;
 type Execute = (input: unknown, context?: unknown) => Promise<unknown>;
 
 /**
- * The wrapped tool refused the approved input with its own input
- * validation, so its `execute` body did not run. Thrown inside the triad's
- * runner so the capability is not redeemed and no record says the tool ran.
+ * The wrapped tool refused the call with a check Mastra makes before the
+ * tool's `execute` body (its input, request context or resume data), so the
+ * body did not run. Thrown inside the triad's runner so the capability is
+ * not redeemed and no record says the tool ran.
  */
 class InputRefusedByTool extends Error {
   constructor(readonly result: unknown) {
@@ -75,6 +84,30 @@ function isResuming(context: ToolContext | undefined): boolean {
       context?.agent?.resumeData ??
       context?.workflow?.resumeData) != null
   );
+}
+
+/**
+ * One suspended tool call of one agent run. Mastra gives both ids to the
+ * first call and to the resumed one; without them nothing is remembered.
+ */
+function suspensionKey(context: ToolContext | undefined): string | undefined {
+  const runId = context?.runId;
+  const toolCallId = context?.agent?.toolCallId;
+  return typeof runId === "string" &&
+    runId.length > 0 &&
+    typeof toolCallId === "string" &&
+    toolCallId.length > 0
+    ? JSON.stringify([runId, toolCallId])
+    : undefined;
+}
+
+/** The request id in the suspend payload Mastra hands a resumed call. */
+function suspendedRequestId(context: ToolContext | undefined): unknown {
+  const payload = (context?.agent?.suspendPayload ?? context?.suspendPayload) as
+    | { guardian?: { requestId?: unknown } }
+    | null
+    | undefined;
+  return payload?.guardian?.requestId;
 }
 
 function suspendOf(context: ToolContext | undefined): Suspend | undefined {
@@ -135,23 +168,82 @@ function wrapWithContext<T extends MastraTool>(
     );
   }
 
+  // The checks Mastra makes before a tool's body, other than its input:
+  // the request context against `requestContextSchema`, and resume data
+  // against `resumeSchema`. A tool with the same id and those two schemas,
+  // and no body of its own, answers whether the wrapped tool would refuse a
+  // call with this context before its body runs. It gets a copy of the
+  // context, so the original keeps Mastra's "input already parsed" mark.
+  const contextSchemas = inner as unknown as {
+    requestContextSchema?: unknown;
+    resumeSchema?: unknown;
+  };
+  const probe =
+    contextSchemas.requestContextSchema === undefined &&
+    contextSchemas.resumeSchema === undefined
+      ? undefined
+      : (createTool({
+          id: toolName,
+          description: "",
+          requestContextSchema: contextSchemas.requestContextSchema as never,
+          resumeSchema: contextSchemas.resumeSchema as never,
+          execute: async () => undefined,
+        }) as unknown as { execute: Execute });
+  const refusedBeforeBody = async (context: unknown): Promise<unknown> => {
+    if (probe === undefined) return undefined;
+    const answer = await probe.execute(
+      undefined,
+      context === undefined || context === null
+        ? undefined
+        : { ...(context as object) },
+    );
+    return isValidationError(answer) ? answer : undefined;
+  };
+
+  // Calls this wrapper suspended for a held request (onAsk "suspend"): the
+  // arguments Guardian was asked about, kept until the run resumes.
+  const suspended = new Map<string, { requestId: string; input: unknown }>();
+
   const execute: Execute = async (received, context) => {
     const toolContext = context as ToolContext | undefined;
+    // A call the tool would refuse for its request context or resume data
+    // is answered as the tool answers it: Guardian is not asked.
+    const refusedContext = await refusedBeforeBody(context);
+    if (refusedContext !== undefined) {
+      return refusedContext;
+    }
     let input = received;
+    const key = suspensionKey(toolContext);
     if (isResuming(toolContext)) {
-      // A resumed Mastra run hands the tool the model's stored arguments
-      // without parsing them again. Parse them here, as the first call's
-      // were, so Guardian sees the same arguments both times and the held
-      // request is claimed instead of a new one being opened.
-      const parsed = validateToolInput(
-        source.inputSchema as never,
-        received,
-        toolName,
-      );
-      if (parsed.error) {
-        return parsed.error;
+      const kept = key === undefined ? undefined : suspended.get(key);
+      if (
+        kept !== undefined &&
+        kept.requestId === suspendedRequestId(toolContext)
+      ) {
+        // The run this wrapper suspended: the arguments Guardian was asked
+        // about, so the held request is claimed. A schema that generates a
+        // value (a default made at parse time) would give other arguments
+        // on a second parse, and the approved request would never be used.
+        input = kept.input;
+      } else {
+        // A resumed Mastra run hands the tool the model's stored arguments
+        // without parsing them again. Parse them here, as the first call's
+        // were, so Guardian sees the same arguments both times and the held
+        // request is claimed instead of a new one being opened.
+        const parsed = validateToolInput(
+          source.inputSchema as never,
+          received,
+          toolName,
+        );
+        if (parsed.error) {
+          return parsed.error;
+        }
+        input = parsed.data;
       }
-      input = parsed.data;
+    }
+    if (key !== undefined) {
+      // Kept only while the call is suspended: set again below if it is.
+      suspended.delete(key);
     }
     try {
       // Honour Mastra's `context.abortSignal` (the run's abort signal): an
@@ -178,12 +270,21 @@ function wrapWithContext<T extends MastraTool>(
               // the wrapped tool then runs on `approved` as it is.
               const output = await innerExecute.call(inner, approved, context);
               if (isValidationError(output)) {
-                const refused = validateToolInput(
+                // Refused before the body (input, request context or resume
+                // data), or after it (its output)? Only the first means the
+                // tool did not run: those checks give the same answer again.
+                const inputRefusal = validateToolInput(
                   source.inputSchema as never,
                   approved,
                   toolName,
                 ).error;
-                if (refused !== undefined && refused.message === output.message) {
+                const contextRefusal = (await refusedBeforeBody(context)) as
+                  | { message?: unknown }
+                  | undefined;
+                if (
+                  inputRefusal?.message === output.message ||
+                  contextRefusal?.message === output.message
+                ) {
                   throw new InputRefusedByTool(output);
                 }
               }
@@ -209,6 +310,9 @@ function wrapWithContext<T extends MastraTool>(
                 `Guardian decides again whether the call may run.`,
             },
           };
+          if (key !== undefined) {
+            suspended.set(key, { requestId: err.requestId, input: err.input });
+          }
           await suspend(payload);
           return undefined;
         }
