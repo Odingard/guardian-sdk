@@ -65,6 +65,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Hashable,
     Literal,
     Mapping,
     Optional,
@@ -100,6 +101,7 @@ from .content_pins import (
 __all__ = [
     "EXECUTION_OUTCOME_UNKNOWN",
     "Guard",
+    "SCOPE_UNKNOWN",
     "GuardianDenied",
     "GuardianUnavailable",
     "GuardianApprovalPending",
@@ -419,7 +421,7 @@ class _Options:
     #: on_ask="result" only: held request ids by (kind, connection, tool, args),
     #: so calling the tool again after approval claims the approved request
     #: instead of proposing a fresh one that needs a fresh approval.
-    held: Dict[str, str] = field(default_factory=dict)
+    held: Dict[Hashable, str] = field(default_factory=dict)
 
     def mode_for(self, tool_name: str) -> Mode:
         return self.modes.get(tool_name, self.mode)
@@ -495,18 +497,63 @@ def _execution_failed(opts: _Options, err: GuardianExecutionFailed) -> Generator
     }
 
 
-def _held_key(opts: _Options, kind: str, tool_name: str, args: Optional[Dict[str, Any]]) -> Optional[str]:
-    if opts.on_ask != "result":
+class _ScopeUnknown:
+    """See :data:`SCOPE_UNKNOWN`."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "SCOPE_UNKNOWN"
+
+
+#: The scope of a call whose session could not be determined. A request held
+#: for such a call is never remembered, so no later call can claim it: every
+#: call proposes a request of its own. Integrations pass it when the
+#: framework does not say which session a call belongs to.
+SCOPE_UNKNOWN: Any = _ScopeUnknown()
+
+
+def _empty_scope(scope: Any) -> bool:
+    """An empty string (or bytes) as a scope: a missing id, not a session."""
+    return isinstance(scope, (str, bytes)) and len(scope) == 0
+
+
+def _held_key(
+    opts: _Options, kind: str, tool_name: str, args: Optional[Dict[str, Any]], scope: Any = None
+) -> Optional[Hashable]:
+    """The in-memory key a held request is remembered under (result mode).
+
+    ``scope`` names the session the call belongs to. It is part of this key
+    only: it is never sent to Guardian. A request held under one scope is
+    claimed only by the same call made again under the same scope. With no
+    scope, the key is the call alone, so one Guard must then serve one
+    principal. With :data:`SCOPE_UNKNOWN` there is no key.
+    """
+    if opts.on_ask != "result" or scope is SCOPE_UNKNOWN:
         return None
     try:
         body = "" if args is None else canonical_json(args)
     except (CanonicalJsonError, TypeError, ValueError):
         return None  # arguments Guardian cannot canonicalize are never matched
-    return f"{kind}\x00{opts.connection_id}\x00{tool_name}\x00{body}"
+    key = f"{kind}\x00{opts.connection_id}\x00{tool_name}\x00{body}"
+    return key if scope is None else (key, scope)
 
 
-def _ask_result(tool_name: str, request_id: str, install: bool = False) -> Dict[str, Any]:
+def _ask_result(tool_name: str, request_id: str, install: bool = False, reusable: bool = True) -> Dict[str, Any]:
     what = f"Registering {tool_name} with Guardian" if install else f"{tool_name}"
+    if not reusable:
+        # SCOPE_UNKNOWN: the request is not remembered, so the usual advice
+        # (call again after approval) would be wrong.
+        return {
+            "guardian": {
+                "decision": "ASK",
+                "request_id": request_id,
+                "tool_name": tool_name,
+                "message": f"{what} is held for human approval (request_id {request_id}). "
+                "It did not run. This call is not tied to a session, so calling the tool "
+                "again asks for a new approval instead of using this one.",
+            }
+        }
     return {
         "guardian": {
             "decision": "ASK",
@@ -565,7 +612,11 @@ def _as_held(result: RequestResult) -> RequestResult:
 
 
 def _settle(
-    opts: _Options, tool_name: str, result: RequestResult, held_key: Optional[str] = None
+    opts: _Options,
+    tool_name: str,
+    result: RequestResult,
+    held_key: Optional[Hashable] = None,
+    scope: Any = None,
 ) -> Generator:
     result = _as_held(result)
     if not result.ok:
@@ -715,7 +766,7 @@ def _settle(
         if opts.on_ask == "result":
             if held_key is not None:
                 opts.held[held_key] = result.request_id
-            return _ask_result(tool_name, result.request_id)
+            return _ask_result(tool_name, result.request_id, reusable=scope is not SCOPE_UNKNOWN)
         raise _Ask(result.request_id, "tool")
     return _deny(opts, tool_name, result.reason_code or "MISSING_CAPABILITY", result.request_id)
 
@@ -801,12 +852,17 @@ def _ensure_record_transport(
     )
 
 
-def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[str, Any]) -> Generator:
+def _run_through(
+    opts: _Options, ensured: Set[str], tool_name: str, args: Dict[str, Any], scope: Any = None
+) -> Generator:
+    # ``scope`` keys the held tool call. The held registration of a tool
+    # (install_record_transport) is not scoped: it registers the tool on the
+    # connection and runs no call.
     if opts.mode_for(tool_name) == "in_process":
         gate = yield from _ensure_record_transport(opts, ensured, tool_name)
         if gate is not None:
             return gate
-    held_key = _held_key(opts, "tool", tool_name, args)
+    held_key = _held_key(opts, "tool", tool_name, args, scope)
     prior = opts.held.pop(held_key, None) if held_key else None
     if prior is not None:
         # The same call was held earlier: claim that request (approved →
@@ -815,7 +871,7 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
         if not claimed.ok and claimed.reason_code == "SERVICE_UNAVAILABLE":
             # Guardian did not answer: keep the request held for the next try.
             opts.held[held_key] = prior
-        return (yield from _settle(opts, tool_name, claimed, held_key))
+        return (yield from _settle(opts, tool_name, claimed, held_key, scope))
     declaration = opts.amount_args.get(tool_name)
     result = yield (
         "request",
@@ -837,7 +893,7 @@ def _run_through(opts: _Options, ensured: Set[str], tool_name: str, args: Dict[s
         # Refused before any decision: the amount could not be read, or the
         # declaration is not the console's. Nothing ran.
         return _deny(opts, tool_name, result.reason_code or "INVALID_REQUEST", result.request_id or None, "invoke", hint)
-    return (yield from _settle(opts, tool_name, result, held_key))
+    return (yield from _settle(opts, tool_name, result, held_key, scope))
 
 
 def _resume_tool(opts: _Options, tool_name: str, request_id: str) -> Generator:
@@ -846,7 +902,7 @@ def _resume_tool(opts: _Options, tool_name: str, request_id: str) -> Generator:
 
 
 def _resume_install(
-    opts: _Options, ensured: Set[str], tool_name: str, args: Dict[str, Any], request_id: str
+    opts: _Options, ensured: Set[str], tool_name: str, args: Dict[str, Any], request_id: str, scope: Any = None
 ) -> Generator:
     claimed = yield ("claim", request_id)
     if claimed.ok and claimed.decision == "ALLOW" and claimed.capability_token:
@@ -854,7 +910,7 @@ def _resume_install(
         if not executed.ok:
             raise GuardianExecutionFailed(tool_name, claimed.request_id or "", executed.reason_code or "")
         ensured.add(f"{opts.connection_id}:{tool_name}")
-        return (yield from _run_through(opts, ensured, tool_name, args))
+        return (yield from _run_through(opts, ensured, tool_name, args, scope))
     if (claimed.ok and claimed.decision == "ASK") or (
         not claimed.ok and claimed.reason_code in _HELD
     ):
@@ -933,8 +989,11 @@ class _Run:
         caller_args: Optional[Dict[str, Any]] = None,
         file_args: Optional[Mapping[str, str]] = None,
         stream: bool = False,
+        scope: Any = None,
     ):
         self.guard = guard
+        #: The session the call belongs to (see ``_held_key``).
+        self.scope = scope
         #: The tool is a generator function: calling it runs none of its
         #: body, so the call is redeemed when its stream ends. A function
         #: that returns a generator has run when it returns.
@@ -1003,7 +1062,7 @@ class _Run:
             machine = lambda: _resume_tool(g._opts, self.tool_name, ask.request_id)  # noqa: E731
         else:
             machine = lambda: _resume_install(  # noqa: E731
-                g._opts, g._ensured, self.tool_name, self.args, ask.request_id
+                g._opts, g._ensured, self.tool_name, self.args, ask.request_id, self.scope
             )
         if g._async:
 
@@ -1289,6 +1348,15 @@ class Guard:
         and the amount in cents. Guardian decides on the amount; a call whose
         amount cannot be read is refused and nothing runs. Checked when the
         Guard is built.
+    :param scope: a function without arguments that returns the scope of
+        the call being made: the session it belongs to (a user id, a
+        conversation id; any hashable value), for example read from a
+        ``contextvars.ContextVar`` your app sets per request.
+        If it returns ``None`` or an empty string the session is not known
+        and the call is treated as :data:`SCOPE_UNKNOWN`, not as unscoped
+        and not as a scope of its own. ``0`` and other values are scopes.
+        :meth:`run` also takes ``scope=`` for one call. See "Held requests
+        are scoped per session" below.
     :param max_pin_bytes / max_pin_total_bytes: caps for content pins
         (``file_args``): per pinned file (default 25 MiB) and for all pinned
         files of one call (default 64 MiB). Over a cap the call is refused
@@ -1312,6 +1380,19 @@ class Guard:
     ``"previewRoots"`` any file the process can read may be previewed: add
     ``"previewRoots": ["/srv/reports"]`` to preview only files in those
     folders (others get a ``withheld`` preview, size only).
+
+    **Held requests are scoped per session.** With ``on_ask="result"`` the
+    Guard remembers a held request so that the same call made again after
+    approval claims it. It is remembered by connection, tool name and
+    arguments, and by the call's scope when it has one: a request held under
+    one scope is claimed only by the same call under the same scope. The
+    scope is part of an in-memory key and is not sent to Guardian. Without a
+    scope, an identical call from anywhere claims the held request, so a
+    Guard without scopes must serve one principal (one user, one
+    conversation). :data:`SCOPE_UNKNOWN` as a scope means the session is not
+    known: the request is not remembered and every call proposes its own.
+    With ``on_ask="raise"`` nothing is remembered:
+    ``GuardianApprovalPending.resume()`` claims that call's own request.
 
     **Generator tools (streams).** Calling a generator function runs none
     of its body, so a generator is a tool that has not run yet:
@@ -1368,9 +1449,13 @@ class Guard:
         max_pin_bytes: int = DEFAULT_MAX_PIN_BYTES,
         max_pin_total_bytes: int = DEFAULT_MAX_PIN_TOTAL_BYTES,
         amount_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        scope: Optional[Callable[[], Hashable]] = None,
     ) -> None:
         if not connection_id:
             raise ValueError("connection_id is required")
+        if scope is not None and not callable(scope):
+            raise TypeError("scope takes a function that returns the current session's scope")
+        self._scope = scope
         self.client = client
         self._async = isinstance(client, AsyncGuardianClient) or inspect.iscoroutinefunction(
             getattr(client, "request", None)
@@ -1448,6 +1533,27 @@ class Guard:
             return give()
         return result
 
+    def _scope_of(self, scope: Any) -> Any:
+        """The scope of one call: the one given with it, else the Guard's
+        ``scope()``. It must be hashable (it is part of an in-memory key).
+        An error here is raised before anything is proposed.
+
+        ``None`` given with the call means "use the Guard's function". A
+        Guard's function that returns ``None`` does not know the session, so
+        the scope is :data:`SCOPE_UNKNOWN`, never the shared unscoped key.
+        Only a Guard without a scope function is unscoped. An empty string
+        names no session either (wherever it comes from): it is
+        :data:`SCOPE_UNKNOWN`, not one scope every such call would share.
+        Other falsy values (``0``) are scopes."""
+        if scope is None and self._scope is not None:
+            scope = self._scope()
+            if scope is None:
+                scope = SCOPE_UNKNOWN
+        if _empty_scope(scope):
+            scope = SCOPE_UNKNOWN
+        hash(scope)
+        return scope
+
     def _governed(
         self,
         tool_name: str,
@@ -1457,7 +1563,9 @@ class Guard:
         previews: Sequence[str] = (),
         preview_roots: Optional[Mapping[str, Sequence[str]]] = None,
         stream: bool = False,
+        scope: Any = None,
     ) -> Any:
+        scope = self._scope_of(scope)
         # The reserved key is refused for every tool, so an agent cannot
         # supply a pin of its own.
         if carries_reserved_key(args):
@@ -1467,8 +1575,8 @@ class Guard:
                 'The argument name "guardianContentPins" is reserved for content pins.',
             )
         if not file_args:
-            run = _Run(self, tool_name, args, body, stream=stream)
-            machine = _run_through(self._opts, self._ensured, tool_name, args)
+            run = _Run(self, tool_name, args, body, stream=stream, scope=scope)
+            machine = _run_through(self._opts, self._ensured, tool_name, args, scope)
             if self._async:
                 return run.adrive(machine)
             return run.drive(machine)
@@ -1505,16 +1613,16 @@ class Guard:
                     proposed = await asyncio.to_thread(pin)
                 except Exception as err:  # noqa: BLE001 — never run unpinned
                     return refusal(err)
-                run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream)
-                return await run.adrive(_run_through(opts, self._ensured, tool_name, proposed))
+                run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream, scope=scope)
+                return await run.adrive(_run_through(opts, self._ensured, tool_name, proposed, scope))
 
             return arun()
         try:
             proposed = pin()
         except Exception as err:  # noqa: BLE001 — never run unpinned
             return refusal(err)
-        run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream)
-        return run.drive(_run_through(opts, self._ensured, tool_name, proposed))
+        run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream, scope=scope)
+        return run.drive(_run_through(opts, self._ensured, tool_name, proposed, scope))
 
     def run(
         self,
@@ -1523,6 +1631,7 @@ class Guard:
         fn: Callable[[], Any],
         *,
         file_args: Optional[FileArgsDeclaration] = None,
+        scope: Optional[Hashable] = None,
     ) -> Any:
         """Govern one call of ``fn`` (no arguments) proposed as ``tool_name(arguments)``.
 
@@ -1538,8 +1647,14 @@ class Guard:
         so the call is redeemed when the returned stream ends (see
         :class:`Guard`). Any other ``fn`` has run when it returns, whatever
         it returns.
+
+        ``scope`` names the session this call belongs to (a user id, a
+        conversation id; any hashable value). With ``on_ask="result"`` a held
+        request is claimed only by the same call made again with the same
+        scope. It stays in this process and is not sent to Guardian. Default:
+        the Guard's ``scope`` function, else no scope. See :class:`Guard`.
         """
-        return self._run(tool_name, arguments, fn, file_args, _is_stream_function(fn))
+        return self._run(tool_name, arguments, fn, file_args, _is_stream_function(fn), scope)
 
     def _run(
         self,
@@ -1548,12 +1663,13 @@ class Guard:
         fn: Callable[[], Any],
         file_args: Optional[FileArgsDeclaration],
         stream: bool,
+        scope: Any = None,
     ) -> Any:
         spec = self._check_file_args(tool_name, file_args, allowed=("recheck",))
         previews = normalize_file_arg_previews(tool_name, file_args) if spec else []
         roots = normalize_file_arg_preview_roots(tool_name, file_args) if spec else {}
         args = to_arguments_record(arguments)
-        return self._governed(tool_name, args, lambda _prepared: fn(), spec, previews, roots, stream)
+        return self._governed(tool_name, args, lambda _prepared: fn(), spec, previews, roots, stream, scope)
 
     def __call__(
         self, tool_name: Optional[str] = None, *, file_args: Optional[FileArgsDeclaration] = None
