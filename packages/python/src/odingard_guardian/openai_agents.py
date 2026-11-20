@@ -86,6 +86,7 @@ from ._framework import (
     decide_and_run,
     is_stream_function,
     json_record,
+    performed_remotely,
     resolve_scope,
     resolve_tool_name,
 )
@@ -684,15 +685,20 @@ class _GovernedTool:
         name = self.guardian_name
         if outcome.message is None:
             return call.output  # the tool ran and Guardian recorded it
-        if outcome.decision == "ALLOW":
+        if performed_remotely(outcome):
             # Remote mode: Guardian performed the call; its record is the result.
             return outcome.message
-        if outcome.reason_code == EXECUTION_OUTCOME_UNKNOWN:
-            # Remote mode: the call failed where Guardian may already have
-            # performed it. Never a denial, and never "did not run".
+        if outcome.decision == "ALLOW" or outcome.reason_code == EXECUTION_OUTCOME_UNKNOWN:
+            # An allowed call that could not be confirmed, or a remote call
+            # that failed where Guardian may already have performed it. Never
+            # a result, never a denial: the message says what is known.
             if self.strict_output:
+                unknown = outcome.reason_code == EXECUTION_OUTCOME_UNKNOWN
                 raise GuardianExecutionFailed(
-                    name, outcome.request_id or "", EXECUTION_OUTCOME_UNKNOWN, outcome_unknown=True
+                    name,
+                    outcome.request_id or "",
+                    outcome.reason_code or EXECUTION_OUTCOME_UNKNOWN,
+                    outcome_unknown=unknown,
                 )
             return outcome.message
         if outcome.decision == "ASK":

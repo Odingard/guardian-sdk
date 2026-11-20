@@ -206,3 +206,56 @@ def test_sync_tool_errors_are_the_tools_own():
 
     with pytest.raises(ValueError, match="no such order"):
         decide_sync(FakeClient(ALLOW), run_tool=fail)
+
+
+# --- a Guard built to raise a held call or an unconfirmed execution ---
+
+
+def raising_guard(client, **options):
+    return build_guard(
+        client,
+        connection_id=CONNECTION,
+        agent_name="agent",
+        adapter_id=None,
+        purpose=None,
+        amount_args=None,
+        on_receipt=None,
+        on_execution_error=None,
+        on_ask="raise",
+        on_execution_failed="raise",
+        **options,
+    )
+
+
+def test_the_defaults_still_hand_a_held_call_back_as_data():
+    outcome, ran = decide(FakeClient(HELD))
+    assert outcome.decision == "ASK" and ran == []
+
+
+def test_a_guard_built_to_raise_hands_the_held_call_and_the_failed_execution_to_the_caller():
+    from odingard_guardian import GuardianApprovalPending, GuardianExecutionFailed
+
+    async def run_tool():
+        pass
+
+    with pytest.raises(GuardianApprovalPending) as held:
+        asyncio.run(decide_and_run(raising_guard(AsyncFake(FakeClient(HELD))), "refund_order", {"a": 1}, run_tool))
+    assert held.value.request_id == "req_ask"
+    # Remote mode: a refused execution is the Guard's own error, which says what is known.
+    remote = raising_guard(AsyncFake(FakeClient(ALLOW, execute_ok=False)), mode="remote")
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        asyncio.run(decide_and_run(remote, "refund_order", {"a": 1}, run_tool))
+    assert failed.value.reason_code == "CAPABILITY_REVOKED"
+
+
+def test_the_sync_path_lets_them_through_like_the_async_one():
+    from odingard_guardian import GuardianApprovalPending, GuardianExecutionFailed
+
+    sync = {"require_async": False}
+    with pytest.raises(GuardianApprovalPending) as held:
+        decide_and_run_sync(raising_guard(FakeClient(HELD), **sync), "refund_order", {"a": 1}, lambda: None)
+    assert held.value.request_id == "req_ask"
+    remote = raising_guard(FakeClient(ALLOW, execute_ok=False), mode="remote", **sync)
+    with pytest.raises(GuardianExecutionFailed) as failed:
+        decide_and_run_sync(remote, "refund_order", {"a": 1}, lambda: None)
+    assert failed.value.reason_code == "CAPABILITY_REVOKED"
