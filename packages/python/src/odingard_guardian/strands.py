@@ -427,14 +427,18 @@ class GuardianHookProvider(HookProvider):
     def _govern(self, event: BeforeToolCallEvent) -> None:
         try:
             first = self._first.pop(id(event), None)
+            if first is None:
+                raise RuntimeError("the call was not seen before the other hooks ran")
             tool = event.selected_tool
             name = event.tool_use.get("name")
-            if tool is None or (first is not None and tool is first[0] and name != first[1]):
-                # A hook renamed the call without selecting a tool: Strands
-                # runs the tool registered under the new name.
+            if tool is first[0] and name != first[1]:
+                # Strands' own rule: a hook renamed the call without selecting
+                # a tool, so the tool registered under the new name runs.
                 tool = _registered(event.agent, name)
             if tool is None:
-                return  # no such tool: nothing runs, and Strands reports it
+                # No such tool, or a hook turned the tool off: nothing runs,
+                # nothing is proposed, and Strands reports it.
+                return
             if self._governs(tool):
                 return
             event.selected_tool = _GuardianTool(self, tool)

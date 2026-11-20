@@ -659,6 +659,32 @@ def test_a_hook_that_cancels_the_call_proposes_nothing():
     assert model.texts() == ["not today"]
 
 
+@pytest.mark.parametrize("order", [HookOrder.DEFAULT, HookOrder.SDK_LAST + 1], ids=["before", "after"])
+def test_a_hook_that_turns_the_tool_off_runs_and_proposes_nothing(order):
+    def turn_off(event: BeforeToolCallEvent) -> None:
+        event.selected_tool = None
+
+    guardian = FakeClient(ALLOW)
+    model, agent = agent_for([CALL], provider(guardian))
+    agent.hooks.add_callback(BeforeToolCallEvent, turn_off, order=order)
+    agent("refund order 42")
+    # As in Strands without Guardian: no tool is selected, so none runs.
+    assert guardian.calls == [] and ran == []
+    assert "Unknown tool: refund_order" in model.texts()[0]
+
+
+def test_an_unknown_tool_a_hook_renames_to_a_registered_one_is_decided():
+    def reroute(event: BeforeToolCallEvent) -> None:
+        event.tool_use = {**event.tool_use, "name": "lookup_order"}
+
+    guardian = FakeClient(ALLOW)
+    model, agent = agent_for([("find_order", {"order_id": "o42"})], provider(guardian), reroute)
+    agent("find order 42")
+    assert guardian.last_invocation["tool_name"] == "lookup_order"
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert ran == [("lookup", "o42")]
+
+
 def test_a_hook_that_takes_guardians_tool_away_is_reported():
     def bypass(event: BeforeToolCallEvent) -> None:
         event.selected_tool = refund_order
