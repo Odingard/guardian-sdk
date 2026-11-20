@@ -286,10 +286,9 @@ integrations:
   repository has no CrewAI example or test yet.
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
-- **Claude Agent SDK**: guard the handler of a tool you define, or put
+- **Claude Agent SDK**: use the `PreToolUse` hook and the tool wrapper
+  [below](#claude-agent-sdk-odingard_guardianclaude_agent_sdk-unreleased), or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
-  A recipe only: this repository has no Python Claude Agent SDK example or
-  test yet.
 
 ### Honest limits
 
@@ -395,6 +394,109 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
 - `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
+
+## Claude Agent SDK: `odingard_guardian.claude_agent_sdk` (unreleased)
+
+An agent built on the [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/)
+(`claude-agent-sdk`) has two kinds of tool, and each has its own route.
+
+```bash
+pip install "odingard-guardian[claude-agent-sdk]"   # Python 3.10+
+```
+
+### The agent's own tools (Bash, Write, Edit, MCP servers): a `PreToolUse` hook
+
+The Claude Code CLI runs these tools itself, after the hook answers. This is
+the coding-agent hook, the Python counterpart of
+[`@odingard/guardian-hook`](../hook) for the TypeScript Agent SDK: the same
+Guardian tool names, the same two connections and the same environment
+variables.
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, query
+from odingard_guardian.claude_agent_sdk import guardian_hook_matcher
+
+options = ClaudeAgentOptions(hooks={"PreToolUse": [guardian_hook_matcher()]})
+async for message in query(prompt="Run the tests, then deploy staging", options=options):
+    ...
+```
+
+Set `GUARDIAN_AGENT_CREDENTIAL`, `GUARDIAN_CONNECTION_ID` (everyday tools) and
+`GUARDIAN_HOOK_ASK_CONNECTION_ID` (tools that need approval) in the
+environment. `python -m odingard_guardian.claude_agent_sdk` prints the console setup.
+
+| Decision                 | What happens                                                                                                                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The hook redeems the single-use capability (the decision is recorded), then answers `permissionDecision: "allow"` and the CLI runs the tool.                                                                                                                           |
+| **ASK**                  | The hook waits for a person to approve in the Guardian console. Approved: redeemed, then `"allow"`. Not approved in time: `"deny"`, with the request id. The exact same call retried in the same process claims the open request; nothing is carried across processes. |
+| **DENY**                 | `"deny"`, with the reason. The CLI does not run the tool.                                                                                                                                                                                                              |
+| **Guardian unreachable** | `"deny"` (fail closed). So do missing settings, a crash in the hook and the hook's own deadline.                                                                                                                                                                       |
+| **Not governed**         | `{}`: no opinion, the agent's own permissions apply. Read, NotebookRead, Grep, Glob, LS and every tool the table below does not name.                                                                                                                                  |
+
+| Tool                                 | Guardian tool                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Bash                                 | `shell` (Allow tier), or `shell_deploy`, `shell_destructive`, `git_push` (Ask tier)              |
+| Write, Edit, MultiEdit, NotebookEdit | `file_write` (Allow tier); `shell_destructive` for the agent's own MCP, hook or permission files |
+| WebFetch, WebSearch                  | `web_fetch` (Allow tier)                                                                         |
+| `mcp__server__tool`                  | `mcp.<server>.<tool>` (Ask tier)                                                                 |
+
+- `guardian_hook_matcher()` registers the hook for every tool, with `on_failure="block"` and a 150-second timeout. With `on_failure="block"` the CLI blocks a call when the hook fails or times out; the SDK refuses to connect to a CLI too old to honour it. `guardian_hook = guardian_pre_tool_use()` gives the callback alone, for `HookMatcher(hooks=[guardian_hook])`: on a matcher without `on_failure="block"`, a hook the CLI gives up on counts as no decision, and the call is left to the agent's own permissions. Pass the matcher's timeout as `hook_timeout_s` (default: the SDK's 60 seconds).
+- **The ASK wait.** This package asks Guardian for a 2-minute request window (`@odingard/guardian-hook` asks for 5). The hook waits at most that long and never past its own timeout: every Guardian call, the redemption included, finishes before the CLI gives up on the hook, so with a 60-second matcher an ASK waits about 43 seconds. When the CLI cancels the hook, the hook starts no further Guardian call (one already on its way, a redemption included, still lands). `GUARDIAN_HOOK_APPROVAL_TIMEOUT_MS` shortens the wait.
+- **The hook never answers `"ask"`** (Guardian holds the approval itself) and never returns `updatedInput`: the tool runs with the input Guardian decided on. Another `PreToolUse` hook of yours that returns `updatedInput` changes the input after the decision. Do not register one next to Guardian's.
+- **An allow from the hook skips the SDK's own permission prompt** for that call (`can_use_tool`, permission rules that ask), and a deny holds in every permission mode. That is the CLI's behaviour for `PreToolUse` hooks as Claude Code documents it; the tests here use a stand-in for the CLI.
+- **Decision-gated.** The CLI runs the tool after the hook answers, so the record proves Guardian's authorization of that exact call, not the command's outcome. A capability redeemed for a call the CLI then does not run (it crashed, or another hook denied it) stays recorded.
+- **Content pins.** For Edit, MultiEdit and NotebookEdit the hook pins the target file's current bytes into the proposal and checks them again just before it redeems the capability; a file that changed in between is refused (`CONTENT_CHANGED_SINCE_APPROVAL`). The path must be absolute. Write replaces the whole file and is not pinned. The CLI edits the file after the hook answers, so a change in that last moment is not seen.
+- **The credential.** The hook moves `GUARDIAN_AGENT_CREDENTIAL` out of `os.environ` when it is built, so a CLI started afterwards, and the commands it runs, do not inherit it. Build the hook before the client connects, and do not pass the credential in `ClaudeAgentOptions.env`.
+- `GUARDIAN_HOOK_WATCH_MODE=on` (opt-in, as in guardian-hook): while the agent is in watch mode, a call Guardian would have held or denied gets no permission decision (`{"systemMessage": ...}`), and the agent's own permissions apply. Nothing is redeemed.
+- `skip_mcp_servers=["billing"]` leaves the tools of an MCP server to another route: `GuardianTools` below, or `guardian-mcp proxy`.
+
+**What `@odingard/guardian-hook` checks and this hook does not.** Shell commands are routed by pattern only:
+
+- No shell parser. A consequential command hidden in `sh -c "..."`, `eval`, `xargs`, `find -exec`, a pipe into a shell or an interpreter one-liner is routed as `shell`. So is starting an interactive shell or `ssh` session (guardian-hook's `shell_session`).
+- No sensitive-file patterns. Read, Grep, Glob and LS are never routed, also for `.env`, keys and cloud credentials, and a command that reads such a file is routed as `shell`. With `GUARDIAN_HOOK_SENSITIVE_PATHS` or `GUARDIAN_HOOK_SENSITIVE_MODE` set, this hook denies every governed call instead of ignoring the setting.
+- Commands that print the environment (`env`, `printenv`, a secret variable in `echo`) are routed as `shell`. Only a command that names a `GUARDIAN_*` variable or `/proc/.../environ` goes to `shell_destructive`.
+- A command or file path that names the agent's own configuration (`.mcp.json`, `.claude/settings.json`, …) goes to `shell_destructive` by pattern, reads included.
+- Tools the table does not name (Task, Skill, TodoWrite and others) are not routed; sub-agents' Bash, file and MCP calls are, because the CLI runs the hook for them too.
+
+If you need those checks, run the agent with the `guardian-hook` command as a Claude Code hook in its settings instead.
+
+### Tools you write (`@tool` + `create_sdk_mcp_server`): `GuardianTools`
+
+These handlers run in your process, so they go through `Guard`:
+
+```python
+import os
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.claude_agent_sdk import GuardianTools, guardian_hook_matcher
+
+@tool("refund_order", "Refund an order", {"order_id": str, "amount_cents": int})
+async def refund_order(args):
+    receipt = await billing.refund(args["order_id"], args["amount_cents"])  # your code
+    return {"content": [{"type": "text", "text": f"refunded {receipt.id}"}]}
+
+guardian = GuardianTools(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+)
+options = ClaudeAgentOptions(
+    mcp_servers={"billing": create_sdk_mcp_server("billing", tools=[guardian.wrap(refund_order)])},
+    # With the hook too: leave this server's tools to GuardianTools. Build
+    # GuardianTools first; the hook moves the credential out of os.environ.
+    hooks={"PreToolUse": [guardian_hook_matcher(skip_mcp_servers=["billing"])]},
+)
+```
+
+- ALLOW runs the handler once, with the arguments Guardian decided on (its own copy), then redeems the capability and records the decision. ASK does not run it: the tool result (an error result) tells the model the call is held, with the request id, and after a person approves, the same call (same tool, same arguments) runs the approved request without asking again. DENY and an unreachable Guardian do not run it. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
+- **Enforced mode: `mode="remote"`** (for every tool, or `modes={"refund_order": "remote"}` per Guardian tool name). Guardian holds the credential and makes the call through the tool registered on your connection. The handler does not run, and the model gets Guardian's result (the decision and its receipt) as JSON text. A receipt that is not `sent-verified` is an error result, never an allow.
+- **What each mode guarantees.** In-process (the default) is decision-gated: the handler runs after ALLOW and before the capability is redeemed, so a revocation in that window is found after the effect; the model is then told the tool ran and not to call it again, and `on_execution_error` sees it. In remote mode nothing runs on your machine, so there is no such window, but the tool must be one Guardian can call.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps SDK tool names to Guardian tool names. Register each tool once in the Guardian console (in-process: "My own code (record-only)") and allow it for the agent.
+- The wrapper governs the handler, whoever calls it. It does not use the CLI's permission system, so the SDK's own prompts and rules for `mcp__billing__refund_order` still apply before the call reaches it.
+
+Tested with `claude-agent-sdk` 0.2.186: the hook callback with the SDK's input and output types, and the SDK's own control protocol (`ClaudeSDKClient` and `query()`, hook registration, `hook_callback`, cancellation, SDK MCP tool calls) driven by a scripted stand-in for the Claude Code CLI, with a stand-in Guardian. The Claude Code CLI itself was not run. Before relying on it, run one governed tool with your agent against your Guardian and check that an Ask waits for approval and that a deny stops the call.
+
+Example: [`examples/python/claude_agent_sdk_agent.py`](../../examples/python/claude_agent_sdk_agent.py).
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 

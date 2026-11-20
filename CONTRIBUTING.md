@@ -53,7 +53,8 @@ up with the same rules as the triad (`executeOutcomeUnknown` and
 `lookUpExecution` in `packages/sdk/src/guard.ts`); change both together.
 The Python Hermes plugin (`packages/python/src/odingard_guardian/hermes.py`)
 works the same way and reuses the Python guard's rules (`_outcome_unknown`
-and `_lookup_answer` in `guard.py`).
+and `_lookup_answer` in `guard.py`). So does the Python Claude Agent SDK hook
+(`claude_agent_sdk.py`); the two share their decision code (`_hook.py`).
 
 ### Watch mode (exception, opt-in)
 
