@@ -13,6 +13,17 @@
   - `mode="remote"` (or `modes={...}` per tool): Guardian performs the call, the local tool body never runs, and the model gets Guardian's result with its receipt as JSON text. An error after Guardian was asked to make the call is reported as "may have performed it, do not call it again".
   - A `GuardianClient` serves sync and async calls; an `AsyncGuardianClient` serves async calls and refuses a sync call before anything runs.
   - Extra: `odingard-guardian[langchain]` (Python 3.11+; tested with `langchain` 1.5.2, `langchain-core` 1.8.4 and `langgraph` 1.2.24). Example: `examples/python/langchain_agent.py`.
+
+### Added: governed tools for the OpenAI Agents SDK
+
+- **`odingard_guardian.openai_agents`**: `guardian_tool` and `create_guardian_tool` turn a function or an Agents SDK `FunctionTool` into a `FunctionTool` with the same name, description, parameter schema and settings whose every call is sent to Guardian before it runs, as `guardianTool` does in `@odingard/guardian-openai-agents`. ALLOW runs the tool once with the arguments Guardian decided on, then redeems the capability; DENY and an unreachable Guardian do not run it, and the model is told so; a tool that raises is not redeemed and keeps its own `failure_error_function`.
+  - ASK never runs the tool. `on_ask="raise"` (default) raises `GuardianApprovalPending` out of the run (`find_approval_pending(error)` finds it, `resume()` claims the approval and runs the tool once); `"result"` tells the model the call is held, and the same call after approval claims the held request; `"interrupt"` pauses the run as an Agents SDK interruption (`result.interruptions`, `guardian_request_id(interruption, scope)`). After `state.approve(...)` the tool still claims Guardian's request and runs only if a person approved it in Guardian.
+  - Held requests are scoped per session with `scope=callback(context)`, read from what the app passes to `Runner.run(context=...)` and never from the tool call's arguments. There is no default scope: the Agents SDK gives a tool no session identity that outlives a paused run, so without `scope` nothing is remembered and each call asks for its own approval. `on_ask="result"` reuses an approval only with `scope`, `on_ask="interrupt"` requires it, and `on_ask="raise"` needs none.
+  - `mode="remote"` (or `modes` per tool): Guardian performs the registered call itself, the local function never runs, and the model gets Guardian's record. A generator function is refused when the tool is built: the Agents SDK never runs its body. So is remote mode on a tool with an output type.
+  - The tool's own `needs_approval` is kept and never replaces Guardian's decision; a callable policy keeps the Agents SDK's check for arguments the tool's validation would default or convert.
+  - If the SDK's tool timeout or a cancelled run stops a call while Guardian is still deciding, the tool does not run. Once the tool has started it is not stopped: it runs to its end, also a sync tool in its worker thread, and the capability is then redeemed.
+  - The existing `guardian_failure_error_function` helpers are unchanged, and the module still imports without the Agents SDK. Extra: `odingard-guardian[openai-agents]` (Python 3.10+; tested with `openai-agents` 0.25.0). Example: `examples/python/openai_agents_agent.py`.
+
 ## guardian-hook / guardian-openclaw / Python odingard-guardian, unreleased
 
 ### Changed: paths to the agent's own configuration files are normalized and links resolved before the check

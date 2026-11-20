@@ -54,6 +54,9 @@ jobs:
       - name: LangChain and LangGraph (Python 3.11+)
         if: matrix.python-version == '3.13'
         run: pip install "langchain==1.5.2" "langchain-core==1.8.4" "langgraph==1.2.24"
+      - name: OpenAI Agents SDK (Python 3.10+)
+        if: matrix.python-version == '3.13'
+        run: pip install "openai-agents==0.25.0"
       - run: python -m pytest -q
       - name: Build and check Python distributions
         if: matrix.python-version == '3.13'
@@ -67,3 +70,6 @@ jobs:
       - name: Python LangChain example runs (local demo policy)
         if: matrix.python-version == '3.13'
         run: python ../../examples/python/langchain_agent.py > /dev/null
+      - name: OpenAI Agents SDK example runs (scripted model, local demo policy)
+        if: matrix.python-version == '3.13'
+        run: python ../../examples/python/openai_agents_agent.py > /dev/null

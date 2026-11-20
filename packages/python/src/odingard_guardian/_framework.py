@@ -18,7 +18,15 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import EXECUTION_OUTCOME_UNKNOWN, SCOPE_UNKNOWN, Guard, GuardianExecutionFailed, Mode
+from .guard import (
+    EXECUTION_OUTCOME_UNKNOWN,
+    SCOPE_UNKNOWN,
+    Guard,
+    GuardianApprovalPending,
+    GuardianExecutionFailed,
+    Mode,
+    OnDecision,
+)
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -77,7 +85,13 @@ def build_guard(
     mode: Mode = "in_process",
     modes: Optional[Mapping[str, Mode]] = None,
     require_async: bool = True,
+    on_ask: OnDecision = "result",
+    on_execution_failed: OnDecision = "result",
 ) -> Guard:
+    # ``on_ask="raise"`` / ``on_execution_failed="raise"`` are for an
+    # integration that hands a held call or an unconfirmed execution to its
+    # caller as the Guard's own exception; decide_and_run and
+    # decide_and_run_sync let those through.
     # A mistyped mode must not quietly run the local tool.
     for value in (mode, *(modes or {}).values()):
         if value not in ("in_process", "remote"):
@@ -90,9 +104,9 @@ def build_guard(
         agent_name=agent_name,
         adapter_id=adapter_id,
         purpose=purpose,
-        on_ask="result",
+        on_ask=on_ask,
         on_deny="result",
-        on_execution_failed="result",
+        on_execution_failed=on_execution_failed,
         on_receipt=on_receipt,
         on_execution_error=on_execution_error,
         amount_args=amount_args,
@@ -244,6 +258,10 @@ async def decide_and_run(
 
     try:
         out = await guard.run(tool_name, copy.deepcopy(proposed), body, scope=scope)
+    except (GuardianApprovalPending, GuardianExecutionFailed):
+        # Only a Guard built with on_ask / on_execution_failed "raise" raises
+        # these. Each says itself whether the call ran.
+        raise
     except Exception:
         if started:
             raise  # the tool's own error, or a hook after this one: not ours to hide
@@ -298,6 +316,8 @@ def decide_and_run_sync(
 
     try:
         out = guard.run(tool_name, copy.deepcopy(proposed), body, scope=scope)
+    except (GuardianApprovalPending, GuardianExecutionFailed):
+        raise  # as in decide_and_run
     except Exception:
         if started:
             raise
