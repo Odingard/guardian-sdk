@@ -61,7 +61,7 @@ from ._framework import (
     unchecked,
 )
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import SCOPE_UNKNOWN, GuardianExecutionFailed
+from .guard import EXECUTION_OUTCOME_UNKNOWN, SCOPE_UNKNOWN, GuardianExecutionFailed, execution_failed_message
 
 __all__ = ["GuardianHookProvider"]
 
@@ -185,6 +185,7 @@ class _GuardianTool(AgentTool):
         events: "asyncio.Queue[Any]" = asyncio.Queue()
         taken = asyncio.Event()
         final: list = []  # the tool's own result, held back until Guardian recorded the run
+        done: list = []  # set once the tool finished without an error of its own
 
         async def run_tool() -> None:
             call = dict(tool_use)
@@ -220,6 +221,7 @@ class _GuardianTool(AgentTool):
                     await close()
             if final and _failed(final[0]):
                 raise _ToolFailed()
+            done.append(True)
 
         # The session the call belongs to: a held request is claimed only by
         # the same call in the same scope. Never read from the arguments.
@@ -253,6 +255,26 @@ class _GuardianTool(AgentTool):
                 return  # the interrupt event went out; Strands resumes the call later
             except _ToolFailed:
                 yield final[0]  # the tool's own error, as the tool reported it
+                return
+            except Exception as error:
+                if not done:
+                    raise  # the tool's own exception: Strands reports it as the tool's error
+                # The tool ran, and something failed afterwards (a raising
+                # on_receipt, for example). Never let that look like a failed
+                # call: the model would call the tool again.
+                _logger.warning(
+                    "%s ran, but Guardian's record of it could not be confirmed", tool_name, exc_info=True
+                )
+                failed = GuardianExecutionFailed(
+                    tool_name,
+                    "",
+                    EXECUTION_OUTCOME_UNKNOWN,
+                    local_effect_ran=True,
+                    outcome_unknown=True,
+                    detail=type(error).__name__,
+                )
+                await provider._failed_after_run(failed)
+                yield told(execution_failed_message(failed))
                 return
         finally:
             if not task.done():
@@ -381,6 +403,7 @@ class GuardianHookProvider(HookProvider):
         )
         self._tool_names = tool_names
         self._on_ask = on_ask
+        self._on_execution_error = on_execution_error
         self._scope = scope
         #: Paused calls of agents without a scope: a private scope per agent and tool use.
         self._paused: "weakref.WeakKeyDictionary[Any, Dict[str, object]]" = weakref.WeakKeyDictionary()
@@ -477,6 +500,17 @@ class GuardianHookProvider(HookProvider):
                 return True
             tool = tool._tool
         return False
+
+    async def _failed_after_run(self, error: GuardianExecutionFailed) -> None:
+        """Tell the app's ``on_execution_error``. It only observes: its own errors are ignored."""
+        if self._on_execution_error is None:
+            return
+        try:
+            result = self._on_execution_error(error)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _held(self, tool_name: str, request_id: str) -> None:
         if self._on_approval_pending is None:

@@ -826,6 +826,26 @@ def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_reporte
     assert "did not run" not in model.texts()[0]
 
 
+def test_an_error_after_the_tool_ran_is_never_reported_as_a_failed_call():
+    def broken(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store is down")
+
+    guardian = FakeClient(ALLOW)
+    failures = []
+    model, agent = agent_for(
+        [CALL], provider(guardian, on_receipt=broken, on_execution_error=failures.append)
+    )
+    agent("refund order 42")
+    assert ran == [("o42", 500)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    (result,) = model.results()
+    assert result["status"] == "error"
+    assert "refund_order ran, but Guardian could not confirm that it recorded it" in model.texts()[0]
+    assert "Do not call it again" in model.texts()[0]
+    assert "receipt store is down" not in model.texts()[0]
+    assert failures[0].local_effect_ran is True and failures[0].outcome_unknown is True
+
+
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError, match="mode"):
         provider(FakeClient(ALLOW), mode="hosted")
