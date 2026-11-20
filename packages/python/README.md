@@ -396,6 +396,65 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
+## Google ADK: `odingard_guardian.google_adk` (unreleased)
+
+[Google's Agent Development Kit](https://google.github.io/adk-docs/) runs the
+`before_tool_callback` of every plugin registered on the `App` before each tool
+call of every agent, ahead of the agents' own callbacks. `GuardianPlugin` sends
+each call to Guardian there.
+
+```bash
+pip install "odingard-guardian[google-adk]"   # Python 3.11+
+```
+
+```python
+import os
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.google_adk import GuardianPlugin
+
+def refund_order(order_id: str, amount_cents: int) -> dict:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianPlugin(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = LlmAgent(name="billing", model="gemini-2.5-flash", tools=[refund_order])
+app = App(name="billing_app", root_agent=agent, plugins=[guardian])  # every agent and tool
+runner = Runner(app=app, session_service=InMemorySessionService())
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded. The model gets the tool's result.                                                                                              |
+| **ASK**                  | The tool does not run. The model gets `{"error": <message>, "guardian": {"decision": "ASK", "request_id": ...}}`. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                                         |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                               |
+
+- **After ALLOW, Guardian's plugin runs the tool itself** (`tool.run_async`) inside its `before_tool_callback`, with the arguments Guardian decided on, and returns the tool's result as the callback's answer. ADK then skips its own tool step. A before-tool callback that only decided would leave ADK to run the later callbacks and then the tool, and those callbacks could change the arguments after the decision. This way nothing can, and the capability is redeemed right after the tool returns.
+- What other callbacks see, for a call Guardian's plugin handled (run or refused):
+  - `before_tool_callback` of plugins listed **before** Guardian's runs first. Guardian decides on the arguments as they left them. If one of them answers the call, ADK does not run the tool and Guardian is not asked.
+  - `before_tool_callback` of plugins listed **after** Guardian's, and of the agents, does not run. List Guardian's plugin last.
+  - `after_tool_callback` of every plugin and agent runs, with the call's arguments and the tool's result or Guardian's refusal. One that returns a value replaces what the model is told; the tool has run by then.
+  - `on_tool_error_callback` of every plugin and agent runs when the tool raises, and its answer goes to the model. With no answer the error ends the run, as in ADK; raised from a plugin callback it arrives wrapped in ADK's `RuntimeError`, with the tool's error as its cause. A tool that raises is not recorded as run.
+- **One agent only:** pass `guardian.agent_before_tool_callback` as that agent's `before_tool_callback` (last in its list) instead of registering the plugin. Plugins' before-tool callbacks run before it.
+- **`on_ask="confirmation"`** maps a held call to ADK's own tool confirmation: the run pauses on an `adk_request_confirmation` call whose hint and payload carry Guardian's `request_id`. When the person approved in Guardian, answer it (`confirmed: true`); ADK repeats the call, which claims the approved request and runs. The local answer never stands in for Guardian's approval: answered before the person approved, the call stays held and the model is told so; answered with `confirmed: false`, the call does not run and Guardian is not asked. ADK asks for one confirmation per call. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person in either mode.
+- A tool with ADK's `require_confirmation` is held for that local confirmation first, before anything is proposed to Guardian. It adds a step; it does not replace Guardian's decision.
+- **`mode="remote"`** (or `modes={"refund_order": "remote"}` for single tools): Guardian performs a tool registered in your Guardian connection itself, with the credential it holds. The ADK tool's body does not run; the model gets `{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`. Only a `sent-verified` receipt is reported as done.
+- What each mode guarantees. In-process (default): the ADK tool runs only after ALLOW, once, with the decided arguments. It is decision-gated: the capability is redeemed after the tool returned, so a revocation in that window is found after the effect, and the model is told the tool ran and not to call it again (see [Honest limits](#honest-limits)). The agent's process holds the tool's credentials, so code that calls your function without ADK is not governed. Remote: the tool's credential stays with Guardian, and the call happens only when Guardian redeems the capability.
+- Guardian decides on the arguments the model sent (after earlier plugins). ADK checks a function tool's mandatory arguments inside the tool step: a call it answers with "mandatory input parameters are not present" was allowed and recorded, although your function body did not run.
+- ADK's own tools are tool calls too: `transfer_to_agent`, an `AgentTool` call and `LongRunningFunctionTool` starts are decided like any other tool, so register and allow them. A sub-agent's tools are decided as well, through `sub_agents` and through `AgentTool` (which hands the plugins on by default). A long-running tool is decided when it starts; its later result is not a tool call.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps ADK tool names to Guardian tool names. In-process, register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
+- Not covered: tools the model runs on its own side (Google Search, built-in code execution), which never reach a callback; `Runner.run_live` (bidirectional streaming), which starts streaming tools in its own way and was not tested. Workflow tool nodes outside an `LlmAgent` run plugin callbacks too, but were not tested. `MCPToolset` tools are ADK tools and go through the same callback, but were not tested against an MCP server; you can also put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `google-adk` 2.15.0 on ADK's own loop (`LlmAgent`, `App`, `Runner.run_async` and `Runner.run`, `InMemorySessionService`) with a scripted model and a stand-in Guardian: sync and async function tools, parallel calls in one model turn, a custom `BaseTool`, `LongRunningFunctionTool`, `AgentTool`, agent transfer and tool confirmation. Example: [`examples/python/google_adk_agent.py`](../../examples/python/google_adk_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
+
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 
 [Hermes Agent](https://github.com/NousResearch/hermes-agent) runs its
