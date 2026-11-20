@@ -69,7 +69,7 @@ import json
 import logging
 from collections import OrderedDict
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Set, Tuple, Union
 
 from ._canonical import canonical_json
 from ._framework import (
@@ -247,8 +247,13 @@ def _sdk() -> Any:
             "guardian_tool needs the OpenAI Agents SDK in a version it supports "
             '(tested with openai-agents 0.25.0): pip install "odingard-guardian[openai-agents]"'
         ) from error
+    try:
+        from agents.util._approvals import evaluate_function_tool_approval
+    except ImportError:  # a callable needs_approval then always requires approval
+        evaluate_function_tool_approval = None  # type: ignore[assignment]
     return SimpleNamespace(
         FunctionTool=FunctionTool,
+        evaluate_approval=evaluate_function_tool_approval,
         function_tool=function_tool,
         default_failure=default_tool_error_function,
         apply_failure=maybe_invoke_function_tool_failure_error_function,
@@ -345,6 +350,18 @@ class _Call:
         self.abandoned = True
         self.task.cancel()
 
+    def tool_finished(self, running: "asyncio.Future[Any]") -> None:
+        """The original tool ended: hand its output or its error to the decision task."""
+        error = None if running.cancelled() else running.exception()
+        if self.finished.done():
+            return
+        if running.cancelled():
+            self.finished.cancel()
+        elif error is not None:
+            self.finished.set_exception(error)  # the tool's own error: nothing is redeemed
+        else:
+            self.finished.set_result(running.result())
+
     async def _tool_step(self) -> None:
         if self.detached:
             # resume() after the SDK's call ended: run the tool here, with
@@ -418,6 +435,12 @@ class _GovernedTool:
                 f'"{inner.name}" has an output schema, so a held call cannot be reported as a message: '
                 'use on_ask="raise"'
             )
+        if self.strict_output and guard._opts.mode_for(guardian_name) == "remote":
+            raise ValueError(
+                f'"{inner.name}" has an output schema and runs in remote mode. In remote mode the tool output '
+                "is Guardian's record of the call, which the Agents SDK would check against that schema and "
+                "refuse after Guardian performed the call. Remove the output type, or use in-process mode"
+            )
         # The tool as Guardian runs it: its errors are raised, so a failed
         # call is never redeemed as if it had run. The governed tool applies
         # the original tool's failure policy afterwards.
@@ -426,10 +449,15 @@ class _GovernedTool:
         #: on_ask="interrupt": decisions taken when the SDK asked whether the
         #: call needs approval, waiting for the SDK to invoke the call.
         self.parked: Dict[Tuple[str, str], Tuple[_Call, Any]] = {}
+        #: Tool invocations in flight, kept so a started tool is not collected
+        #: when the SDK stops waiting for it.
+        self.running: Set["asyncio.Future[Any]"] = set()
         self.tool = copy.copy(inner)
         self.tool.on_invoke_tool = self.on_invoke_tool
         if options.on_ask == "interrupt":
             self.tool.needs_approval = self.needs_approval
+        elif callable(inner.needs_approval):
+            self.tool.needs_approval = self._own_needs_approval
 
     # -- on_ask="interrupt": the decision is taken before the SDK invokes the call --
 
@@ -455,12 +483,23 @@ class _GovernedTool:
             call.abandon()
 
     async def _own_needs_approval(self, context: Any, params: Dict[str, Any], call_id: str) -> bool:
+        """The original tool's own ``needs_approval``, as the Agents SDK evaluates it.
+
+        For a callable policy the SDK first checks what the tool's own
+        validation would do to the arguments, and requires manual approval
+        when it would default or convert one the policy did not see. That
+        check is tied to the original tool's invoker, so the policy is
+        evaluated against the original tool here. If this SDK version has no
+        such evaluation, approval is required.
+        """
         setting = self.inner.needs_approval
-        if callable(setting):
-            setting = setting(context, params, call_id)
-            if inspect.isawaitable(setting):
-                setting = await setting
-        return bool(setting)
+        if not callable(setting):
+            return bool(setting)
+        evaluate = self.sdk.evaluate_approval
+        if evaluate is None:
+            return True
+        evaluation = await evaluate(self.inner, context, json.dumps(params), call_id)
+        return evaluation.outcome != "invoke"
 
     async def needs_approval(self, context: Any, params: Dict[str, Any], call_id: str) -> bool:
         """Guardian's decision as the SDK's "does this call need approval".
@@ -535,15 +574,16 @@ class _GovernedTool:
             raise
         if call.wants_tool and not call.task.done():
             # ALLOW, in-process: the original tool, with the text Guardian decided on.
-            try:
-                output = await self.raw.on_invoke_tool(context, text)
-            except asyncio.CancelledError:
-                call.finished.cancel()
-                raise
-            except Exception as error:  # noqa: BLE001 - the tool's own error: nothing is redeemed
-                call.finished.set_exception(error)
-            else:
-                call.finished.set_result(output)
+            # In its own task: when the SDK stops waiting (its tool timeout,
+            # a cancelled run) the tool is not cancelled. A sync tool runs in
+            # a worker thread that cannot be stopped, so the action would
+            # complete with nothing recorded. The tool's result reaches the
+            # decision task either way, which then redeems the capability.
+            running = asyncio.ensure_future(self.raw.on_invoke_tool(context, text))
+            running.add_done_callback(call.tool_finished)
+            self.running.add(running)
+            running.add_done_callback(self.running.discard)
+            await asyncio.wait({running})  # a cancellation here leaves the tool running
         try:
             # Shielded: past the gate the capability is redeemed (or Guardian
             # finishes the call) even when the SDK stops waiting.

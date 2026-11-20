@@ -778,6 +778,126 @@ async def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_d
     assert "Do not call it again" in model.results()[0] and "did not run" not in model.results()[0]
 
 
+async def test_a_sync_tool_that_finishes_after_the_run_was_cancelled_is_still_recorded():
+    # A sync tool runs in a worker thread, which a cancelled run cannot stop:
+    # the action completes, so its capability must still be redeemed.
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_payment(order_id: str) -> str:
+        """Pay."""
+        started.set()
+        release.wait(5)
+        ran.append(order_id)
+        return "paid"
+
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    tool = governed(guardian, slow_payment, on_receipt=lambda t, r, rc: receipts.append(r))
+    running = asyncio.ensure_future(run([("slow_payment", {"order_id": "o1"})], tool))
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert ran == [] and guardian.calls == ["request:tool.invoke"]
+    release.set()
+    for _ in range(100):
+        if receipts:
+            break
+        await asyncio.sleep(0.01)
+    assert ran == ["o1"]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert receipts == ["req_allow"]
+
+
+async def test_an_async_tool_that_started_is_not_stopped_by_the_sdk_timeout_and_is_recorded():
+    release = asyncio.Event()
+
+    async def slow_refund(order_id: str) -> str:
+        """Refund."""
+        await release.wait()
+        ran.append(order_id)
+        return "refunded"
+
+    guardian = FakeClient(ALLOW)
+    model, _ = await run([("slow_refund", {"order_id": "o1"})], governed(guardian, slow_refund, timeout=0.05))
+    assert "timed out" in model.results()[0] and ran == []
+    release.set()
+    await asyncio.sleep(0.05)
+    assert ran == ["o1"]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+
+
+def test_remote_mode_on_a_tool_with_an_output_schema_is_refused_when_the_tool_is_built():
+    # Guardian's record cannot satisfy the tool's output type: the SDK would
+    # fail the run after Guardian performed the call.
+    from pydantic import BaseModel
+
+    class Refund(BaseModel):
+        order_id: str
+
+    def typed_refund(order_id: str) -> Refund:
+        """Refund."""
+        return Refund(order_id=order_id)
+
+    with pytest.raises(ValueError, match="remote"):
+        governed(FakeClient(ALLOW), typed_refund, output_type=Refund, mode="remote")
+    with pytest.raises(ValueError, match="remote"):
+        governed(FakeClient(ALLOW), function_tool(typed_refund, output_type=Refund), modes={"typed_refund": "remote"})
+    with pytest.raises(ValueError, match="remote"):
+        governed(
+            FakeClient(ALLOW),
+            typed_refund,
+            output_type=Refund,
+            tool_names={"typed_refund": "billing.refund"},
+            modes={"billing.refund": "remote"},
+        )
+    governed(FakeClient(ALLOW), typed_refund, output_type=Refund, modes={"other": "remote"})  # in-process: fine
+
+
+def refund_with_default(order_id: str, amount_cents: int = 100_000) -> str:
+    """Refund an order; the whole order by default."""
+    ran.append((order_id, amount_cents))
+    return "refunded"
+
+
+async def large_refunds_need_approval(context, params, call_id) -> bool:
+    return params.get("amount_cents", 0) > 1000
+
+
+@pytest.mark.parametrize("on_ask", ["raise", "result", "interrupt"])
+@pytest.mark.parametrize("arguments", [{"order_id": "o1"}, {"order_id": "o1", "amount_cents": "5000"}])
+async def test_a_callable_needs_approval_policy_keeps_the_sdks_checks_for_defaults_and_conversions(on_ask, arguments):
+    # The Agents SDK requires manual approval when the tool's validation
+    # would default or convert an argument the policy did not see. The
+    # governed tool must not be weaker than the tool it wraps.
+    def plain():
+        return function_tool(refund_with_default, strict_mode=False, needs_approval=large_refunds_need_approval)
+
+    _, unwrapped = await run([("refund_with_default", arguments)], plain())
+    assert len(unwrapped.interruptions) == 1 and ran == []
+    guardian = FakeClient(ALLOW)
+    _, result = await run([("refund_with_default", arguments)], governed(guardian, plain(), on_ask=on_ask))
+    assert len(result.interruptions) == 1
+    assert ran == [] and guardian.calls == []
+
+
+@pytest.mark.parametrize("on_ask", ["raise", "interrupt"])
+async def test_a_callable_needs_approval_policy_still_decides_unchanged_arguments(on_ask):
+    def plain():
+        return function_tool(refund_with_default, strict_mode=False, needs_approval=large_refunds_need_approval)
+
+    guardian = FakeClient(ALLOW)
+    small = ("refund_with_default", {"order_id": "o1", "amount_cents": 500})
+    _, result = await run([small], governed(guardian, plain(), on_ask=on_ask))
+    assert result.interruptions == [] and ran == [("o1", 500)]
+    large = ("refund_with_default", {"order_id": "o1", "amount_cents": 5000})
+    _, result = await run([large], governed(guardian, plain(), on_ask=on_ask))
+    assert len(result.interruptions) == 1 and ran == [("o1", 500)]
+
+
 def test_the_factory_is_a_decorator_like_function_tool():
     make = create_guardian_tool(AsyncFake(FakeClient(ALLOW)), connection_id=CONNECTION)
 
