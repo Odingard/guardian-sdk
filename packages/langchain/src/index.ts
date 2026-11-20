@@ -202,6 +202,8 @@ function wrapWithContext(
             );
           },
         ),
+        // So a setup step held by an earlier call is not taken for the tool.
+        ctx,
       );
     },
   });
