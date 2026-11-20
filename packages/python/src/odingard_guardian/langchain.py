@@ -446,6 +446,14 @@ class GuardianGate:
         self._tool_names = tool_names
         self._on_ask = on_ask
         self._on_approval_pending = on_approval_pending
+        self._sync_only_plain = {
+            "on_approval_pending": (on_approval_pending, "nobody would be told about a held call"),
+            "on_receipt": (on_receipt, "the receipt would never reach it"),
+            "on_execution_error": (
+                on_execution_error,
+                "nobody would be told about a call that ran but could not be recorded",
+            ),
+        }
         self._notified: Dict[str, None] = {}
         self._governed: Dict[int, Tuple[BaseTool, "GuardianTool"]] = {}
 
@@ -564,12 +572,15 @@ class GuardianGate:
         return True
 
     def _sync_callback_check(self, tool_name: str) -> None:
-        if self._on_approval_pending is not None and inspect.iscoroutinefunction(self._on_approval_pending):
-            raise TypeError(
-                f"on_approval_pending is a coroutine function, and {tool_name} was called synchronously: "
-                "it could not be awaited, so nobody would be told about a held call. Pass a plain function, "
-                "or call the tool with ainvoke(). Nothing was proposed and the tool did not run."
-            )
+        # A sync Guard calls these and awaits nothing, so a coroutine function
+        # would never run. Refused before anything is proposed.
+        for option, (callback, lost) in self._sync_only_plain.items():
+            if callback is not None and inspect.iscoroutinefunction(callback):
+                raise TypeError(
+                    f"{option} is a coroutine function, and {tool_name} was called synchronously: "
+                    f"it could not be awaited, so {lost}. Pass a plain function, "
+                    "or call the tool with ainvoke(). Nothing was proposed and the tool did not run."
+                )
 
     def _not_run(self, tool: "GuardianTool", name: str, call_id: Any) -> Any:
         outcome = Outcome(

@@ -488,9 +488,10 @@ support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-c
   LangChain tool names to Guardian tool names. `amount_args`, `purpose`,
   `agent_name`, `adapter_id`, `on_receipt` and `on_execution_error` are
   `Guard`'s. `on_approval_pending=callback(tool_name, request_id)` is called
-  once per held request. It may be a coroutine function for async calls. On
-  a sync call (`invoke`, a sync graph) a coroutine callback cannot be
-  awaited, so the call raises `TypeError` before anything is proposed.
+  once per held request. `on_approval_pending`, `on_receipt` and
+  `on_execution_error` may be coroutine functions for async calls. On a sync
+  call (`invoke`, a sync graph) a coroutine callback cannot be awaited, so
+  the call raises `TypeError` before anything is proposed.
 - **Sync and async.** A `GuardianClient` serves `invoke` and `ainvoke` (async
   calls make each Guardian call in a worker thread). An `AsyncGuardianClient`
   serves `ainvoke` only: a sync call raises `TypeError` before anything runs.

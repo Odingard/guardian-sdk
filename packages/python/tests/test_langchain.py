@@ -1439,3 +1439,52 @@ async def test_governed_calls_of_two_gates_in_one_node_do_not_repeat_each_other(
     state = await app.ainvoke(START_INPUT, THREAD)
     assert "__interrupt__" not in state  # the other gate's call already ran
     assert ran == [("o1", 100)] and allowing.calls == ["request:tool.invoke", "execute:req_allow"]
+
+
+def test_a_coroutine_on_receipt_is_refused_on_a_sync_call_before_anything_is_proposed():
+    receipts = []
+
+    async def record(tool_name, request_id, receipt):
+        receipts.append(request_id)
+
+    guardian = FakeClient(ALLOW)
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_receipt=record)
+    with pytest.raises(TypeError, match="on_receipt"):
+        governed.invoke(CALL[1])
+    assert guardian.calls == [] and ran == [] and receipts == []
+
+    import asyncio
+
+    # The same gate still serves async calls, where the callback is awaited.
+    assert asyncio.run(governed.ainvoke(CALL[1])) == "refunded o42"
+    assert receipts == ["req_allow"]
+
+
+def test_a_coroutine_on_execution_error_is_refused_on_a_sync_call_before_anything_is_proposed():
+    alerts = []
+
+    async def alert(error):
+        alerts.append(error.reason_code)
+
+    guardian = FakeClient(ALLOW, execute_ok=False)
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_execution_error=alert)
+    # Unrefused, the tool would run, the record would fail, and nobody would be alerted.
+    with pytest.raises(TypeError, match="on_execution_error"):
+        governed.invoke(CALL[1])
+    assert guardian.calls == [] and ran == [] and alerts == []
+
+    import asyncio
+
+    assert "could not record it" in asyncio.run(governed.ainvoke(CALL[1]))
+    assert ran == [("o42", 500)] and alerts == ["CAPABILITY_REVOKED"]
+
+
+def test_a_sync_graph_with_a_coroutine_callback_never_runs_the_tool():
+    async def alert(error):
+        pass
+
+    guardian = FakeClient(ALLOW, execute_ok=False)
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_execution_error=alert)
+    with pytest.raises(TypeError, match="on_execution_error"):
+        graph([governed], [CALL]).invoke(START_INPUT)
+    assert ran == [] and guardian.calls == []
