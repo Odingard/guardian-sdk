@@ -171,6 +171,32 @@ def test_a_failing_scope_function_is_raised_before_anything_is_proposed():
         Guard(client, connection_id=CONNECTION, scope="alice")
 
 
+def test_a_scope_function_that_returns_none_is_scope_unknown():
+    """A configured scope function with no answer (a ContextVar the app has
+    not set yet) must not fall back to the shared key."""
+    session = contextvars.ContextVar("session", default=None)
+    client, guard, ran, refund = make(scope=session.get)
+    first = refund()  # one session, before the app set the variable
+    second = refund()  # another session, same call
+    assert (request_id_of(first), request_id_of(second)) == ("req_1", "req_2")
+    assert guard._opts.held == {}
+    assert ran == []
+    assert client.calls == ["request:req_1", "request:req_2"]
+    assert "asks for a new approval" in first["guardian"]["message"]
+    # Once the app names the session, its calls are scoped as usual.
+    session.set("alice")
+    assert request_id_of(refund()) == "req_3"
+    assert refund() == "refunded"
+    assert client.calls[-2:] == ["claim:req_3", "execute:req_3"]
+
+
+def test_without_a_scope_function_a_call_without_a_scope_is_unscoped():
+    client, _, _, refund = make()
+    refund(None)
+    assert refund(None) == "refunded"
+    assert client.calls == ["request:req_1", "claim:req_1", "execute:req_1"]
+
+
 def test_raise_mode_remembers_nothing_and_resume_claims_its_own_request():
     client = Holding()
     guard = Guard(client, connection_id=CONNECTION)

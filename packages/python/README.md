@@ -268,6 +268,7 @@ guard.run("refund_order", {"order_id": "o42"}, do_refund, scope=user_id)
 - **Without a scope, one `Guard` must serve one principal** (one user, one conversation): an identical call from anywhere claims the held request. This is the behaviour of earlier versions.
 - `SCOPE_UNKNOWN` (from `odingard_guardian`) is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. The result then says that calling again asks for a new approval.
 - A `scope` function that raises, or a scope that cannot be hashed, raises before anything is proposed.
+- A `scope` function that returns `None` (a `ContextVar` your app has not set yet) means the session is not known: the call is treated as `SCOPE_UNKNOWN`, not as unscoped. `guard.run(..., scope=None)` means "use the Guard's `scope` function"; only a `Guard` without a `scope` function is unscoped.
 - With `on_ask="raise"` nothing is remembered: `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
 
 The Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.

@@ -1347,6 +1347,8 @@ class Guard:
         the call being made: the session it belongs to (a user id, a
         conversation id; any hashable value), for example read from a
         ``contextvars.ContextVar`` your app sets per request.
+        If it returns ``None`` the session is not known and the call is
+        treated as :data:`SCOPE_UNKNOWN`, not as unscoped.
         :meth:`run` also takes ``scope=`` for one call. See "Held requests
         are scoped per session" below.
     :param max_pin_bytes / max_pin_total_bytes: caps for content pins
@@ -1528,9 +1530,16 @@ class Guard:
     def _scope_of(self, scope: Any) -> Any:
         """The scope of one call: the one given with it, else the Guard's
         ``scope()``. It must be hashable (it is part of an in-memory key).
-        An error here is raised before anything is proposed."""
+        An error here is raised before anything is proposed.
+
+        ``None`` given with the call means "use the Guard's function". A
+        Guard's function that returns ``None`` does not know the session, so
+        the scope is :data:`SCOPE_UNKNOWN`, never the shared unscoped key.
+        Only a Guard without a scope function is unscoped."""
         if scope is None and self._scope is not None:
             scope = self._scope()
+            if scope is None:
+                scope = SCOPE_UNKNOWN
         hash(scope)
         return scope
 
