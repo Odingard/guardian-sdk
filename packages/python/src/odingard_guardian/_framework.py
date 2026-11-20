@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
 from .client import AsyncGuardianClient
-from .guard import Guard, GuardianExecutionFailed, Mode
+from .guard import EXECUTION_OUTCOME_UNKNOWN, Guard, GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -144,6 +144,19 @@ def unchecked(tool_name: str) -> Outcome:
     )
 
 
+def outcome_unknown(tool_name: str) -> Outcome:
+    """A remote call that failed where Guardian may already have performed it."""
+    return Outcome(
+        ran=False,
+        decision="DENY",
+        message=(
+            f"Guardian could not confirm what happened to {tool_name}: Guardian may have performed it. "
+            "Do not call it again; check the request in Guardian."
+        ),
+        reason_code=EXECUTION_OUTCOME_UNKNOWN,
+    )
+
+
 async def decide_and_run(
     guard: Guard,
     tool_name: str,
@@ -169,6 +182,15 @@ async def decide_and_run(
     except Exception:
         if started:
             raise  # the tool's own error, or a hook after this one: not ours to hide
+        if guard._opts.mode_for(tool_name) == "remote":
+            # The tool step never starts for a remote tool, so ``started`` says
+            # nothing here: the error may have come after Guardian performed
+            # the call (a raising ``on_receipt``, for example). Never tell the
+            # model it did not run.
+            _logger.warning(
+                "Guardian call for remote tool %s raised; it may have been performed", tool_name, exc_info=True
+            )
+            return outcome_unknown(tool_name)
         _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
         return unchecked(tool_name)
     if out is _RAN:

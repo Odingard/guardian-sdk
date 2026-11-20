@@ -26,9 +26,8 @@ def decide(fake, **options):
         adapter_id=None,
         purpose=None,
         amount_args=None,
-        on_receipt=None,
         on_execution_error=None,
-        **options,
+        **{"on_receipt": None, **options},
     )
     ran = []
 
@@ -78,3 +77,27 @@ def test_per_tool_modes_and_a_mistyped_mode():
     assert ran == [True] and outcome.result is None
     with pytest.raises(ValueError):
         decide(FakeClient(ALLOW), mode="enforced")
+
+
+def test_a_remote_call_that_raises_after_guardian_performed_it_is_never_reported_as_not_run():
+    fake = FakeClient(ALLOW)
+
+    def on_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("the app's hook failed")
+
+    outcome, ran = decide(fake, mode="remote", on_receipt=on_receipt)
+    assert "execute:req_allow" in fake.calls  # Guardian performed the call
+    assert ran == []
+    assert outcome.reason_code == "EXECUTION_OUTCOME_UNKNOWN"
+    assert "may have performed it" in outcome.message and "Do not call it again" in outcome.message
+    assert "did not run" not in outcome.message and "Try again" not in outcome.message
+
+
+def test_an_in_process_check_that_raises_before_the_tool_still_says_it_did_not_run():
+    class Raising(FakeClient):
+        def request(self, invocation):
+            raise RuntimeError("network down")
+
+    outcome, ran = decide(Raising(ALLOW))
+    assert ran == [] and outcome.reason_code == "SERVICE_UNAVAILABLE"
+    assert "did not run" in outcome.message
