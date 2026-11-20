@@ -56,6 +56,8 @@ import asyncio
 import copy
 import functools
 import inspect
+import threading
+import weakref
 from typing import (
     Annotated,
     Any,
@@ -106,6 +108,11 @@ except ImportError:  # pragma: no cover - exercised without langgraph installed
         pass
 
 
+try:
+    from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD as _SCRATCHPAD
+except ImportError:  # pragma: no cover - another langgraph layout
+    _SCRATCHPAD = "__pregel_scratchpad"
+
 try:  # Arguments LangGraph fills in itself.
     from langgraph.prebuilt import InjectedState, InjectedStore, ToolRuntime
 
@@ -147,6 +154,134 @@ _CALL_ID = "__guardian_tool_call_id__"
 
 #: A paused call claims its request once per resume value LangGraph replays.
 _MAX_RESUMES = 256
+
+
+class _NotRun(Exception):
+    """A call that was stopped before its effect: the graph is pausing."""
+
+
+class _Step:
+    """One execution of one LangGraph task, shared by the governed calls in it.
+
+    LangGraph runs an interrupted task again from its start. So a governed
+    call may pause the task only while no governed call in it has started
+    its effect, and once one pauses, no other starts. The lock makes the two
+    checks one step.
+    """
+
+    __slots__ = ("scratchpad", "lock", "effects", "paused", "__weakref__")
+
+    def __init__(self, scratchpad: Any = None) -> None:
+        self.scratchpad = scratchpad
+        self.lock = threading.Lock()
+        self.effects: set = set()
+        self.paused = False
+
+
+#: The record of a task execution lives as long as LangGraph's own record of
+#: it (its scratchpad). The scratchpad takes no weak reference, so the record
+#: hangs off a function object the scratchpad owns.
+_STEPS: "weakref.WeakKeyDictionary[Any, _Step]" = weakref.WeakKeyDictionary()
+#: Used only if a LangGraph version has no such object: by scratchpad id,
+#: holding the scratchpad so the id stays its own, oldest dropped first.
+_STEPS_BY_ID: Dict[int, _Step] = {}
+_STEPS_LOCK = threading.Lock()
+#: Interrupt positions a paused call owns, by (thread, task, tool call id).
+_PAUSES: Dict[Tuple[Any, Any, Any], Tuple[Dict[str, Any], int]] = {}
+
+
+def _step_of(config: Any) -> Optional[_Step]:
+    """The running task execution, or ``None`` outside a LangGraph run."""
+    conf = config.get("configurable") if isinstance(config, Mapping) else None
+    scratchpad = conf.get(_SCRATCHPAD) if isinstance(conf, Mapping) else None
+    if scratchpad is None:
+        return None
+    anchor = getattr(scratchpad, "get_null_resume", None)
+    with _STEPS_LOCK:
+        if inspect.isfunction(anchor):
+            step = _STEPS.get(anchor)
+            if step is None:
+                step = _STEPS[anchor] = _Step()
+            return step
+        step = _STEPS_BY_ID.get(id(scratchpad))
+        if step is None or step.scratchpad is not scratchpad:
+            while len(_STEPS_BY_ID) >= 4096:
+                del _STEPS_BY_ID[next(iter(_STEPS_BY_ID))]
+            step = _STEPS_BY_ID[id(scratchpad)] = _Step(scratchpad)
+        return step
+
+
+class _Call:
+    """One governed call inside a LangGraph task: when it may pause and when it may act."""
+
+    def __init__(self, gate: "GuardianGate", config: Any, call_id: Any) -> None:
+        self.gate = gate
+        self.step = _step_of(config)
+        conf = config.get("configurable") if isinstance(config, Mapping) else None
+        self.key = (
+            (conf.get("thread_id"), conf.get("checkpoint_ns"), call_id)
+            if self.step is not None and isinstance(conf, Mapping) and call_id is not None
+            else None
+        )
+        self.positions = 0
+
+    def pause(self, payload: Dict[str, Any]) -> bool:
+        """Pause the graph (raises LangGraph's interrupt). Returns True when the
+        pause was already answered by a resume, False when the graph cannot be
+        paused: not asked for, no graph, or a call of this task already acted."""
+        step = self.step
+        if self.gate._on_ask != "interrupt" or _interrupt is None or step is None:
+            return False
+        with step.lock:
+            if step.effects:
+                return False  # pausing now would run those calls a second time
+            self.positions += 1
+            try:
+                _interrupt(payload)  # the resume value is not an approval and is not read
+            except _GraphBubbleUp:
+                step.paused = True
+                if self.key is not None:
+                    if len(_PAUSES) >= 4096:
+                        _PAUSES.clear()
+                    _PAUSES[self.key] = (payload, self.positions)
+                raise
+            except (RuntimeError, KeyError, AssertionError):
+                return False  # not inside a LangGraph run
+        return True
+
+    def replay(self) -> None:
+        """Take back the interrupt positions this call paused at in earlier runs
+        of the task, so a tool's own ``interrupt()`` is not answered with them."""
+        owned = _PAUSES.get(self.key) if self.key is not None else None
+        if owned is not None:
+            payload, positions = owned
+            while self.positions < positions and self.pause(payload):
+                pass
+
+    def acting(self) -> None:
+        """The call's effect is about to start. Raises when the task is pausing."""
+        step = self.step
+        if step is None:
+            return
+        with step.lock:
+            if step.paused:
+                raise _NotRun()
+            step.effects.add(self)  # the call itself: an id could be reused
+
+    def did_not_act(self) -> None:
+        if self.step is not None:
+            with self.step.lock:
+                self.step.effects.discard(self)
+
+    def interrupted(self) -> None:
+        """An interrupt left the call (the tool's own): the task will run again."""
+        if self.step is not None:
+            with self.step.lock:
+                self.step.paused = True
+
+    def finished(self) -> None:
+        if self.key is not None:
+            _PAUSES.pop(self.key, None)
 
 
 class _ThreadedClient:
@@ -319,6 +454,13 @@ class GuardianGate:
     def tool(self, tool: BaseTool) -> "GuardianTool":
         """``tool`` behind Guardian: same name, description and schema for the model."""
         if isinstance(tool, GuardianTool):
+            if tool._gate is not self:
+                # Passing it through would skip this gate's decision; unwrapping
+                # it would skip the other gate's. Neither is skipped.
+                raise TypeError(
+                    f'"{tool.name}" is already behind another GuardianGate. Give this gate the original tool, '
+                    "or use one GuardianGate for both."
+                )
             return tool
         if not isinstance(tool, BaseTool):
             raise TypeError(f"expected a LangChain BaseTool, got {type(tool).__name__}")
@@ -376,7 +518,15 @@ class GuardianGate:
         if args:
             if len(args) != 1 or kwargs:
                 raise TypeError("a tool with several positional arguments cannot be proposed")
-            return name, json_record({"input": args[0]}), copy.deepcopy(args), None
+            # A single-input tool: proposed under the argument name its schema
+            # gives the model ("input" only when there is no such name). The
+            # tool still gets the value the way it gets it unwrapped.
+            try:
+                fields = list(tool._inner.args)
+            except Exception:  # noqa: BLE001
+                fields = []
+            key = fields[0] if len(fields) == 1 else "input"
+            return name, json_record({key: args[0]}), copy.deepcopy(args), None
         visible = dict(tool._inner._filter_injected_args(kwargs))
         injected = {}
         for key, value in kwargs.items():
@@ -404,18 +554,6 @@ class GuardianGate:
             "Resuming before then pauses again.",
         }
 
-    def _pause(self, payload: Dict[str, Any]) -> bool:
-        """Pause the graph. True when it was resumed, False when there is no graph to pause."""
-        if self._on_ask != "interrupt" or _interrupt is None:
-            return False
-        try:
-            _interrupt(payload)  # the resume value is not an approval and is not read
-        except _GraphBubbleUp:
-            raise
-        except (RuntimeError, KeyError, AssertionError):
-            return False  # not inside a LangGraph run
-        return True
-
     def _first_notice(self, outcome: Outcome) -> bool:
         request_id = outcome.request_id
         if self._on_approval_pending is None or not request_id or request_id in self._notified:
@@ -424,6 +562,24 @@ class GuardianGate:
             self._notified.clear()
         self._notified[request_id] = None
         return True
+
+    def _sync_callback_check(self, tool_name: str) -> None:
+        if self._on_approval_pending is not None and inspect.iscoroutinefunction(self._on_approval_pending):
+            raise TypeError(
+                f"on_approval_pending is a coroutine function, and {tool_name} was called synchronously: "
+                "it could not be awaited, so nobody would be told about a held call. Pass a plain function, "
+                "or call the tool with ainvoke(). Nothing was proposed and the tool did not run."
+            )
+
+    def _not_run(self, tool: "GuardianTool", name: str, call_id: Any) -> Any:
+        outcome = Outcome(
+            ran=False,
+            decision="DENY",
+            message=f"{name} did not run: another tool call of the same step is waiting for a person's "
+            "approval, and the graph is pausing for it. Call it again.",
+            reason_code="PAUSED_FOR_APPROVAL",
+        )
+        return self._result(tool, name, outcome, [], call_id)
 
     def _result(self, tool: "GuardianTool", name: str, outcome: Outcome, output: List[Any], call_id: Any) -> Any:
         pair = tool.response_format == "content_and_artifact"
@@ -461,39 +617,70 @@ class GuardianGate:
         )
         return self._result(tool, name, outcome, [], call_id)
 
-    def _run_sync(self, tool: "GuardianTool", args: tuple, kwargs: Dict[str, Any], run_inner: Callable[..., Any]) -> Any:
+    def _run_sync(
+        self, tool: "GuardianTool", args: tuple, kwargs: Dict[str, Any], run_inner: Callable[..., Any], config: Any
+    ) -> Any:
         call_id = kwargs.pop(_CALL_ID, None)
         if self._guard is None:
             raise TypeError(
                 f"{tool.name} was called synchronously, but Guardian was given an AsyncGuardianClient. "
                 "Use ainvoke(), or pass a GuardianClient. The tool did not run."
             )
+        self._sync_callback_check(tool.name)
         try:
             name, proposed, decided, injected = self._prepare(tool, args, kwargs)
         except Exception:  # noqa: BLE001 - arguments Guardian cannot read never run
             return self._unreadable(tool, call_id)
         output: List[Any] = []
+        call = _Call(self, config, call_id)
+        remote = self._guard._opts.mode_for(name) == "remote"
 
         def run_tool() -> None:
+            call.acting()
             if injected is None:
                 output.append(run_inner(*decided))
             else:
                 output.append(run_inner(**decided, **injected))
 
-        outcome = decide_and_run_sync(self._guard, name, proposed, run_tool)
-        for _ in range(_MAX_RESUMES):
-            if outcome.decision != "ASK" or not outcome.request_id:
-                break
-            if self._first_notice(outcome):
-                self._on_approval_pending(name, outcome.request_id)  # type: ignore[misc]
-            if not self._pause(self._payload(tool, name, proposed, outcome, call_id)):
-                break
-            # Resumed: only Guardian's answer to the claim lets the tool run.
-            outcome = decide_and_run_sync(self._guard, name, proposed, run_tool)
+        try:
+            call.replay()
+            for _ in range(_MAX_RESUMES):
+                if remote:
+                    call.acting()  # Guardian performs a remote call as soon as it allows it
+                outcome = decide_and_run_sync(self._guard, name, proposed, run_tool)
+                if outcome.decision != "ASK" or not outcome.request_id:
+                    break
+                call.did_not_act()
+                if self._first_notice(outcome):
+                    told = self._on_approval_pending(name, outcome.request_id)  # type: ignore[misc]
+                    if inspect.isawaitable(told):
+                        close = getattr(told, "close", None)
+                        if callable(close):
+                            close()
+                        self._notified.pop(outcome.request_id, None)
+                        raise TypeError(
+                            f"on_approval_pending returned an awaitable, and {name} was called synchronously: "
+                            "it could not be awaited. Pass a plain function, or call the tool with ainvoke(). "
+                            f"The call is held (request_id {outcome.request_id}) and did not run."
+                        )
+                # Resumed: only Guardian's answer to the claim lets the tool run.
+                if not call.pause(self._payload(tool, name, proposed, outcome, call_id)):
+                    break
+        except _NotRun:
+            return self._not_run(tool, name, call_id)
+        except _GraphBubbleUp:
+            call.interrupted()
+            raise
+        call.finished()
         return self._result(tool, name, outcome, output, call_id)
 
     async def _run_async(
-        self, tool: "GuardianTool", args: tuple, kwargs: Dict[str, Any], run_inner: Callable[..., Awaitable[Any]]
+        self,
+        tool: "GuardianTool",
+        args: tuple,
+        kwargs: Dict[str, Any],
+        run_inner: Callable[..., Awaitable[Any]],
+        config: Any,
     ) -> Any:
         call_id = kwargs.pop(_CALL_ID, None)
         try:
@@ -501,24 +688,37 @@ class GuardianGate:
         except Exception:  # noqa: BLE001 - arguments Guardian cannot read never run
             return self._unreadable(tool, call_id)
         output: List[Any] = []
+        call = _Call(self, config, call_id)
+        remote = self._aguard._opts.mode_for(name) == "remote"
 
         async def run_tool() -> None:
+            call.acting()
             if injected is None:
                 output.append(await run_inner(*decided))
             else:
                 output.append(await run_inner(**decided, **injected))
 
-        outcome = await decide_and_run(self._aguard, name, proposed, run_tool)
-        for _ in range(_MAX_RESUMES):
-            if outcome.decision != "ASK" or not outcome.request_id:
-                break
-            if self._first_notice(outcome):
-                pending = self._on_approval_pending(name, outcome.request_id)  # type: ignore[misc]
-                if inspect.isawaitable(pending):
-                    await pending
-            if not self._pause(self._payload(tool, name, proposed, outcome, call_id)):
-                break
-            outcome = await decide_and_run(self._aguard, name, proposed, run_tool)
+        try:
+            call.replay()
+            for _ in range(_MAX_RESUMES):
+                if remote:
+                    call.acting()
+                outcome = await decide_and_run(self._aguard, name, proposed, run_tool)
+                if outcome.decision != "ASK" or not outcome.request_id:
+                    break
+                call.did_not_act()
+                if self._first_notice(outcome):
+                    told = self._on_approval_pending(name, outcome.request_id)  # type: ignore[misc]
+                    if inspect.isawaitable(told):
+                        await told
+                if not call.pause(self._payload(tool, name, proposed, outcome, call_id)):
+                    break
+        except _NotRun:
+            return self._not_run(tool, name, call_id)
+        except _GraphBubbleUp:
+            call.interrupted()
+            raise
+        call.finished()
         return self._result(tool, name, outcome, output, call_id)
 
 
@@ -604,20 +804,23 @@ class GuardianTool(BaseTool):
                 decided[config_param] = config
             return inner._run(*decided_args, **decided)
 
-        return self._gate._run_sync(self, args, kwargs, run_inner)
+        return self._gate._run_sync(self, args, kwargs, run_inner, config)
 
     async def _arun(self, *args: Any, config: RunnableConfig, run_manager: Any = None, **kwargs: Any) -> Any:
         inner = self._inner
 
         async def run_inner(*decided_args: Any, **decided: Any) -> Any:
-            if run_manager is not None and "run_manager" in inspect.signature(inner._arun).parameters:
+            # A tool that inherits BaseTool._arun runs its _run in a thread and
+            # hands it these keyword arguments, so _run's signature decides.
+            target = inner._run if type(inner)._arun is BaseTool._arun else inner._arun
+            if run_manager is not None and "run_manager" in inspect.signature(target).parameters:
                 decided["run_manager"] = run_manager
-            config_param = _get_runnable_config_param(inner._arun)
+            config_param = _get_runnable_config_param(target)
             if config_param:
                 decided[config_param] = config
             return await inner._arun(*decided_args, **decided)
 
-        return await self._gate._run_async(self, args, kwargs, run_inner)
+        return await self._gate._run_async(self, args, kwargs, run_inner, config)
 
 
 def _govern(inner: BaseTool, gate: GuardianGate) -> GuardianTool:

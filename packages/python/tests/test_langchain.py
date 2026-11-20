@@ -37,6 +37,7 @@ from langgraph.types import Command  # noqa: E402
 from pydantic import BaseModel, field_validator  # noqa: E402
 
 from odingard_guardian import AsyncGuardianClient, RequestResult  # noqa: E402
+from odingard_guardian import langchain as langchain_integration  # noqa: E402
 from odingard_guardian.langchain import (  # noqa: E402
     INTERRUPT_TYPE,
     GuardianGate,
@@ -541,7 +542,7 @@ async def test_a_json_schema_async_only_tool_as_mcp_adapters_build_them():
     assert guardian.calls == [] and len(seen) == 1
 
 
-def test_a_single_input_tool_with_a_schema_is_proposed_as_its_input():
+def test_a_single_input_tool_with_a_schema_is_proposed_under_its_argument_name():
     class Query(BaseModel):
         q: str
 
@@ -550,7 +551,32 @@ def test_a_single_input_tool_with_a_schema_is_proposed_as_its_input():
     governed = guardian_tool(lookup, guardian, connection_id=CONNECTION)
     assert convert_to_openai_tool(governed) == convert_to_openai_tool(lookup)
     assert governed.invoke({"q": "abc"}) == "found abc"
-    assert guardian.last_invocation["arguments"] == {"input": "abc"}
+    # Proposed under the argument name the model sees, not a made-up key.
+    assert guardian.last_invocation["arguments"] == {"q": "abc"}
+    assert governed.invoke("abc") == "found abc"
+    assert guardian.last_invocation["arguments"] == {"q": "abc"}
+
+
+def test_a_string_input_to_a_one_field_tool_is_proposed_under_the_field_name():
+    seen = []
+
+    @tool
+    def lookup_order(order_id: str) -> str:
+        """Look an order up."""
+        seen.append(order_id)
+        return f"found {order_id}"
+
+    guardian = FakeClient(ALLOW)
+    governed = guardian_tool(
+        lookup_order,
+        guardian,
+        connection_id=CONNECTION,
+        amount_args={"lookup_order": {"argument": "order_id", "unit": "minor", "currency": "usd"}},
+    )
+    assert lookup_order.invoke("42") == "found 42"
+    assert governed.invoke("42") == "found 42"
+    assert seen == ["42", "42"]  # the wrapped tool gets what it gets unwrapped
+    assert guardian.last_invocation["arguments"] == {"order_id": "42"}
 
 
 def test_amount_args_carry_the_declaration_and_the_amount():
@@ -921,6 +947,7 @@ def test_resuming_before_approval_does_not_run_and_pauses_again():
         assert [without_message(p) for p in interrupts(again)] == [held_payload()]
         assert ran == []
     assert "request:tool.invoke" not in guardian.calls[1:]  # never proposed again
+    assert guardian.calls.count("claim:req_ask") == 4  # one claim per resume
     assert not any(call.startswith("execute") for call in guardian.calls)
 
     guardian.claims = [APPROVED]
@@ -952,7 +979,7 @@ def test_guardian_unreachable_on_resume_keeps_the_request_and_does_not_run():
 
 
 async def test_interrupt_and_resume_async():
-    guardian = FakeClient(HELD, claims=[PENDING, PENDING, APPROVED])
+    guardian = FakeClient(HELD, claims=[PENDING, APPROVED])
     governed = guardian_tool(refund_order_async, AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt")
     app = graph([governed], [("refund_order_async", CALL[1])], checkpointer=InMemorySaver())
     paused = await app.ainvoke(START_INPUT, THREAD)
@@ -1071,6 +1098,7 @@ def test_a_new_process_proposes_again_and_waits_for_that_approval():
 
     # The same thread resumed by a process that does not remember the held
     # request: it is proposed again, and the earlier resume is no approval.
+    langchain_integration._PAUSES.clear()  # what a new process starts with
     second = FakeClient(RequestResult(ok=False, request_id="req_new", reason_code="APPROVAL_REQUIRED"))
     restarted = graph([guardian_tool(refund_order, second, connection_id=CONNECTION, on_ask="interrupt")], [], saver)
     again = restarted.invoke(Command(resume=True), THREAD)
@@ -1089,3 +1117,325 @@ def test_on_ask_interrupt_outside_a_graph_answers_as_a_held_result():
 def test_an_unknown_on_ask_is_refused():
     with pytest.raises(ValueError, match="on_ask"):
         GuardianGate(FakeClient(ALLOW), connection_id=CONNECTION, on_ask="approve")
+
+
+# --- review findings --------------------------------------------------------------
+
+
+class Policy(FakeClient):
+    """Holds the refund of o42 until ``approved``; allows every other call."""
+
+    def __init__(self, before_request=None):
+        super().__init__(ALLOW)
+        self.approved = False
+        self.before_request = before_request
+
+    def request(self, invocation):
+        order = invocation["arguments"]["order_id"]
+        if self.before_request is not None:
+            self.before_request(order)
+        self.calls.append(f"request:{order}")
+        if order == "o42":
+            return RequestResult(ok=False, request_id="req_ask", reason_code="APPROVAL_REQUIRED")
+        return RequestResult(ok=True, request_id=f"req_{order}", decision="ALLOW", capability_token="cap")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        return APPROVED if self.approved else PENDING
+
+
+ALLOWED_CALL = ("refund_order", {"order_id": "o1", "amount_cents": 100})
+ALLOWED_ASYNC = ("refund_order_async", ALLOWED_CALL[1])
+HELD_ASYNC = ("refund_order_async", CALL[1])
+
+
+def run_to_the_end(app, guardian, resume=lambda app, value: app.invoke(value, THREAD)):
+    """Start the run; approve and resume for as long as it pauses. Returns (final state, pauses)."""
+    state = resume(app, START_INPUT)
+    pauses = 0
+    while state.get("__interrupt__"):
+        pauses += 1
+        assert pauses < 5
+        guardian.approved = True
+        state = resume(app, Command(resume={i.id: True for i in state["__interrupt__"]}))
+    return state, pauses
+
+
+def test_tool_node_an_allowed_call_that_ran_is_not_repeated_by_a_held_sibling():
+    import threading
+
+    refunded = threading.Event()
+
+    @tool
+    def refund(order_id: str, amount_cents: int) -> str:
+        """Refund an order."""
+        ran.append((order_id, amount_cents))
+        refunded.set()
+        return f"refunded {order_id}"
+
+    # The held call is only proposed after the allowed sibling has run.
+    guardian = Policy(before_request=lambda order: order == "o42" and refunded.wait(5))
+    governed = guardian_tool(refund, guardian, connection_id=CONNECTION, on_ask="interrupt")
+    calls = [("refund", ALLOWED_CALL[1]), ("refund", CALL[1])]
+    app = graph([governed], [calls], checkpointer=InMemorySaver())
+    state = app.invoke(START_INPUT, THREAD)
+    # Pausing here would make LangGraph run the whole node again on resume,
+    # the allowed refund included. The held call answers as a held result instead.
+    assert "__interrupt__" not in state
+    assert ran == [("o1", 100)]
+    assert guardian.calls == ["request:o1", "execute:req_o1", "request:o42"]
+    assert any("held for human approval (request_id req_ask)" in text for text in texts(state))
+
+    # Called again on its own after approval, it claims the approved request and runs once.
+    guardian.approved = True
+    again = graph([governed], [[("refund", CALL[1])]], checkpointer=InMemorySaver()).invoke(START_INPUT, THREAD)
+    assert ran == [("o1", 100), ("o42", 500)] and "__interrupt__" not in again
+    assert guardian.calls.count("request:o42") == 1
+
+
+def test_tool_node_a_held_call_that_pauses_first_keeps_its_siblings_from_running_twice():
+    import threading
+    import time
+
+    held = threading.Event()
+
+    def wait_for_the_pause(order):
+        if order == "o1" and not guardian.approved:
+            held.wait(5)
+            time.sleep(0.3)  # the held call is told, then pauses
+
+    guardian = Policy(before_request=wait_for_the_pause)
+    governed = guardian_tool(
+        refund_order, guardian, connection_id=CONNECTION, on_ask="interrupt", on_approval_pending=lambda t, r: held.set()
+    )
+    app = graph([governed], [[ALLOWED_CALL, CALL]], checkpointer=InMemorySaver())
+    paused = app.invoke(START_INPUT, THREAD)
+    assert interrupts(paused)[0]["request_id"] == "req_ask"
+    assert ran == []  # the allowed sibling did not run into a node that is about to be replayed
+    guardian.approved = True
+    done = app.invoke(Command(resume=True), THREAD)
+    assert sorted(ran) == [("o1", 100), ("o42", 500)]
+    assert sorted(texts(done)) == ["refunded o1", "refunded o42"]
+
+
+@pytest.mark.parametrize("order", ["allowed_first", "held_first"])
+async def test_tool_node_async_no_call_runs_twice_across_a_pause(order):
+    guardian = Policy()
+    governed = guardian_tool(refund_order_async, AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt")
+    calls = [ALLOWED_ASYNC, HELD_ASYNC] if order == "allowed_first" else [HELD_ASYNC, ALLOWED_ASYNC]
+    app = graph([governed], [calls], checkpointer=InMemorySaver())
+
+    async def resume(app, value):
+        return await app.ainvoke(value, THREAD)
+
+    state = await resume(app, START_INPUT)
+    pauses = 0
+    while state.get("__interrupt__"):
+        pauses += 1
+        assert pauses < 5
+        guardian.approved = True
+        state = await resume(app, Command(resume=True))
+    assert ran.count(("o1", 100)) == 1
+    assert ran.count(("o42", 500)) <= 1
+    if order == "allowed_first":
+        assert pauses == 0 and "held for human approval" in "".join(texts(state))
+        assert guardian.calls.count("request:o1") == 1
+    else:
+        assert pauses == 1 and sorted(texts(state)) == ["refunded o1", "refunded o42"]
+
+
+def test_create_agent_an_allowed_call_beside_a_held_call_runs_once():
+    guardian = Policy()
+    agent = create_agent(
+        model([ALLOWED_CALL, CALL]),
+        [refund_order],
+        middleware=[GuardianMiddleware(guardian, connection_id=CONNECTION, on_ask="interrupt")],
+        checkpointer=InMemorySaver(),
+    )
+    state, pauses = run_to_the_end(agent, guardian)
+    # create_agent runs each tool call as its own LangGraph task: the pause
+    # belongs to the held call alone and the allowed one is not run again.
+    assert pauses == 1
+    assert sorted(ran) == [("o1", 100), ("o42", 500)]
+    assert guardian.calls.count("request:o1") == 1 and guardian.calls.count("request:o42") == 1
+
+
+async def test_create_agent_async_an_allowed_call_beside_a_held_call_runs_once():
+    guardian = Policy()
+    agent = create_agent(
+        model([ALLOWED_ASYNC, HELD_ASYNC]),
+        [refund_order_async],
+        middleware=[GuardianMiddleware(AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt")],
+        checkpointer=InMemorySaver(),
+    )
+    state = await agent.ainvoke(START_INPUT, THREAD)
+    assert state["__interrupt__"] and ran == [("o1", 100)]
+    guardian.approved = True
+    state = await agent.ainvoke(Command(resume=True), THREAD)
+    assert sorted(ran) == [("o1", 100), ("o42", 500)]
+    assert guardian.calls.count("request:o1") == 1
+
+
+def test_a_tool_behind_another_gate_is_refused_not_passed_through():
+    allowing = GuardianGate(FakeClient(ALLOW), connection_id=CONNECTION)
+    denying = GuardianGate(FakeClient(DENIED), connection_id=CONNECTION)
+    for first, second in ((allowing, denying), (denying, allowing)):
+        with pytest.raises(TypeError, match="another GuardianGate"):
+            second.tool(first.tool(refund_order))
+        with pytest.raises(TypeError, match="another GuardianGate"):
+            guardian_tools([first.tool(refund_order)], second)
+
+
+@pytest.mark.parametrize("tools_allow", [True, False])
+def test_middleware_does_not_let_another_gates_tool_skip_its_decision(tools_allow):
+    tool_client = FakeClient(ALLOW if tools_allow else DENIED)
+    middleware_client = FakeClient(DENIED if tools_allow else ALLOW)
+    governed = guardian_tool(refund_order, tool_client, connection_id=CONNECTION)
+    state = create_agent(
+        model(CALL), [governed], middleware=[GuardianMiddleware(middleware_client, connection_id=CONNECTION)]
+    ).invoke(START_INPUT)
+    # Neither gate's decision is skipped: the call is refused and nothing is proposed or run.
+    assert ran == [] and tool_client.calls == [] and middleware_client.calls == []
+    message = tool_messages(state)[0]
+    assert message.status == "error" and "another GuardianGate" in message.content
+
+
+def test_a_coroutine_on_approval_pending_is_refused_on_a_sync_call_before_anything_is_proposed():
+    pending = []
+
+    async def notify(tool_name, request_id):
+        pending.append(request_id)
+
+    guardian = FakeClient(HELD)
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_approval_pending=notify)
+    with pytest.raises(TypeError, match="on_approval_pending"):
+        governed.invoke(CALL[1])
+    assert guardian.calls == [] and ran == [] and pending == []
+
+    import asyncio
+
+    # The same gate still serves async calls, and the person is told then.
+    assert "held for human approval" in asyncio.run(governed.ainvoke(CALL[1]))
+    assert pending == ["req_ask"]
+
+
+def test_a_sync_on_approval_pending_that_returns_an_awaitable_is_refused_and_not_marked_told():
+    pending = []
+
+    async def later(request_id):
+        pending.append(request_id)
+
+    guardian = FakeClient(HELD)
+    governed = guardian_tool(
+        refund_order, guardian, connection_id=CONNECTION, on_approval_pending=lambda t, r: later(r)
+    )
+    with pytest.raises(TypeError, match="on_approval_pending"):
+        governed.invoke(CALL[1])
+    assert ran == [] and pending == []
+
+    import asyncio
+
+    asyncio.run(governed.ainvoke(CALL[1]))  # claims the same held request, and tells the person
+    assert pending == ["req_ask"]
+    assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
+
+
+def held_tool_with_its_own_interrupt():
+    from langgraph.types import interrupt
+
+    @tool
+    def pay(order_id: str) -> str:
+        """Pay, after asking which account."""
+        account = interrupt({"question": "Which account?"})
+        ran.append((order_id, account))
+        return f"paid {order_id} from {account}"
+
+    return pay
+
+
+def test_a_held_tool_that_interrupts_itself_gets_its_own_answer_not_guardians():
+    guardian = FakeClient(HELD, claims=[PENDING, APPROVED])
+    governed = guardian_tool(held_tool_with_its_own_interrupt(), guardian, connection_id=CONNECTION, on_ask="interrupt")
+    app = graph([governed], [("pay", {"order_id": "o42"})], checkpointer=InMemorySaver())
+    assert interrupts(app.invoke(START_INPUT, THREAD))[0]["request_id"] == "req_ask"
+    assert interrupts(app.invoke(Command(resume="not yet"), THREAD))[0]["request_id"] == "req_ask"
+    # Approved: the tool starts and asks its own question. It must not be
+    # handed a value the app sent to resume Guardian's pause.
+    asked = app.invoke(Command(resume=True), THREAD)
+    assert interrupts(asked) == [{"question": "Which account?"}] and ran == []
+    guardian.invoke = ALLOW  # the tool call is run again from the start, and decided again
+    done = app.invoke(Command(resume="acct-7"), THREAD)
+    assert ran == [("o42", "acct-7")] and texts(done) == ["paid o42 from acct-7"]
+
+
+async def test_a_held_tool_that_interrupts_itself_async():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    governed = guardian_tool(
+        held_tool_with_its_own_interrupt(), AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt"
+    )
+    app = graph([governed], [("pay", {"order_id": "o42"})], checkpointer=InMemorySaver())
+    await app.ainvoke(START_INPUT, THREAD)
+    asked = await app.ainvoke(Command(resume=True), THREAD)
+    assert interrupts(asked) == [{"question": "Which account?"}] and ran == []
+    guardian.invoke = ALLOW
+    done = await app.ainvoke(Command(resume="acct-7"), THREAD)
+    assert ran == [("o42", "acct-7")] and texts(done) == ["paid o42 from acct-7"]
+
+
+async def test_ainvoke_of_a_sync_basetool_passes_its_config_and_run_manager():
+    from langchain_core.runnables import RunnableConfig
+
+    seen = {}
+
+    class Configured(BaseTool):
+        name: str = "configured"
+        description: str = "Needs its config."
+        args_schema: type = RefundArgs
+
+        def _run(self, order_id: str, amount_cents: int, config: RunnableConfig, run_manager=None) -> str:
+            seen.update(tags=config.get("tags"), run_manager=type(run_manager).__name__)
+            return f"done {order_id}"
+
+    plain = await Configured().ainvoke(CALL[1], config={"tags": ["t"]})
+    unwrapped = dict(seen)
+    seen.clear()
+    guardian = FakeClient(ALLOW)
+    governed = guardian_tool(Configured(), guardian, connection_id=CONNECTION)
+    assert await governed.ainvoke(CALL[1], config={"tags": ["t"]}) == plain == "done o42"
+    assert seen == unwrapped == {"tags": ["t"], "run_manager": "CallbackManagerForToolRun"}
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+
+
+async def test_a_remote_sibling_is_not_performed_into_a_node_that_is_pausing():
+    guardian = Policy()
+    gate = GuardianGate(
+        AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt", modes={"wire": "remote"}
+    )
+
+    @tool
+    async def wire(order_id: str) -> str:
+        """Send a wire (Guardian performs it)."""
+        raise AssertionError("never runs")
+
+    app = graph(
+        gate.tools([refund_order_async, wire]),
+        [[HELD_ASYNC, ("wire", {"order_id": "w1"})]],
+        checkpointer=InMemorySaver(),
+    )
+    paused = await app.ainvoke(START_INPUT, THREAD)
+    assert paused["__interrupt__"]
+    assert guardian.calls == ["request:o42"]  # the remote sibling was not even proposed
+    guardian.approved = True
+    done = await app.ainvoke(Command(resume=True), THREAD)
+    assert guardian.calls.count("execute:req_w1") == 1 and ran == [("o42", 500)]
+    assert "__interrupt__" not in done
+
+
+async def test_governed_calls_of_two_gates_in_one_node_do_not_repeat_each_other():
+    holding, allowing = Policy(), FakeClient(ALLOW)
+    held_tool = guardian_tool(refund_order_async, AsyncFake(holding), connection_id=CONNECTION, on_ask="interrupt")
+    allowed_tool = guardian_tool(refund_order, AsyncFake(allowing), connection_id=CONNECTION)
+    app = graph([allowed_tool, held_tool], [[ALLOWED_CALL, HELD_ASYNC]], checkpointer=InMemorySaver())
+    state = await app.ainvoke(START_INPUT, THREAD)
+    assert "__interrupt__" not in state  # the other gate's call already ran
+    assert ran == [("o1", 100)] and allowing.calls == ["request:tool.invoke", "execute:req_allow"]
