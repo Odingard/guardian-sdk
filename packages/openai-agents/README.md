@@ -181,7 +181,7 @@ const governed = createGuardianTool({
 ```
 
 - A held call is claimed only by the same call in the same scope. An identical call in another scope is its own request and needs its own approval.
-- Return `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is not known: a held call is then never claimed by a later call. A `scope` function that throws, or returns something that is not a non-empty string, counts as that.
+- `scope` returns a non-empty string. Anything else means the session is not known, and a held call is then never claimed by a later call: `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`), `undefined`, `null`, an empty string, any other value, or the function throwing. So a call without a user is never given the held calls shared by everyone.
 - **Without `scope`, held calls are shared** by every call of those tools, as in earlier versions: build the tools per conversation, or serve one principal.
 - The scope stays in this process; it is not sent to Guardian. `pending.resume()` claims that call's own request, whatever the scope.
 

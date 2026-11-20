@@ -108,6 +108,27 @@ describe("held requests are scoped per session", () => {
     ]);
   });
 
+  it("a scope option that gives no session never reuses a held request, thread id or not", async () => {
+    // The option replaces the thread-id default, so `undefined` from it
+    // must not fall back to held requests shared by every session.
+    for (const scope of [() => undefined, () => "", () => null]) {
+      for (const config of [thread("alice"), undefined]) {
+        const { client, calls } = holdingClient();
+        const ran: string[] = [];
+        const wrapped = refund(client, ran, { scope });
+        expect(heldId(await wrapped.invoke({ orderId: "ord_1" }, config))).toBe(
+          "req_1",
+        );
+        // Another session, same call: its own request.
+        expect(heldId(await wrapped.invoke({ orderId: "ord_1" }, config))).toBe(
+          "req_2",
+        );
+        expect(calls).toEqual(["request:req_1", "request:req_2"]);
+        expect(ran).toEqual([]);
+      }
+    }
+  });
+
   it("SCOPE_UNKNOWN, or a scope option that throws, never reuses a held request", async () => {
     for (const scope of [
       () => SCOPE_UNKNOWN,

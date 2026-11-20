@@ -41,7 +41,9 @@ export const SCOPE_UNKNOWN: unique symbol = Symbol.for(
  * - a string: the session the call belongs to (a user id, a thread id);
  * - `SCOPE_UNKNOWN`: the session is not known (held requests are not reused);
  * - `undefined`: no scope. Held requests are shared by every call the
- *   context sees, so the context must then serve one principal.
+ *   context sees, so the context must then serve one principal. An
+ *   adapter passes it only when the app gave no `scope` option; what a
+ *   `scope` option returns goes through `resolveHeldScope`.
  */
 export type HeldScope = string | typeof SCOPE_UNKNOWN | undefined;
 
@@ -102,20 +104,22 @@ export function scopeHeldRequests(
 }
 
 /**
- * The scope an adapter's `scope` option gives for one call. `read` calls
- * the option (or the adapter's default). When it throws, or returns
- * anything but a non-empty string, `SCOPE_UNKNOWN` or `undefined`, the
- * session is unknown: `SCOPE_UNKNOWN`.
+ * The scope an app's `scope` option gives for one call. `read` calls the
+ * option. A non-empty string is the scope. Anything else means the app
+ * could not name the session, and is `SCOPE_UNKNOWN`: the option throwing,
+ * `undefined`, `null`, an empty string, any other value. It never gives
+ * `undefined`: an app that supplies a `scope` option has said its calls
+ * belong to sessions, so a call without one must not share held requests.
+ * "No scope" is only for an adapter used without the option.
  */
-export function resolveHeldScope(read: () => unknown): HeldScope {
+export function resolveHeldScope(
+  read: () => unknown,
+): string | typeof SCOPE_UNKNOWN {
   let scope: unknown;
   try {
     scope = read();
   } catch {
     return SCOPE_UNKNOWN;
-  }
-  if (scope === undefined || scope === SCOPE_UNKNOWN) {
-    return scope;
   }
   return typeof scope === "string" && scope.length > 0 ? scope : SCOPE_UNKNOWN;
 }

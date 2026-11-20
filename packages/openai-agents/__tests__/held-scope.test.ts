@@ -80,6 +80,21 @@ describe("held requests are scoped per session", () => {
     expect(ran).toEqual(["ord_1"]);
   });
 
+  it("a scope option that gives no session never reuses a held request", async () => {
+    // For example a run without a user in its context: not the held
+    // requests shared by every session.
+    for (const scope of [() => undefined, () => "", () => null]) {
+      const { client, calls } = holdingClient();
+      const ran: string[] = [];
+      const t = refund(client, ran, { scope });
+      expect(String(await callAs(t, "alice"))).toContain("req_1");
+      // Another session, same call: its own request.
+      expect(String(await callAs(t, "bob"))).toContain("req_2");
+      expect(calls).toEqual(["request:req_1", "request:req_2"]);
+      expect(ran).toEqual([]);
+    }
+  });
+
   it("SCOPE_UNKNOWN, or a scope option that throws, never reuses a held request", async () => {
     for (const scope of [
       () => SCOPE_UNKNOWN,

@@ -187,14 +187,14 @@ describe("scopeHeldRequests", () => {
 });
 
 describe("resolveHeldScope", () => {
-  it("keeps a string, SCOPE_UNKNOWN and undefined", () => {
+  it("keeps a non-empty string and SCOPE_UNKNOWN", () => {
     expect(resolveHeldScope(() => "thread-1")).toBe("thread-1");
     expect(resolveHeldScope(() => SCOPE_UNKNOWN)).toBe(SCOPE_UNKNOWN);
-    expect(resolveHeldScope(() => undefined)).toBeUndefined();
   });
 
   it("fails to the strict side", () => {
     for (const read of [
+      () => undefined,
       () => null,
       () => "",
       () => 7,

@@ -333,7 +333,7 @@ const result = await runThroughGuardian(
 
 - A scope is a string. It is part of an in-memory key only, as a SHA-256 digest; it is not sent to Guardian or put in the proposal.
 - A request held under one scope is claimed only by the same call under the same scope. An identical call under another scope is proposed as its own request and needs its own approval.
-- `SCOPE_UNKNOWN` is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. `resolveHeldScope(() => …)` turns a failing or non-string answer into `SCOPE_UNKNOWN`.
+- `SCOPE_UNKNOWN` is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. `resolveHeldScope(() => …)` is for a scope your own code computes: it keeps a non-empty string and turns everything else (`undefined`, `null`, an empty string, any other value, a throw) into `SCOPE_UNKNOWN`, so a call without a session never falls back to the shared held requests.
 - **Without a scope (`undefined`), one context must serve one principal** (one user, one conversation): an identical call from anywhere claims the held request. This is the behaviour of earlier versions, and of `createGuard`, which takes no scope: make one guard per session with `createGuard`, or use `runThroughGuardian` with `scopeHeldRequests` as above.
 - `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
 - The adapters take a `scope` option: LangChain (default: LangGraph's `configurable.thread_id`), Vercel AI and the OpenAI Agents SDK (no default; see their READMEs).

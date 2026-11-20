@@ -3,7 +3,7 @@ import {
   abortable,
   resolveHeldScope,
   scopeHeldRequests,
-  type HeldScope,
+  type SCOPE_UNKNOWN,
 } from "@odingard/guardian-sdk";
 
 import {
@@ -36,13 +36,17 @@ export type GuardianVercelAIOptions = GuardianAdapterOptions &
      *
      * The AI SDK's tool call options name no conversation, so there is no
      * default: without this option held calls are shared by every call of
-     * the wrapped tools, which must then serve one principal. Return
-     * `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is
-     * not known: a held call is then never claimed by a later call. A
-     * function that throws, or returns something that is not a non-empty
-     * string, counts as that. The scope stays in this process.
+     * the wrapped tools, which must then serve one principal.
+     *
+     * With this option, return a non-empty string. Anything else means the
+     * session is not known, and a held call is then never claimed by a
+     * later call: `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`),
+     * `undefined`, `null`, an empty string, any other value, or the
+     * function throwing. The scope stays in this process.
      */
-    scope?: (callOptions: Record<string, unknown> | undefined) => HeldScope;
+    scope?: (
+      callOptions: Record<string, unknown> | undefined,
+    ) => string | typeof SCOPE_UNKNOWN | null | undefined;
   }>;
 
 type AnyExecute = (input: never, options: never) => unknown;
