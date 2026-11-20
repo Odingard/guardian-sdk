@@ -35,7 +35,8 @@ export type GuardianLangChainOptions = GuardianAdapterOptions &
     /**
      * Held requests are scoped per session. The scope of one call: the
      * conversation or user it belongs to, from the config LangChain passes
-     * the tool. A held call is claimed only by the same call in the same
+     * the tool. The config is the caller's (your graph run), not part of
+     * the model's tool call; never read the scope from the tool's input. A held call is claimed only by the same call in the same
      * scope; an identical call in another scope is its own request.
      *
      * Without this option the scope is LangGraph's

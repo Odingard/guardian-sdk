@@ -331,6 +331,7 @@ const result = await runThroughGuardian(
 );
 ```
 
+- **The scope must come from data your application sets** (the authenticated user, the session or thread of the request), never from the tool call's arguments or anything else the model writes: a model could then name another session's scope.
 - A scope is a non-empty string (an empty string is treated as `SCOPE_UNKNOWN`). It is part of an in-memory key only, as a SHA-256 digest; it is not sent to Guardian or put in the proposal.
 - A request held under one scope is claimed only by the same call under the same scope. An identical call under another scope is proposed as its own request and needs its own approval.
 - `SCOPE_UNKNOWN` is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. `resolveHeldScope(() => …)` is for a scope your own code computes: it keeps a non-empty string and turns everything else (`undefined`, `null`, an empty string, any other value, a throw) into `SCOPE_UNKNOWN`, so a call without a session never falls back to the shared held requests.

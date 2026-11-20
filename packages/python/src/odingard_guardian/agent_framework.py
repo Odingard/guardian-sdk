@@ -86,8 +86,10 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         and the tool's own function never runs; the model gets Guardian's
         result. ``modes`` sets it per Guardian tool name.
     :param scope: ``callback(context)`` returning the scope of a call: the
-        session it belongs to, any hashable value. A held call is claimed
-        only by the same call in the same scope. Default: the id of the
+        session it belongs to, any hashable value. Read it from something
+        your app sets (the session, a ``contextvars.ContextVar``), never
+        from ``context.arguments``, which the model writes. A held call is
+        claimed only by the same call in the same scope. Default: the id of the
         ``AgentSession`` the agent runs with (``agent.run(..., session=...)``).
         Without a session and without this option, a held call is never
         claimed by a later call: each call asks for its own approval.

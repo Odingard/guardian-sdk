@@ -89,8 +89,13 @@ class GuardianFunctionInvocationFilter:
         function. Default: that name.
     :param on_receipt / on_execution_error: as for :class:`Guard`.
     :param scope: ``callback(context)`` returning the scope of a call: the
-        conversation or user it belongs to, any hashable value, for
-        example ``lambda context: context.arguments.get("user_id")``. A
+        conversation or user it belongs to, any hashable value. Read it
+        from something your app sets per request and the model cannot
+        write, such as a ``contextvars.ContextVar``:
+        ``scope=lambda context: current_user.get(None)``. Never read it
+        from ``context.arguments``: Semantic Kernel puts the arguments the
+        model wrote in its function call over the kernel arguments, so the
+        model could name another user's scope. A
         held call is claimed only by the same call in the same scope.
         Semantic Kernel's filter context does not identify a
         conversation, so without this option a held call is never

@@ -6,6 +6,7 @@ the calls the model asks for) and its filter pipeline; a fake client stands
 in for Guardian.
 """
 
+import contextvars
 import json
 
 import pytest
@@ -347,17 +348,29 @@ class TwoRequests(FakeClient):
         return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
 
 
-async def call_as(kernel, user=None):
-    """The same tool call, in the conversation of ``user`` (a kernel argument the function does not take)."""
+#: Set by the app for each request; the model cannot write it.
+current_user = contextvars.ContextVar("current_user", default=None)
+
+
+def SCOPE(context):
+    return current_user.get()
+
+
+async def call_as(kernel, user=None, model_arguments='{"order_id": "o42", "amount_cents": 500}'):
+    """The same tool call, in the conversation of ``user``: the app sets
+    ``current_user`` for the request, as its request handler would."""
     history = ChatHistory()
     call = FunctionCallContent(
         id="call_1",
         function_name="refund_order",
         plugin_name="billing",
-        arguments='{"order_id": "o42", "amount_cents": 500}',
+        arguments=model_arguments,
     )
-    arguments = KernelArguments(**({"user_id": user} if user else {}))
-    await kernel.invoke_function_call(call, history, arguments=arguments)
+    token = current_user.set(user)
+    try:
+        await kernel.invoke_function_call(call, history, arguments=KernelArguments())
+    finally:
+        current_user.reset(token)
     return str(history.messages[-1].items[0].result)
 
 
@@ -375,7 +388,7 @@ async def test_without_a_scope_a_held_request_is_never_claimed_by_a_later_call()
 
 async def test_a_held_request_is_claimed_only_by_the_same_scope():
     guardian = TwoRequests()
-    kernel, billing = kernel_with(guardian, scope=lambda context: context.arguments.get("user_id"))
+    kernel, billing = kernel_with(guardian, scope=SCOPE)
     assert "request_id req_1" in await call_as(kernel, "alice")
     # Another conversation makes the identical call: it is its own request.
     assert "request_id req_2" in await call_as(kernel, "bob")
@@ -401,10 +414,10 @@ async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
 
 
 async def test_an_empty_scope_names_no_conversation():
-    """``arguments.get("user_id", "")`` for callers without an id: the empty
-    string must not become one scope they all share."""
+    """An empty id for callers without one: the empty string must not
+    become one scope they all share."""
     guardian = TwoRequests()
-    kernel, billing = kernel_with(guardian, scope=lambda context: context.arguments.get("user_id", ""))
+    kernel, billing = kernel_with(guardian, scope=lambda context: current_user.get() or "")
     assert "request_id req_1" in await call_as(kernel)  # one caller without an id
     assert "request_id req_2" in await call_as(kernel)  # another one, same call
     assert billing.ran == []
@@ -412,3 +425,84 @@ async def test_an_empty_scope_names_no_conversation():
     # A caller with an id is scoped as usual.
     assert "request_id req_3" in await call_as(kernel, "alice")
     assert await call_as(kernel, "alice") == "refunded o42"
+
+
+class Accounts:
+    """A function that takes the user as a parameter, so the model writes it."""
+
+    def __init__(self):
+        self.ran = []
+
+    @kernel_function(name="close_account", description="Close a user's account")
+    def close_account(self, user_id: str) -> str:
+        self.ran.append(user_id)
+        return f"closed {user_id}"
+
+
+async def close_account_as(kernel, user, model_user_id):
+    """A close_account call in the conversation of ``user``; the model wrote ``model_user_id``."""
+    history = ChatHistory()
+    call = FunctionCallContent(
+        id="call_1",
+        function_name="close_account",
+        plugin_name="accounts",
+        arguments=json.dumps({"user_id": model_user_id}),
+    )
+    token = current_user.set(user)
+    try:
+        # The app also passes its own user_id as a kernel argument.
+        await kernel.invoke_function_call(call, history, arguments=KernelArguments(user_id=user))
+    finally:
+        current_user.reset(token)
+    return str(history.messages[-1].items[0].result)
+
+
+def accounts_kernel(guardian, scope, seen):
+    def recording(context):
+        seen.append(context.arguments.get("user_id"))
+        return scope(context)
+
+    kernel = Kernel()
+    accounts = Accounts()
+    kernel.add_plugin(accounts, plugin_name="accounts")
+    kernel.add_filter(
+        FilterTypes.FUNCTION_INVOCATION,
+        GuardianFunctionInvocationFilter(AsyncFake(guardian), connection_id=CONNECTION, scope=recording),
+    )
+    return kernel, accounts
+
+
+async def test_kernel_arguments_are_written_by_the_model_so_the_scope_is_not_read_from_them():
+    """Semantic Kernel puts the arguments the model wrote in its function
+    call over the invocation's kernel arguments. A scope read from
+    ``context.arguments`` is therefore the model's to choose; a scope the app
+    sets (a ContextVar here) is not."""
+    # Read from the arguments: bob's model names alice and gets her approval.
+    guardian = TwoRequests()
+    seen = []
+    kernel, accounts = accounts_kernel(guardian, lambda context: context.arguments.get("user_id"), seen)
+    assert "request_id req_1" in await close_account_as(kernel, "alice", "alice")
+    assert await close_account_as(kernel, "bob", "alice") == "closed alice"
+    assert seen == ["alice", "alice"]  # the app passed user_id="bob"; the model's value won
+    assert guardian.calls == ["request:tool.invoke", "claim:req_1", "execute:req_1"]
+
+    # Set by the app: the same forged call is bob's own request.
+    guardian = TwoRequests()
+    kernel, accounts = accounts_kernel(guardian, SCOPE, [])
+    assert "request_id req_1" in await close_account_as(kernel, "alice", "alice")
+    assert "request_id req_2" in await close_account_as(kernel, "bob", "alice")
+    assert accounts.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    # alice's own repeat call still claims her request, once.
+    assert await close_account_as(kernel, "alice", "alice") == "closed alice"
+    assert guardian.calls[2:] == ["claim:req_1", "execute:req_1"]
+
+
+async def test_semantic_kernel_refuses_a_model_argument_the_function_does_not_take():
+    """In semantic-kernel 1.47.0 a function call with an argument the
+    function has no parameter for is answered before any filter runs."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=SCOPE)
+    forged = '{"order_id": "o42", "amount_cents": 500, "user_id": "alice"}'
+    assert "unexpected argument" in await call_as(kernel, "bob", model_arguments=forged)
+    assert guardian.calls == [] and billing.ran == []

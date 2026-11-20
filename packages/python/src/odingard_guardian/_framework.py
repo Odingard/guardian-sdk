@@ -114,7 +114,9 @@ def resolve_scope(scope: ScopeOption, context: Any, default: Any = SCOPE_UNKNOWN
 
     ``default`` is what the integration read from the framework's context
     (a session or conversation id), or :data:`SCOPE_UNKNOWN` when the
-    framework does not say. The app's ``scope`` option overrides it. A scope
+    framework does not say. The app's ``scope`` option overrides it. A
+    scope must come from data the application sets, never from the tool
+    call's arguments, which the model writes. A scope
     that is ``None`` or an empty string (a missing id), cannot be hashed, or
     a ``scope`` option that raises, is :data:`SCOPE_UNKNOWN`: a held request
     is then never claimed by a later call, so no other session can use its

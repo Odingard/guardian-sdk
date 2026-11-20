@@ -29,8 +29,9 @@ export type GuardianVercelAIOptions = GuardianAdapterOptions &
     /**
      * Held requests are scoped per session. The scope of one call: the
      * conversation or user it belongs to, from the options the AI SDK
-     * passes the tool's `execute` (for example a user id you put in
-     * `experimental_context`). A held call is claimed only by the same call
+     * passes the tool's `execute`. Read it from what your app sets (a
+     * user id you put in `experimental_context`), never from the tool's
+     * input, `toolCallId` or `messages`, which the model writes. A held call is claimed only by the same call
      * in the same scope; an identical call in another scope is its own
      * request.
      *

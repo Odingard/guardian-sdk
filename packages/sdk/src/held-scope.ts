@@ -25,7 +25,9 @@ import type { GuardianContext } from "./guard.js";
  * ```
  *
  * The scope is part of an in-memory key only (as a SHA-256 digest). It is
- * not sent to Guardian and not put in the proposal.
+ * not sent to Guardian and not put in the proposal. It must come from data
+ * the application sets (the authenticated user, the session of the
+ * request), never from the tool call's arguments, which the model writes.
  */
 
 /**

@@ -59,7 +59,9 @@ export type GuardianOpenAIAgentsOptions = GuardianAdapterOptions &
     /**
      * Held requests are scoped per session. The scope of one call: the
      * conversation or user it belongs to, from the run context the Agents
-     * SDK passes the tool (for example a user id in `runContext.context`).
+     * SDK passes the tool. Read it from what your app sets (a user id in
+     * `runContext.context`, which is not sent to the model), never from the
+     * tool's input or from `details`, the model's tool call.
      * A held call is claimed only by the same call in the same scope; an
      * identical call in another scope is its own request.
      *
