@@ -1,0 +1,573 @@
+import { describe, expect, it, vi } from "vitest";
+import { createTool, isValidationError, Tool } from "@mastra/core/tools";
+import { z } from "zod";
+
+import {
+  GuardianApprovalPending,
+  GuardianDenied,
+  guardianTool,
+  guardianTools,
+} from "../src/index.js";
+import { allow, stubClient } from "./helpers.js";
+
+const receipt = { id: "rcpt_1", status: "sent-verified" };
+
+function refundTool(run: (input: unknown, context: unknown) => unknown) {
+  return createTool({
+    id: "refund_order",
+    description: "Refund an order",
+    inputSchema: z.object({ orderId: z.string(), amount: z.number() }),
+    outputSchema: z.object({ refunded: z.string() }),
+    execute: async (input, context) => run(input, context) as never,
+  });
+}
+
+const call = (tool: unknown, input: unknown, context?: unknown) =>
+  (
+    tool as { execute: (i: unknown, c?: unknown) => Promise<unknown> }
+  ).execute(input, context);
+
+describe("guardianTool: the returned tool", () => {
+  it("is a Mastra tool with the same id, description, schemas and flags", () => {
+    const inner = createTool({
+      id: "refund_order",
+      description: "Refund an order",
+      inputSchema: z.object({ orderId: z.string() }),
+      outputSchema: z.object({ refunded: z.string() }),
+      requireApproval: true,
+      execute: async () => ({ refunded: "x" }),
+    });
+    const wrapped = guardianTool(inner, {
+      client: stubClient({}),
+      connectionId: "con_1",
+    });
+    expect(wrapped).not.toBe(inner);
+    expect(wrapped).toBeInstanceOf(Tool);
+    expect(wrapped.id).toBe("refund_order");
+    expect(wrapped.description).toBe("Refund an order");
+    expect(wrapped.inputSchema).toBe(inner.inputSchema);
+    expect(wrapped.outputSchema).toBe(inner.outputSchema);
+    expect(wrapped.requireApproval).toBe(true);
+    expect(wrapped.execute).not.toBe(inner.execute);
+  });
+
+  it("returns a tool without execute, and a render-only tool, unchanged", () => {
+    const options = { client: stubClient({}), connectionId: "con_1" };
+    const clientSide = createTool({ id: "pick_color", description: "d" });
+    const renderOnly = createTool({
+      id: "show_card",
+      description: "d",
+      renderOnly: true,
+    });
+    expect(guardianTool(clientSide, options)).toBe(clientSide);
+    expect(guardianTool(renderOnly, options)).toBe(renderOnly);
+  });
+
+  it("refuses a value that is not a Mastra tool", () => {
+    expect(() =>
+      guardianTool({ execute: async () => 1 } as never, {
+        client: stubClient({}),
+        connectionId: "con_1",
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it("guardianTools keeps the keys and decides by tool id", async () => {
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const tools = guardianTools(
+      { refund: refundTool(() => ({ refunded: "o" })) },
+      { client: stubClient({ request, execute }), connectionId: "con_1" },
+    );
+    expect(Object.keys(tools)).toEqual(["refund"]);
+    await call(tools.refund, { orderId: "o", amount: 1 });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "refund_order" }),
+    );
+  });
+});
+
+describe("guardianTool remote mode (default)", () => {
+  it("ALLOW: Guardian performs the call, the local execute never runs", async () => {
+    const run = vi.fn();
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(refundTool(run), {
+      client: stubClient({ request, execute }),
+      connectionId: "con_1",
+    });
+    const out = await call(wrapped, { orderId: "ord_9", amount: 25 });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "tool.invoke",
+        connectionId: "con_1",
+        toolName: "refund_order",
+        arguments: { orderId: "ord_9", amount: 25 },
+      }),
+    );
+    expect(execute).toHaveBeenCalledWith({
+      requestId: "req_1",
+      capabilityToken: "cap_1",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(out).toEqual({
+      guardian: {
+        decision: "ALLOW",
+        requestId: "req_1",
+        toolName: "refund_order",
+        receipt,
+      },
+    });
+  });
+
+  it("modes: one tool remote, the others in-process", async () => {
+    const remoteRun = vi.fn();
+    const localRun = vi.fn().mockReturnValue({ refunded: "o" });
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const lookup = createTool({
+      id: "lookup_order",
+      description: "d",
+      inputSchema: z.object({ orderId: z.string() }),
+      execute: async (input) => remoteRun(input) as never,
+    });
+    const tools = guardianTools(
+      { refund: refundTool(localRun), lookup },
+      {
+        client: stubClient({ request, execute }),
+        connectionId: "con_1",
+        mode: "inProcess",
+        modes: { lookup_order: "remote" },
+      },
+    );
+    await call(tools.lookup, { orderId: "o" });
+    await call(tools.refund, { orderId: "o", amount: 1 });
+    expect(remoteRun).not.toHaveBeenCalled();
+    expect(localRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tool's toModelOutput is not applied to Guardian's answer", async () => {
+    const toModelOutput = vi.fn((output: unknown) => ({ mapped: output }));
+    const inner = createTool({
+      id: "refund_order",
+      description: "d",
+      inputSchema: z.object({ orderId: z.string() }),
+      toModelOutput,
+      execute: async () => ({ refunded: "o" }),
+    });
+    const wrapped = guardianTool(inner, {
+      client: stubClient({
+        request: vi.fn().mockResolvedValue(allow()),
+        execute: vi.fn().mockResolvedValue({ ok: true, receipt }),
+      }),
+      connectionId: "con_1",
+    });
+    const out = await call(wrapped, { orderId: "o" });
+    expect(wrapped.toModelOutput!(out as never)).toEqual({
+      type: "json",
+      value: out,
+    });
+    expect(toModelOutput).not.toHaveBeenCalled();
+    expect(wrapped.toModelOutput!({ refunded: "o" } as never)).toEqual({
+      mapped: { refunded: "o" },
+    });
+  });
+});
+
+describe("guardianTool amountArgs (passed to the SDK unchanged, keyed by tool id)", () => {
+  it("each call of a declared tool carries the declaration and the amount", async () => {
+    const cents = {
+      argument: "amount",
+      unit: "minor" as const,
+      currency: "usd" as const,
+    };
+    const run = vi.fn();
+    const request = vi.fn().mockResolvedValue(allow());
+    const tools = guardianTools(
+      { refund: refundTool(run) },
+      {
+        client: stubClient({
+          request,
+          execute: vi.fn().mockResolvedValue({ ok: true, receipt }),
+        }),
+        connectionId: "con_1",
+        amountArgs: { refund_order: cents },
+      },
+    );
+    await call(tools.refund, { orderId: "o", amount: 2000 });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ amountArgument: cents, valueCents: 2000 }),
+    );
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("guardianTool inProcess mode", () => {
+  const options = (client: ReturnType<typeof stubClient>) => ({
+    client,
+    connectionId: "con_1",
+    mode: "inProcess" as const,
+  });
+
+  it("ALLOW: runs once on the decided arguments, then redeems", async () => {
+    const order: string[] = [];
+    const run = vi.fn((input: unknown) => {
+      order.push("run");
+      return { refunded: (input as { orderId: string }).orderId };
+    });
+    const request = vi.fn().mockResolvedValue(allow());
+    const execute = vi.fn(async () => {
+      order.push("redeem");
+      return { ok: true, receipt };
+    });
+    const onReceipt = vi.fn();
+    const wrapped = guardianTool(refundTool(run), {
+      ...options(stubClient({ request, execute: execute as never })),
+      onReceipt,
+    });
+    const context = { requestContext: undefined };
+    const out = await call(wrapped, { orderId: "ord_9", amount: 25 }, context);
+    expect(out).toEqual({ refunded: "ord_9" });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![0]).toEqual({ orderId: "ord_9", amount: 25 });
+    expect(order).toEqual(["run", "redeem"]);
+    expect(execute).toHaveBeenCalledWith({
+      requestId: "req_1",
+      capabilityToken: "cap_1",
+    });
+    expect(onReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "refund_order", requestId: "req_1" }),
+    );
+  });
+
+  it("ASK: does not run and carries the requestId; the same call after approval claims it and runs once", async () => {
+    const run = vi.fn().mockReturnValue({ refunded: "ord_9" });
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ok: true, decision: "ASK", requestId: "req_7" });
+    const claim = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        requestId: "req_7",
+        reasonCode: "APPROVAL_PENDING",
+      })
+      .mockResolvedValue(allow("req_7", "cap_7"));
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(stubClient({ request, claim, execute })),
+    );
+    const input = { orderId: "ord_9", amount: 25 };
+
+    const held = await call(wrapped, input).catch((e: unknown) => e);
+    expect(held).toBeInstanceOf(GuardianApprovalPending);
+    expect(held).toMatchObject({ requestId: "req_7", toolName: "refund_order" });
+    expect(run).not.toHaveBeenCalled();
+
+    // Before the person approves: still held, still not run.
+    const again = await call(wrapped, input).catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(GuardianApprovalPending);
+    expect(run).not.toHaveBeenCalled();
+
+    // After approval the same call claims the approved request.
+    expect(await call(wrapped, input)).toEqual({ refunded: "ord_9" });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(claim).toHaveBeenCalledWith("req_7");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith({
+      requestId: "req_7",
+      capabilityToken: "cap_7",
+    });
+  });
+
+  it("ASK with onAsk result: returns the held request to the caller", async () => {
+    const run = vi.fn();
+    const wrapped = guardianTool(refundTool(run), {
+      ...options(
+        stubClient({
+          request: vi
+            .fn()
+            .mockResolvedValue({ ok: true, decision: "ASK", requestId: "req_7" }),
+        }),
+      ),
+      onAsk: "result",
+    });
+    const out = await call(wrapped, { orderId: "o", amount: 1 });
+    expect(out).toMatchObject({
+      guardian: { decision: "ASK", requestId: "req_7", toolName: "refund_order" },
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("DENY: throws GuardianDenied and does not run", async () => {
+    const run = vi.fn();
+    const execute = vi.fn();
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({
+          request: vi.fn().mockResolvedValue({
+            ok: false,
+            requestId: "req_2",
+            reasonCode: "POLICY_DENY",
+          }),
+          execute,
+        }),
+      ),
+    );
+    const err = await call(wrapped, { orderId: "o", amount: 1 }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(GuardianDenied);
+    expect(err).toMatchObject({ reasonCode: "POLICY_DENY" });
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("DENY with onDeny result: returns the denial", async () => {
+    const run = vi.fn();
+    const wrapped = guardianTool(refundTool(run), {
+      ...options(
+        stubClient({
+          request: vi
+            .fn()
+            .mockResolvedValue({ ok: false, reasonCode: "POLICY_DENY" }),
+        }),
+      ),
+      onDeny: "result",
+    });
+    expect(await call(wrapped, { orderId: "o", amount: 1 })).toMatchObject({
+      guardian: { decision: "DENY", reasonCode: "POLICY_DENY" },
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("Guardian unreachable: fails closed, nothing runs", async () => {
+    const run = vi.fn();
+    const execute = vi.fn();
+    const thrown = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({
+          request: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+          execute,
+        }),
+      ),
+    );
+    await expect(call(thrown, { orderId: "o", amount: 1 })).rejects.toThrow(
+      "ECONNREFUSED",
+    );
+    const answered = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({
+          request: vi
+            .fn()
+            .mockResolvedValue({ ok: false, reasonCode: "SERVICE_UNAVAILABLE" }),
+          execute,
+        }),
+      ),
+    );
+    await expect(
+      call(answered, { orderId: "o", amount: 1 }),
+    ).rejects.toBeInstanceOf(GuardianDenied);
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("argument integrity: the tool runs on what Guardian decided, not on a later change", async () => {
+    const run = vi.fn().mockReturnValue({ refunded: "ord_9" });
+    let release!: (value: unknown) => void;
+    const request = vi.fn(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(stubClient({ request: request as never, execute })),
+    );
+    const input = { orderId: "ord_9", amount: 25 };
+    const pending = call(wrapped, input);
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    // Changed while Guardian is deciding.
+    input.amount = 9_999;
+    input.orderId = "ord_other";
+    release(allow());
+    await pending;
+    const decided = (request.mock.calls[0] as unknown[])[0] as {
+      arguments: unknown;
+    };
+    expect(decided.arguments).toEqual({ orderId: "ord_9", amount: 25 });
+    expect(run.mock.calls[0]![0]).toEqual({ orderId: "ord_9", amount: 25 });
+    expect(run.mock.calls[0]![0]).not.toBe(input);
+  });
+
+  it("a direct call the tool's schema refuses: the body does not run and nothing is redeemed", async () => {
+    const run = vi.fn();
+    const execute = vi.fn();
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({ request: vi.fn().mockResolvedValue(allow()), execute }),
+      ),
+    );
+    const out = await call(wrapped, { orderId: 7 });
+    expect(isValidationError(out)).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("the tool's own error propagates and nothing is redeemed", async () => {
+    const execute = vi.fn();
+    const wrapped = guardianTool(
+      refundTool(() => {
+        throw new Error("payment provider down");
+      }),
+      options(
+        stubClient({ request: vi.fn().mockResolvedValue(allow()), execute }),
+      ),
+    );
+    await expect(call(wrapped, { orderId: "o", amount: 1 })).rejects.toThrow(
+      "payment provider down",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("guardianTool abort (context.abortSignal)", () => {
+  const options = (client: ReturnType<typeof stubClient>, mode: "inProcess" | "remote") => ({
+    client,
+    connectionId: "con_1",
+    mode,
+  });
+
+  it("already aborted: Guardian is not asked and nothing runs", async () => {
+    const run = vi.fn();
+    const request = vi.fn();
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(stubClient({ request }), "inProcess"),
+    );
+    const controller = new AbortController();
+    controller.abort(new Error("stopped"));
+    await expect(
+      call(wrapped, { orderId: "o", amount: 1 }, { abortSignal: controller.signal }),
+    ).rejects.toThrow("stopped");
+    expect(request).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each(["inProcess", "remote"] as const)(
+    "aborted while Guardian decides (%s): rejects at once and a late ALLOW runs nothing",
+    async (mode) => {
+      const run = vi.fn();
+      let release!: (value: unknown) => void;
+      const request = vi.fn(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+      const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+      const wrapped = guardianTool(
+        refundTool(run),
+        options(stubClient({ request: request as never, execute }), mode),
+      );
+      const controller = new AbortController();
+      const pending = call(
+        wrapped,
+        { orderId: "o", amount: 1 },
+        { abortSignal: controller.signal },
+      );
+      await vi.waitFor(() => expect(request).toHaveBeenCalled());
+      controller.abort(new Error("stopped"));
+      await expect(pending).rejects.toThrow("stopped");
+      release(allow());
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(run).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("aborted after the tool started: waits for the real outcome", async () => {
+    let finish!: (value: unknown) => void;
+    const run = vi.fn(() => new Promise((resolve) => (finish = resolve)));
+    const execute = vi.fn().mockResolvedValue({ ok: true, receipt });
+    const wrapped = guardianTool(
+      refundTool(run),
+      options(
+        stubClient({ request: vi.fn().mockResolvedValue(allow()), execute }),
+        "inProcess",
+      ),
+    );
+    const controller = new AbortController();
+    const pending = call(
+      wrapped,
+      { orderId: "o", amount: 1 },
+      { abortSignal: controller.signal },
+    );
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    controller.abort(new Error("stopped"));
+    finish({ refunded: "o" });
+    expect(await pending).toEqual({ refunded: "o" });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('guardianTool onAsk: "suspend"', () => {
+  const held = () =>
+    stubClient({
+      request: vi
+        .fn()
+        .mockResolvedValue({ ok: true, decision: "ASK", requestId: "req_7" }),
+    });
+
+  it("suspends through the context's suspend with the requestId", async () => {
+    const run = vi.fn();
+    const suspend = vi.fn().mockResolvedValue(undefined);
+    const wrapped = guardianTool(refundTool(run), {
+      client: held(),
+      connectionId: "con_1",
+      mode: "inProcess",
+      onAsk: "suspend",
+    });
+    const out = await call(
+      wrapped,
+      { orderId: "o", amount: 1 },
+      { agent: { suspend } },
+    );
+    expect(out).toBeUndefined();
+    expect(suspend).toHaveBeenCalledWith({
+      guardian: expect.objectContaining({
+        decision: "ASK",
+        requestId: "req_7",
+        toolName: "refund_order",
+      }),
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("throws GuardianApprovalPending when the call cannot suspend", async () => {
+    const wrapped = guardianTool(refundTool(vi.fn()), {
+      client: held(),
+      connectionId: "con_1",
+      onAsk: "suspend",
+    });
+    await expect(
+      call(wrapped, { orderId: "o", amount: 1 }),
+    ).rejects.toBeInstanceOf(GuardianApprovalPending);
+  });
+
+  it("refuses a tool that declares its own suspend or resume schema", () => {
+    const inner = createTool({
+      id: "ask_user",
+      description: "d",
+      suspendSchema: z.object({ question: z.string() }),
+      resumeSchema: z.object({ answer: z.string() }),
+      execute: async () => ({}),
+    });
+    const options = { client: held(), connectionId: "con_1" };
+    expect(() => guardianTool(inner, { ...options, onAsk: "suspend" })).toThrow(
+      TypeError,
+    );
+    expect(() => guardianTool(inner, options)).not.toThrow();
+  });
+});
