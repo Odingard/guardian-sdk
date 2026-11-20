@@ -77,8 +77,9 @@ function checkedTimeoutMs(value: unknown): number {
 
 /**
  * A `fetch` whose every call ends after `timeoutMs` and when `signal`
- * aborts. Each call gets its own timer; a signal the caller passes in the
- * call's own `init` is kept as well. The returned promise rejects with the
+ * aborts. Each call gets its own timer; the call's own signal is kept as
+ * well: `init.signal`, or the signal of a `Request` passed as input (an
+ * explicit `init.signal` overrides the Request's, as in `fetch`). The returned promise rejects with the
  * signal's reason (a `TimeoutError` for the time limit), and so does
  * reading the response body when the limit passes while it is read.
  *
@@ -94,7 +95,17 @@ export function createTimeoutFetch(
   return (input, init) => {
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (signal) signals.push(signal);
-    if (init?.signal) signals.push(init.signal);
+    // The call's own signal, by fetch's rule: `init.signal` when it is
+    // given (null means none), else the signal of a `Request` input. The
+    // combined signal below goes in `init`, where it would otherwise
+    // replace the Request's.
+    const own =
+      init?.signal !== undefined
+        ? init.signal
+        : input instanceof Request
+          ? input.signal
+          : undefined;
+    if (own) signals.push(own);
     return (base ?? fetch)(input, {
       ...init,
       signal: AbortSignal.any(signals),

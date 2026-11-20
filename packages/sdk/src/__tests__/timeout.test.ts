@@ -48,7 +48,7 @@ function transport(
 ): typeof fetch {
   return async (input, init) => {
     const signal = init?.signal ?? undefined;
-    const path = new URL(String(input)).pathname;
+    const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
     calls.push({ path, signal });
     if (signal?.aborted) throw signal.reason;
     const answered = await answer(
@@ -215,6 +215,88 @@ describe("createTimeoutFetch", () => {
     });
     controller.abort(new Error("call stopped"));
     await expect(pending).rejects.toThrow("call stopped");
+  });
+
+  describe("a Request input that carries its own signal", () => {
+    // Like fetch, the stand-in sees only `init.signal`: the wrapper has to
+    // carry the Request's signal into it.
+    const seenSignal = (calls: Call[]) => calls[0]!.signal!;
+
+    it("refuses a Request whose signal is already aborted", async () => {
+      const calls: Call[] = [];
+      const bounded = createTimeoutFetch({
+        timeoutMs: 5_000,
+        fetch: transport(() => Response.json({}), calls),
+      });
+      const request = new Request("https://guardian.test/x", {
+        signal: AbortSignal.abort(new Error("request stopped")),
+      });
+      await expect(bounded(request)).rejects.toThrow("request stopped");
+      expect(seenSignal(calls).aborted).toBe(true);
+    });
+
+    it("ends the call when the Request's signal aborts in flight", async () => {
+      const controller = new AbortController();
+      const calls: Call[] = [];
+      const bounded = createTimeoutFetch({
+        timeoutMs: 5_000,
+        fetch: transport(() => "hang", calls),
+      });
+      const pending = bounded(
+        new Request("https://guardian.test/x", { signal: controller.signal }),
+      );
+      controller.abort(new Error("request stopped"));
+      await expect(pending).rejects.toThrow("request stopped");
+    });
+
+    it("lets an explicit init.signal override the Request's, as fetch does", async () => {
+      const ofRequest = new AbortController();
+      const ofInit = new AbortController();
+      const calls: Call[] = [];
+      const bounded = createTimeoutFetch({
+        timeoutMs: 5_000,
+        fetch: transport(() => "hang", calls),
+      });
+      const pending = bounded(
+        new Request("https://guardian.test/x", { signal: ofRequest.signal }),
+        { signal: ofInit.signal },
+      );
+      ofRequest.abort(new Error("request stopped"));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(seenSignal(calls).aborted).toBe(false); // overridden: not followed
+      ofInit.abort(new Error("init stopped"));
+      await expect(pending).rejects.toThrow("init stopped");
+    });
+
+    it("drops the Request's signal for an explicit init.signal of null", async () => {
+      const calls: Call[] = [];
+      const bounded = createTimeoutFetch({
+        timeoutMs: 5_000,
+        fetch: transport(() => Response.json({ ok: true }), calls),
+      });
+      const response = await bounded(
+        new Request("https://guardian.test/x", {
+          signal: AbortSignal.abort(new Error("request stopped")),
+        }),
+        { signal: null },
+      );
+      expect(await response.json()).toEqual({ ok: true });
+      expect(seenSignal(calls).aborted).toBe(false);
+    });
+
+    it("still applies the time limit and the caller's signal", async () => {
+      const bounded = createTimeoutFetch({
+        timeoutMs: LIMIT,
+        fetch: transport(() => "hang"),
+      });
+      await expect(
+        bounded(
+          new Request("https://guardian.test/x", {
+            signal: new AbortController().signal,
+          }),
+        ),
+      ).rejects.toMatchObject({ name: "TimeoutError" });
+    });
   });
 
   it("refuses a time limit that is not a whole number in range", () => {
