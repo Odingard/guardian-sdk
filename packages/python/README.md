@@ -433,13 +433,25 @@ state = agent.invoke(Command(resume=True), thread)
   another process resumes the thread (a restart, another worker), the call
   is proposed again and pauses with a new `request_id` that needs its own
   approval. It never runs on the earlier resume.
-- A tool that itself calls `interrupt()` is run again from the start when
-  LangGraph resumes it, so Guardian decides on that call again. Its
-  `interrupt()` gets its own answer: a value sent to resume Guardian's pause
-  is not handed to the tool. Which interrupts were Guardian's is kept in the
-  process's memory; after a restart in the middle of such a sequence the
-  tool may be handed an earlier resume value. Other calls of the same node
-  that already ran are run again by LangGraph when a tool interrupts itself.
+- **A tool that calls `interrupt()` itself and a call that needs approval
+  do not go together.** LangGraph runs such a tool again from the start
+  when the graph resumes, and Guardian decides on that run again. A person's
+  approval is used once, so it cannot wait for the tool's own pause: the
+  next run would need a new approval, then stop at the tool's question
+  again, without end. So when a tool that started under an approved request
+  (after ASK, with `on_ask="interrupt"` or `"result"`) calls `interrupt()`,
+  the pause is not passed on. The call ends there, the model gets an error
+  `ToolMessage` saying it was approved, started and did not complete
+  (`reason_code` `INTERRUPT_AFTER_APPROVAL`), and a warning is logged.
+  Whatever the tool did before its `interrupt()` has happened; nothing after
+  it runs. Ask the person before the tool call instead, or pass the answer
+  as an argument, so it is part of what is approved.
+- A tool that calls `interrupt()` and is allowed without a person (ALLOW by
+  rule) works: on resume the call is decided again and the tool gets its
+  answer. A value sent to resume Guardian's pause is not handed to a
+  tool's `interrupt()` (which pauses were Guardian's is kept in the process's
+  memory). Other calls of the same node that already ran are
+  run again by LangGraph when a tool interrupts itself.
 - Outside a LangGraph run (a plain `tool.invoke`) there is nothing to pause;
   a held call answers as with `on_ask="result"`.
 

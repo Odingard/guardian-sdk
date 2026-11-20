@@ -56,6 +56,7 @@ import asyncio
 import copy
 import functools
 import inspect
+import logging
 import threading
 import weakref
 from typing import (
@@ -96,15 +97,19 @@ from ._framework import (
     resolve_tool_name,
 )
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import GuardianExecutionFailed, Mode
+from .guard import GuardianExecutionFailed, Mode, _held_key
 
 try:  # LangGraph is needed for on_ask="interrupt" only.
     from langgraph.errors import GraphBubbleUp as _GraphBubbleUp
+    from langgraph.errors import GraphInterrupt as _GraphInterrupt
     from langgraph.types import interrupt as _interrupt
 except ImportError:  # pragma: no cover - exercised without langgraph installed
     _interrupt = None
 
     class _GraphBubbleUp(Exception):  # type: ignore[no-redef]
+        pass
+
+    class _GraphInterrupt(_GraphBubbleUp):  # type: ignore[no-redef]
         pass
 
 
@@ -156,8 +161,15 @@ _CALL_ID = "__guardian_tool_call_id__"
 _MAX_RESUMES = 256
 
 
+_logger = logging.getLogger("odingard_guardian")
+
+
 class _NotRun(Exception):
     """A call that was stopped before its effect: the graph is pausing."""
+
+
+class _InterruptAfterApproval(Exception):
+    """An approved tool paused the graph itself: its approval cannot wait for that pause."""
 
 
 class _Step:
@@ -582,6 +594,40 @@ class GuardianGate:
                     "or call the tool with ainvoke(). Nothing was proposed and the tool did not run."
                 )
 
+    def _claiming(self, guard: Any, name: str, proposed: Dict[str, Any]) -> Optional[str]:
+        """The held request the next decision will claim for this call, if any."""
+        key = _held_key(guard._opts, "tool", name, proposed)
+        return guard._opts.held.get(key) if key is not None else None
+
+    def _stopped(self, tool: "GuardianTool", name: str, request_id: str, call_id: Any) -> Any:
+        # A person's approval is used once. The tool started under it and then
+        # paused the graph with its own interrupt(); LangGraph would run the
+        # call again from the start on resume, and that run would need a new
+        # approval, pause again at the tool's question, and so on without end.
+        # The pause is not passed on, so the call ends here instead.
+        _logger.warning(
+            "%s was approved (request_id %s) and then called interrupt(); the call was stopped", name, request_id
+        )
+        outcome = Outcome(
+            ran=True,
+            decision="ALLOW",
+            message=f"{name} was approved (request_id {request_id}) and started, but it then paused the graph "
+            "with its own interrupt(). An approval is used once and cannot wait for that pause, so the call "
+            "was stopped there and did not complete. Do not call it again; tell the user.",
+            request_id=request_id,
+            reason_code="INTERRUPT_AFTER_APPROVAL",
+            result={
+                "guardian": {
+                    "decision": "ALLOW",
+                    "outcome": "not_completed",
+                    "tool_name": name,
+                    "request_id": request_id,
+                    "reason_code": "INTERRUPT_AFTER_APPROVAL",
+                }
+            },
+        )
+        return self._result(tool, name, outcome, [], call_id)
+
     def _not_run(self, tool: "GuardianTool", name: str, call_id: Any) -> Any:
         outcome = Outcome(
             ran=False,
@@ -646,18 +692,26 @@ class GuardianGate:
         call = _Call(self, config, call_id)
         remote = self._guard._opts.mode_for(name) == "remote"
 
+        claimed: List[Optional[str]] = [None]
+
         def run_tool() -> None:
             call.acting()
-            if injected is None:
-                output.append(run_inner(*decided))
-            else:
-                output.append(run_inner(**decided, **injected))
+            try:
+                if injected is None:
+                    output.append(run_inner(*decided))
+                else:
+                    output.append(run_inner(**decided, **injected))
+            except _GraphInterrupt:
+                if claimed[0] is not None:
+                    raise _InterruptAfterApproval() from None
+                raise
 
         try:
             call.replay()
             for _ in range(_MAX_RESUMES):
                 if remote:
                     call.acting()  # Guardian performs a remote call as soon as it allows it
+                claimed[0] = self._claiming(self._guard, name, proposed)
                 outcome = decide_and_run_sync(self._guard, name, proposed, run_tool)
                 if outcome.decision != "ASK" or not outcome.request_id:
                     break
@@ -679,6 +733,9 @@ class GuardianGate:
                     break
         except _NotRun:
             return self._not_run(tool, name, call_id)
+        except _InterruptAfterApproval:
+            call.finished()
+            return self._stopped(tool, name, claimed[0] or "", call_id)
         except _GraphBubbleUp:
             call.interrupted()
             raise
@@ -702,18 +759,26 @@ class GuardianGate:
         call = _Call(self, config, call_id)
         remote = self._aguard._opts.mode_for(name) == "remote"
 
+        claimed: List[Optional[str]] = [None]
+
         async def run_tool() -> None:
             call.acting()
-            if injected is None:
-                output.append(await run_inner(*decided))
-            else:
-                output.append(await run_inner(**decided, **injected))
+            try:
+                if injected is None:
+                    output.append(await run_inner(*decided))
+                else:
+                    output.append(await run_inner(**decided, **injected))
+            except _GraphInterrupt:
+                if claimed[0] is not None:
+                    raise _InterruptAfterApproval() from None
+                raise
 
         try:
             call.replay()
             for _ in range(_MAX_RESUMES):
                 if remote:
                     call.acting()
+                claimed[0] = self._claiming(self._aguard, name, proposed)
                 outcome = await decide_and_run(self._aguard, name, proposed, run_tool)
                 if outcome.decision != "ASK" or not outcome.request_id:
                     break
@@ -726,6 +791,9 @@ class GuardianGate:
                     break
         except _NotRun:
             return self._not_run(tool, name, call_id)
+        except _InterruptAfterApproval:
+            call.finished()
+            return self._stopped(tool, name, claimed[0] or "", call_id)
         except _GraphBubbleUp:
             call.interrupted()
             raise

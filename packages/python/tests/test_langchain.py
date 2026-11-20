@@ -1353,33 +1353,97 @@ def held_tool_with_its_own_interrupt():
     return pay
 
 
-def test_a_held_tool_that_interrupts_itself_gets_its_own_answer_not_guardians():
-    guardian = FakeClient(HELD, claims=[PENDING, APPROVED])
+class AlwaysAsks(FakeClient):
+    """A policy that holds every call: each proposal is a new held request."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.approved = set()
+        self.requests = 0
+
+    def request(self, invocation):
+        self.requests += 1
+        self.calls.append(f"request:req_{self.requests}")
+        return RequestResult(ok=False, request_id=f"req_{self.requests}", reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        if request_id in self.approved:
+            return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
+
+
+def approve_and_resume_until_done(app, guardian, answer="acct-7", rounds=6):
+    """A person who approves every held request and answers every question."""
+    state = app.invoke(START_INPUT, THREAD)
+    seen = []
+    for _ in range(rounds):
+        if not state.get("__interrupt__"):
+            return state, seen
+        value = state["__interrupt__"][0].value
+        seen.append(value.get("request_id") or value)
+        if value.get("request_id"):
+            guardian.approved.add(value["request_id"])
+        state = app.invoke(Command(resume=answer), THREAD)
+    raise AssertionError(f"still pausing after {rounds} rounds: {seen}")
+
+
+def test_a_held_tool_that_interrupts_itself_is_stopped_and_cannot_loop():
+    guardian = AlwaysAsks()
     governed = guardian_tool(held_tool_with_its_own_interrupt(), guardian, connection_id=CONNECTION, on_ask="interrupt")
     app = graph([governed], [("pay", {"order_id": "o42"})], checkpointer=InMemorySaver())
-    assert interrupts(app.invoke(START_INPUT, THREAD))[0]["request_id"] == "req_ask"
-    assert interrupts(app.invoke(Command(resume="not yet"), THREAD))[0]["request_id"] == "req_ask"
-    # Approved: the tool starts and asks its own question. It must not be
-    # handed a value the app sent to resume Guardian's pause.
-    asked = app.invoke(Command(resume=True), THREAD)
-    assert interrupts(asked) == [{"question": "Which account?"}] and ran == []
-    guardian.invoke = ALLOW  # the tool call is run again from the start, and decided again
-    done = app.invoke(Command(resume="acct-7"), THREAD)
-    assert ran == [("o42", "acct-7")] and texts(done) == ["paid o42 from acct-7"]
+    state, seen = approve_and_resume_until_done(app, guardian)
+    # One approval, one pause. The approved tool started, asked its own
+    # question, and was stopped there: the approval is used once and cannot be
+    # carried across the tool's own pause, so the graph is not paused for it.
+    assert seen == ["req_1"]
+    assert guardian.calls == ["request:req_1", "claim:req_1"]
+    assert ran == []  # the tool never got past its interrupt(), with any value
+    message = tool_messages(state)[0]
+    assert message.status == "error"
+    assert "paused the graph with its own interrupt()" in message.content and "req_1" in message.content
+    assert message.artifact["guardian"]["reason_code"] == "INTERRUPT_AFTER_APPROVAL"
+    assert state["messages"][-1].content == "done"
+
+
+def test_a_held_tool_that_interrupts_itself_never_gets_a_value_sent_to_resume_guardian():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(held_tool_with_its_own_interrupt(), guardian, connection_id=CONNECTION, on_ask="interrupt")
+    app = graph([governed], [("pay", {"order_id": "o42"})], checkpointer=InMemorySaver())
+    app.invoke(START_INPUT, THREAD)
+    again = app.invoke(Command(resume="not yet"), THREAD)  # before approval: paused again
+    assert interrupts(again)[0]["request_id"] == "req_1"
+    guardian.approved.add("req_1")
+    done = app.invoke(Command(resume=True), THREAD)
+    assert "__interrupt__" not in done and ran == []  # neither "not yet" nor True became the account
 
 
 async def test_a_held_tool_that_interrupts_itself_async():
-    guardian = FakeClient(HELD, claims=[APPROVED])
+    guardian = AlwaysAsks()
     governed = guardian_tool(
         held_tool_with_its_own_interrupt(), AsyncFake(guardian), connection_id=CONNECTION, on_ask="interrupt"
     )
     app = graph([governed], [("pay", {"order_id": "o42"})], checkpointer=InMemorySaver())
-    await app.ainvoke(START_INPUT, THREAD)
-    asked = await app.ainvoke(Command(resume=True), THREAD)
-    assert interrupts(asked) == [{"question": "Which account?"}] and ran == []
-    guardian.invoke = ALLOW
+    paused = await app.ainvoke(START_INPUT, THREAD)
+    assert interrupts(paused)[0]["request_id"] == "req_1"
+    guardian.approved.add("req_1")
     done = await app.ainvoke(Command(resume="acct-7"), THREAD)
-    assert ran == [("o42", "acct-7")] and texts(done) == ["paid o42 from acct-7"]
+    assert "__interrupt__" not in done and ran == []
+    assert "paused the graph with its own interrupt()" in texts(done)[0]
+    assert guardian.calls == ["request:req_1", "claim:req_1"]
+
+
+def test_on_ask_result_a_held_tool_that_interrupts_itself_is_stopped_too():
+    guardian = AlwaysAsks()
+    guardian.approved.add("req_1")  # approved by the time the model calls again
+    governed = guardian_tool(held_tool_with_its_own_interrupt(), guardian, connection_id=CONNECTION)
+    call = ("pay", {"order_id": "o42"})
+    state = graph([governed], [call, call], checkpointer=InMemorySaver()).invoke(START_INPUT, THREAD)
+    assert "__interrupt__" not in state and ran == []
+    held, stopped = texts(state)
+    assert "held for human approval (request_id req_1)" in held
+    assert "paused the graph with its own interrupt()" in stopped
+    assert guardian.calls == ["request:req_1", "claim:req_1"]
 
 
 async def test_ainvoke_of_a_sync_basetool_passes_its_config_and_run_manager():
