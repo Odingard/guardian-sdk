@@ -192,9 +192,51 @@ _AGENT_CONFIG_NOTE = "(agent MCP, hook, permission or plugin config)"
 _GUARDIAN_ENV_NOTE = "(Guardian settings or a process environment)"
 
 
-def is_agent_config_path(path: str) -> bool:
-    """True when a file path is agent MCP, hook, permission or plugin config."""
-    return bool(_AGENT_CONFIG_PATH.search(path))
+def _path_forms(path: str, cwd: Optional[str]) -> List[str]:
+    """The spellings of ``path`` the configuration patterns are tried on.
+
+    As written; with separators collapsed and ``.`` / ``..`` segments
+    removed; and with symbolic links resolved (the file itself or a folder
+    on the way), relative paths taken from ``cwd`` as the CLI does.
+    """
+    forms = [path]
+    posix = path.replace("\\", "/")
+    expanded = os.path.expanduser(posix)
+    absolute = expanded if os.path.isabs(expanded) else os.path.join(cwd or os.getcwd(), expanded)
+    for form in (os.path.normpath(posix), os.path.normpath(absolute), os.path.realpath(absolute)):
+        if form not in forms:
+            forms.append(form)
+    return forms
+
+
+def is_agent_config_path(path: str, cwd: Optional[str] = None) -> bool:
+    """True when a file path is agent MCP, hook, permission or plugin config.
+
+    Also for another spelling of such a path: repeated separators, ``.`` and
+    ``..`` segments, letter case, and a symbolic link that leads there. A
+    path that cannot be resolved counts as configuration (the Ask tier).
+    """
+    try:
+        return any(_AGENT_CONFIG_PATH.search(form) for form in _path_forms(path, cwd))
+    except (OSError, ValueError):
+        return True
+
+
+_WORD_BREAK = re.compile(r"""[\s'"`=,;|&<>()]+""")
+
+
+def _names_agent_config(command: str) -> bool:
+    """A command that names agent configuration, also spelled with ``//``, ``.`` or ``..`` segments.
+
+    A pattern check on the command text and on each of its words: it does
+    not resolve symbolic links or anything the shell expands.
+    """
+    if _AGENT_CONFIG_PATH.search(command):
+        return True
+    for word in _WORD_BREAK.split(command):
+        if ("/" in word or "\\" in word) and _AGENT_CONFIG_PATH.search(os.path.normpath(word.replace("\\", "/"))):
+            return True
+    return False
 
 
 def classify_command(command: str) -> str:
@@ -205,7 +247,7 @@ def classify_command(command: str) -> str:
     """
     if (
         any(p.search(command) for p in _MORE_DESTRUCTIVE)
-        or _AGENT_CONFIG_PATH.search(command)
+        or _names_agent_config(command)
         or _NAMES_GUARDIAN_ENV.search(command)
     ):
         return "shell_destructive"
@@ -251,7 +293,7 @@ def governed_call(
         note = touches = None
         if _NAMES_GUARDIAN_ENV.search(command):
             touches, note = "sensitive-env", _GUARDIAN_ENV_NOTE
-        elif _AGENT_CONFIG_PATH.search(command):
+        elif _names_agent_config(command):
             touches, note = "agent-config", _AGENT_CONFIG_NOTE
         return GovernedCall(
             tool,
@@ -269,7 +311,7 @@ def governed_call(
         )
         # Editing the agent's own MCP servers, hooks or permissions changes what
         # it may do next, so it goes to the Ask tier.
-        config = is_agent_config_path(path)
+        config = is_agent_config_path(path, cwd if isinstance(cwd, str) else None)
         return GovernedCall(
             "shell_destructive" if config else "file_write",
             {
@@ -308,8 +350,12 @@ def governed_call(
     m = re.match(r"^mcp__(.+?)__(.+)$", tool_name)
     if m:
         server, name = m.group(1), m.group(2)
-        if server in set(skip_mcp_servers):
-            return None
+        for skipped in skip_mcp_servers:
+            prefix = f"mcp__{skipped}__"
+            # Only a name with one possible split: "mcp__billing__shell__run" may be
+            # server "billing__shell", which nothing else governs, so it is decided here.
+            if skipped and tool_name.startswith(prefix) and "__" not in tool_name[len(prefix):]:
+                return None
         return GovernedCall(_mcp_name(server, name), {"server": server, "tool": name, **_input_fields(a)},
                             f"MCP {server} → {name}")
     return None
@@ -434,7 +480,9 @@ def guardian_pre_tool_use(
         most 120 s. :func:`guardian_hook_matcher` sets both for you.
     :param skip_mcp_servers: MCP servers whose tools are governed elsewhere
         (wrapped with :class:`GuardianTools`, or run behind ``guardian-mcp``):
-        the hook gives no opinion on ``mcp__<server>__*`` for them.
+        the hook gives no opinion on ``mcp__<server>__<tool>`` for them. A
+        tool whose own name contains ``__`` is still decided by the hook,
+        because its name could also belong to another server.
     :param client: a Guardian client stand-in (sync), for tests.
     :param store: held requests (default: one per callback, in memory).
     :param log: progress lines, e.g. "held for approval". Default: the

@@ -207,6 +207,91 @@ def test_writing_the_agents_own_configuration_needs_approval(path):
     assert tier_of(call.tool_name) == "ask"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/work/.claude//settings.json",
+        "/work/.claude/./settings.json",
+        "/work//.claude///settings.local.json",
+        "/work/.claude/tmp/../settings.json",
+        "/work/src/../.claude/x/../hooks/pre.sh",
+        "/work/.CLAUDE//Settings.json",
+        "/work/sub/..//.mcp.json",
+        "/work/.claude\\\\settings.json",
+        ".claude//settings.json",
+        "./.claude/./settings.json",
+        "~/.claude//settings.json",
+    ],
+)
+def test_an_alias_of_an_agent_configuration_path_still_needs_approval(path):
+    for name, tool_input in (
+        ("Write", {"file_path": path, "content": "{}"}),
+        ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"}),
+        ("MultiEdit", {"file_path": path, "edits": []}),
+        ("NotebookEdit", {"notebook_path": path, "new_source": "x"}),
+    ):
+        call = governed_call(name, tool_input, cwd="/work")
+        assert call.tool_name == "shell_destructive", (name, path)
+        assert call.arguments["touches"] == "agent-config"
+        assert call.arguments["path"] == path  # proposed as the agent wrote it
+
+
+def test_a_symbolic_link_to_agent_configuration_still_needs_approval(tmp_path):
+    work = tmp_path / "work"
+    (work / ".claude").mkdir(parents=True)
+    (work / ".claude" / "settings.json").write_text("{}")
+    (work / "innocent.json").symlink_to(work / ".claude" / "settings.json")  # the file is a link
+    (work / "notes").symlink_to(work / ".claude", target_is_directory=True)  # a folder on the way is a link
+    for path in (str(work / "innocent.json"), str(work / "notes" / "settings.json"),
+                 str(work / "notes" / "settings.local.json"), "notes/settings.json"):
+        call = governed_call("Write", {"file_path": path, "content": "{}"}, cwd=str(work))
+        assert call.tool_name == "shell_destructive", path
+    plain = governed_call("Write", {"file_path": str(work / "a.json"), "content": "{}"}, cwd=str(work))
+    assert plain.tool_name == "file_write"
+
+
+def test_a_path_that_cannot_be_resolved_goes_to_the_ask_tier():
+    call = governed_call("Write", {"file_path": "/work/a\x00b.json", "content": "{}"}, cwd="/work")
+    assert call.tool_name == "shell_destructive"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '{}' > .claude//settings.json",
+        "cp x.json /work/.claude/./settings.json",
+        "tee .claude/tmp/../settings.json < x",
+        "cat x > '.claude//settings.local.json'",
+        "cp x ./sub/..//.mcp.json",
+    ],
+)
+def test_a_command_that_names_an_alias_of_agent_configuration_needs_approval(command):
+    call = governed_call("Bash", {"command": command}, cwd="/work")
+    assert call.tool_name == "shell_destructive"
+    assert call.arguments["touches"] == "agent-config"
+
+
+def test_skipping_an_mcp_server_never_skips_another_server_whose_name_starts_with_it():
+    skip = ["billing"]
+    assert governed_call("mcp__billing__refund", {}, skip_mcp_servers=skip) is None
+    # Server "billing__shell", tool "run" (or server "billing", tool "shell__run"): not provably the skipped server.
+    other = governed_call("mcp__billing__shell__run", {}, skip_mcp_servers=skip)
+    assert other is not None and other.tool_name.startswith("mcp.")
+    assert governed_call("mcp__billing_extra__run", {}, skip_mcp_servers=skip) is not None
+    assert governed_call("mcp__billing____run", {}, skip_mcp_servers=skip) is not None
+    # A skipped server whose own name has "__" is matched as a whole name.
+    assert governed_call("mcp__my__srv__run", {}, skip_mcp_servers=["my__srv"]) is None
+    assert governed_call("mcp__my__srv__run", {}, skip_mcp_servers=["my"]) is not None
+
+
+async def test_through_the_sdk_a_lookalike_of_a_skipped_server_is_still_decided():
+    guardian = FakeGuardian(DENY)
+    cli = ScriptedCLI([("mcp__billing__shell__run", {"command": "rm -rf /"})])
+    await run_agent(cli, hooked(guardian, skip_mcp_servers=["billing"]))
+    assert cli.ran == []
+    assert [i["tool_name"] for i in guardian.invocations] == ["mcp.billing.shell_run"]
+
+
 @pytest.mark.parametrize("name", ["Read", "NotebookRead", "Grep", "Glob", "LS", "TodoWrite", "Task", "Skill"])
 def test_read_only_and_unknown_tools_are_not_governed(name):
     assert governed_call(name, {"file_path": "/work/a.py", "pattern": "*"}) is None
