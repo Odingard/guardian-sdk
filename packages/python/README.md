@@ -311,8 +311,8 @@ integrations:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI**: `@tool("Pay invoice")` on top of `@guard`. A recipe only: this
-  repository has no CrewAI example or test yet.
+- **crewAI**: wrap the agent's tools with `guardian_tools` (see
+  [crewAI](#crewai-odingard_guardiancrewai-unreleased) below).
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
 - **Claude Agent SDK**: guard the handler of a tool you define, or put
@@ -798,6 +798,71 @@ Limits:
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agents SDK tool names to Guardian tool names. `amount_args` takes dollar amounts on tools, keyed by the Guardian tool name, as for `Guard`. `file_args` (content pins) and `watch_mode` are not available here; use `@guard` with the recipe above for those.
 - Not covered: hosted tools (web search, file search, code interpreter, hosted MCP), computer, shell and apply-patch tools, handoffs, agents used as tools, tools the SDK builds from MCP servers (put those servers behind `guardian-mcp`, see the [MCP package](../mcp)), and realtime or voice agents, which were not tested.
 - Tested with `openai-agents` 0.25.0 through `Runner.run`, `Runner.run_sync` and `Runner.run_streamed`, with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval. A runnable example with a scripted model: [`examples/python/openai_agents_agent.py`](../../examples/python/openai_agents_agent.py).
+
+## crewAI: `odingard_guardian.crewai` (unreleased)
+
+[crewAI](https://docs.crewai.com/) runs a tool either through native function
+calling or through its text (ReAct) loop. Both end in the tool's `_run`.
+`guardian_tools` wraps each tool in a `GuardianTool`, a crewAI `BaseTool`
+whose `_run` asks Guardian and then calls the tool it wraps.
+
+```bash
+pip install "odingard-guardian[crewai]"   # Python 3.10 to 3.13
+```
+
+```python
+import os
+from crewai import Agent
+from crewai.tools import tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.crewai import guardian_tools
+
+@tool("refund_order")
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+tools = guardian_tools(
+    [refund_order],
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    scope=lambda tool: current_user.get(),  # a ContextVar your app sets per request
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(role="Billing", goal="...", backstory="...", tools=tools)  # the wrapped tools only
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                             |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person. With a `scope` (see below), after the person approves, the same call in the same session runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                      |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                            |
+
+- **Two modes.** `mode="in_process"` (default): the wrapped tool is the action. It runs after ALLOW and before the capability is redeemed, so this mode is decision-gated (see [Honest limits](#honest-limits)); register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. `mode="remote"`: the tool name is a tool registered on your Guardian connection that Guardian calls itself. The wrapped tool's code never runs, Guardian holds the credential for the call, and the tool result is Guardian's answer as JSON: `{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`. Set it for every tool with `mode="remote"` or per tool with `modes={"send_wire": "remote"}` (Guardian tool names); any other mode raises `ValueError`. If an error is raised while Guardian handles a remote call (for example the client raises during the redemption), the model is told Guardian may have performed it and not to call it again, never that it did not run. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- **Give the agent the wrapped tools only.** A tool passed to an agent unwrapped is not governed. `guardian_tool(tool, client, ...)` wraps one tool.
+- Guardian decides on the arguments as crewAI validated them against the tool's schema (for example `"500"` for an `int` parameter is proposed as `500`). The wrapper then calls the wrapped tool's own `_run` with those arguments, so nothing validates or changes them again between the decision and the tool.
+- **A refusal is a crewAI `ToolFailure`**, not a string: ASK (`code="APPROVAL_REQUIRED"`, `retryable=True`), DENY (the reason code), Guardian unreachable before a decision (`SERVICE_UNAVAILABLE`, `retryable=True`), and a call that ran but could not be recorded (never `retryable`). The model sees the message. The failure, with `details["guardian"]["request_id"]`, is on `TaskOutput.tool_failures`, a `result_as_answer` tool never returns a refusal as the final answer, and crewAI's `tool_failure_policy="raise"` (on the tool, agent, task or crew) stops the run with `ToolExecutionFailedError` at the first held or refused call. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
+- **Use a `GuardianClient` (sync).** crewAI calls tools synchronously, also under `akickoff()` and `kickoff_async()`; an `AsyncGuardianClient` is refused when the tools are wrapped. Async tool functions are supported: the wrapper runs the coroutine to its end before the capability is redeemed.
+- **Held calls are scoped per session, and crewAI does not name one.** A tool's `_run` receives the arguments and nothing else, and nothing crewAI sets identifies the user or conversation (a crew, its tasks and one set of wrapped tools can serve many users). So by default (`SCOPE_UNKNOWN`) a held call is never claimed by a later call: every call proposes its own request, and the model is told that calling again asks for a new approval. Pass `scope=` to say which session a call belongs to; then the same call in the same session claims the approved request, and an identical call from another session proposes its own.
+  - `scope=lambda tool: current_user.get()`: a function called for each call, reading what your app set (a `ContextVar` with the authenticated user or the conversation id).
+  - `scope="user-42"`: a value for everything these wrapped tools do; wrap the tools once per user or conversation.
+  - `scope=kickoff_scope` (from `odingard_guardian.crewai`): one kickoff is one session. The scope is crewAI's execution id, set by crewAI or the host for the outermost crew or flow run. Only for apps where one kickoff serves one user (a flow that runs crews for several users is one execution); a held call is then not claimed in a later kickoff.
+  - **The scope must come from data your application sets**, never from the tool call's arguments or anything else the model writes. `None`, an empty string, a value that cannot be hashed and a function that raises mean no session is known. See [Held requests are scoped per session](#held-requests-are-scoped-per-session-unreleased).
+- **Retrying a held call** (with a `scope`). Held requests are kept in memory by the wrapped tools, so claim the approval with the same wrapped tools in the same process and the same scope (a later task or `kickoff()` is fine, except with `kickoff_scope`).
+  - Native function calling: the model can call the tool again in the same run. After the same call with the same result five times in a row, crewAI stops the agent's tool use.
+  - Text (ReAct) path: crewAI answers a call identical to the previous one itself ("I tried reusing the same input…") before it reaches the tool. The same call claims the approval after another tool call, or in the next task or kickoff.
+- **crewAI's tool cache** (`Crew(cache=True)`, off by default) answers a repeated call before the tool is reached: nothing runs and nothing is proposed for the repeat. A held, refused or unrecorded call is never cached, so the retry reaches Guardian. For a call that ran, the wrapped tool's own `cache_function` decides.
+- `max_usage_count` on the wrapped tool counts the calls that ran, that Guardian performed, or that may have happened. A use is taken before Guardian is asked and given back when the call is held or refused, so calls that crewAI runs in parallel cannot pass the limit together; while a call is in flight it holds its use, so a parallel call can be refused by the limit even if the first one ends up held. Nothing is proposed for a tool whose limit is spent. The budget starts again when crewAI prepares the tool for a task (each task and each kickoff) and on `reset_usage_count()`, as for an unwrapped tool. It is counted per scope: one session cannot spend or reset another's budget; calls without a known session share one budget. A count is kept until crewAI resets it in that session or you call `wrapped_tool.reset_usage(scope)`, and it is never dropped to make room: once 4,096 sessions hold a count for one wrapped tool that has a `max_usage_count`, a call from a further session is refused (`USAGE_TABLE_FULL`, the tool does not run and nothing is proposed), so release the sessions that will not come back (for example each finished kickoff under `kickoff_scope`).
+- A tool whose function is a generator function is refused when it is wrapped (`TypeError`): crewAI does not consume a tool's stream, so its body would never run and Guardian would record a call that did not happen. Return the result instead. (In remote mode the body never runs, so such a tool is accepted.)
+- An error after the tool ran is never handed to crewAI as a tool error, because crewAI would tell the model the call failed and, on the text path, call the tool again. An error your `on_receipt` raises is logged and ignored (the call is recorded by then, and the model gets the tool's result). Any other error after the tool finished is a `ToolFailure` (`EXECUTION_OUTCOME_UNKNOWN`) that says the tool ran and must not be called again; `on_execution_error` sees it. No failure for a call that ran or may have run is `retryable`.
+- If the tool raises after ALLOW, the capability is not redeemed and crewAI reports the error to the model. On the text path crewAI then calls the tool again by itself (up to six times in 1.15.44); each of those calls is decided by Guardian again.
+- **Why not crewAI's tool-call hooks.** `before_tool_call` can block a call, but in crewAI 1.15.44 a hook that raises is ignored and the tool runs, the hook sees the arguments before the tool's schema validated them, hooks registered later can change them, and the text path retries a tool that raised without running the before hook again. Hooks still run around a governed tool: a `before_tool_call` hook runs before Guardian's decision, so what it changes is what Guardian decides on, and an `after_tool_call` hook can rewrite the text the model sees.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps crewAI tool names to Guardian tool names. The default is the sanitized name the model calls (`"Refund order"` is `refund_order`).
+- A `GuardianTool` restored from a crewAI checkpoint has no Guardian client: it refuses every call. Wrap the tools again after a restore.
+- Not covered: content pins (`file_args`) and watch mode (use `@guard` for those), tools given to an agent unwrapped (including the delegation tools crewAI adds itself), tools the model provider runs itself, and MCP servers that crewAI connects for the agent (`mcps=`); put those behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `crewai` 1.15.44 on Python 3.13, in a real `Agent` + `Task` + `Crew.kickoff()` on both tool-calling paths, with a scripted model and a stand-in Guardian. Example: [`examples/python/crewai_agent.py`](../../examples/python/crewai_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 

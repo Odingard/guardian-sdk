@@ -111,6 +111,7 @@ document.
 | LangChain / LangGraph (Python)                  | `odingard-guardian[langchain]`                                    |
 | Microsoft Agent Framework (Python)              | `odingard-guardian`                                               |
 | Semantic Kernel (Python)                        | `odingard-guardian`                                               |
+| crewAI (Python)                                 | `odingard-guardian`                                               |
 | Codex CLI                                       | `@odingard/guardian-hook`                                         |
 | DeepSeek Harness                                | `@odingard/guardian-hook`                                         |
 | Hermes Agent                                    | `odingard-guardian`                                               |

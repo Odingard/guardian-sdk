@@ -115,6 +115,7 @@ Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as i
 | Python `Guard`                                                 | `in_process` | `mode="remote"`, or `modes={"send_wire": "remote"}`                                                     |
 | Microsoft Agent Framework (Python, unreleased)                 | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | Semantic Kernel (Python, unreleased)                           | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| crewAI (Python, unreleased)                                    | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | LangChain / LangGraph (Python, unreleased)                     | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | OpenAI Agents SDK (Python, `guardian_tool`, unreleased)        | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | `guardian-mcp proxy`                                           | in-process   | none: the proxy always forwards an allowed call to the upstream server. Use `guardian-mcp` (see below). |
@@ -258,6 +259,19 @@ guardian = GuardianFunctionInvocationFilter(
     modes={"billing-send_wire": "remote"},  # or mode="remote" for every function
 )
 kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)
+```
+
+**crewAI** (unreleased). The wrapped tool's `_run` is not called. The tool result the model sees is Guardian's result as JSON text. `modes` is keyed by the Guardian tool name, by default the sanitized name the model calls.
+
+```python
+tools = guardian_tools(
+    [send_wire, lookup_order],
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"send_wire": "remote"},  # or mode="remote" for every tool
+    scope=lambda tool: current_user.get(),  # the session, from what your app set
+)
+agent = Agent(role="Treasury", goal="...", backstory="...", tools=tools)
 ```
 
 **LangChain / LangGraph (Python)** (unreleased). The LangChain tool supplies the name, description and schema the model sees; its function is not called. The `ToolMessage` the model gets is Guardian's result as JSON text. The same options work on `guardian_tool`, `guardian_tools` and `GuardianGate`.

@@ -59,6 +59,7 @@ Commands below run from `examples/`.
 | Example                                              | What it shows                                               | Run                              |
 | ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------- |
 | [`python/invoice_agent.py`](python/invoice_agent.py) | the invoice agent in Python (pip install odingard-guardian) | `python python/invoice_agent.py` |
+| [`python/crewai_agent.py`](python/crewai_agent.py) | a crewAI agent with governed tools: ALLOW, ASK then approved, DENY (scripted model; pip install "odingard-guardian[crewai]") | `python python/crewai_agent.py` |
 | [`python/langchain_agent.py`](python/langchain_agent.py) | LangChain agent: ALLOW, ASK as a LangGraph interrupt, DENY | `python python/langchain_agent.py` |
 | [`python/openai_agents_agent.py`](python/openai_agents_agent.py) | an OpenAI Agents SDK agent with governed tools: ALLOW, ASK as a paused run, DENY (scripted model, no API key; `pip install "odingard-guardian[openai-agents]"`) | `python python/openai_agents_agent.py` |
 
