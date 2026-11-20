@@ -741,7 +741,8 @@ Say this plainly to anyone relying on it.
     holds**: only the patterns above stand between the agent and the config,
     and they are recognition by pattern. An obfuscated command (`base64 -d |
 sh`, a variable holding the path), a link the plugin does not recognise
-    (made by an archive tool or a script) or one that already existed, a
+    (made by an archive tool or a script) and reached through a relative
+    path or a shell command, a hard link, a
     relative path when the cwd is not the workspace, or a script the agent
     wrote earlier can still reach the config with no person asked.
     Check `openclaw plugins inspect guardian --runtime` after every config
