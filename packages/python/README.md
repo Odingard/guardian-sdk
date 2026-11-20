@@ -296,7 +296,8 @@ integrations:
   after the effect and raised as `GuardianExecutionFailed(local_effect_ran=True)`
   (or returned as a result that says the call ran, with
   `on_execution_failed="result"`). Treat that as an incident. Where Guardian itself must perform the call, use
-  `mode="remote"` with a tool registered in your Guardian connection.
+  `mode="remote"` with a tool registered in your Guardian connection. What remote mode does, needs and does
+  not support, also for Agent Framework and Semantic Kernel: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Guardian governs what goes through it. An agent or app that never calls
   Guardian is not governed by it.
 - **First-run setup:**
@@ -359,6 +360,8 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 - If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
 - Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
+- `mode="remote"`, or `modes={"refund_order": "remote"}` by Guardian tool name, is for a tool registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the tool's own function does not run, and the model gets Guardian's result (`{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …, "receipt": …}}`) as JSON text. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError`. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- A tool that is a generator function is refused before anything is proposed: Agent Framework does not iterate a tool's generator, so it would not run.
 - Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
 - Tested with `agent-framework-core` 1.26.0 in a real agent loop with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
@@ -388,6 +391,7 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
+- `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`

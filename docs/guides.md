@@ -71,6 +71,189 @@ const guard = createGuard({
 
 For a tool Guardian sends itself the limit applies to what reaches the tool; for a tool your own process runs it applies to Guardian's decision, not to what the code runs. The owner states that the named argument sets the charge and, without a currency argument, that the tool charges in US dollars; Guardian can't check either. Every tool on the same connection needs an amount (or none does); put tools that spend money on their own connection. A call whose amount cannot be read is blocked. Supported in the SDK (0.6), the MCP proxy (`--amount-arg`, 0.5), LangChain and Vercel AI (0.6) and the OpenAI Agents SDK wrapper (0.4); through the hook, OpenClaw, x402, AP2 and Python, a tool with an amount set in the console is refused. See the [SDK README](../packages/sdk/README.md#dollar-amounts-on-tools--amountargs-06).
 
+## Enforced mode: Guardian makes the call (`remote`)
+
+Every integration has two execution modes. This section is about the second one.
+
+- **In-process** (`inProcess`, Python `in_process`): your code is the tool. It runs after ALLOW and before the capability is redeemed, so Guardian gates the decision; a revocation that lands at redemption is found after the effect.
+- **Remote** (`remote`): Guardian is the tool. After ALLOW the SDK redeems the capability, and that redemption is the call: Guardian makes it. The local function body does not run, and the agent's process does not need the tool's credential.
+
+### What remote mode does
+
+It is the same in every integration below, because they share one implementation (`packages/sdk/src/guard.ts`; in Python, `guard.py`).
+
+1. The SDK proposes `tool.invoke` with the tool's name and the call's exact arguments, as in-process mode does.
+2. **ALLOW**: the SDK calls `execute` with the single-use capability and Guardian performs the call. Your function is not called.
+3. The result is Guardian's, not your function's: `{ guardian: { decision: "ALLOW", requestId, toolName, receipt } }` (Python: `request_id`, `tool_name`). The receipt is Guardian's record of the call (`requestId`, `receiptReference`, `status`). The SDK does not return a response body from the tool, so remote mode fits actions (send, pay, refund), not lookups whose answer the model needs.
+4. Only a receipt with status `sent-verified` is a result. `not-sent`, any other status and an answer that was lost are a `GuardianExecutionFailed` (where failures are handed back as a result, a result whose message says the call did not complete or may have happened), never a plain ALLOW result. When the outcome is unknown (`outcomeUnknown`, Python `outcome_unknown`) the call may have happened and must not be retried as a new request.
+5. **ASK**: nothing is performed. After a person approves, `resume()` (or, with the decision handed back as a result, the same call again) claims the approved request and Guardian performs it. **DENY**, or Guardian unreachable: nothing is performed.
+
+### What it needs
+
+- The tool name is registered on the Guardian connection as a call Guardian makes itself (an HTTP(S) endpoint), and allowed for the agent. The tool's credential stays in Guardian; the agent holds only its agent credential (`gak_…`).
+- Not a "My own code (record-only)" entry. That type is for in-process tools: redeeming it records the call and performs nothing. The receipt does not say which kind of entry answered, so the SDK cannot check this for you.
+- A local function is still passed where the framework needs one (its name, description and schema are what the model sees). Its body is never run.
+
+### What it does not support
+
+- **Content pins** (`fileArgs`, Python `file_args`): refused when the tool is wrapped, with `CONTENT_PIN_REMOTE_MODE`. Guardian performs the call and cannot read files on your machine.
+- **Watch mode**: a remote tool never asks for the watched answer and never runs on one.
+- `installRecordTransport` (Python `install_record_transport`): in-process only; remote mode registers nothing.
+- **Streams**: nothing local runs, so there is nothing to stream. A Python generator tool yields Guardian's result as its only item.
+
+Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as in in-process mode, and in remote mode the limit applies to what reaches the tool.
+
+### Per integration
+
+| Integration                                                    | Default mode | Enforced mode                                                                                           |
+| -------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------- |
+| `createGuard` (`@odingard/guardian-sdk`)                       | `inProcess`  | `mode: "remote"`, or `modes: { send_wire: "remote" }`                                                   |
+| `@odingard/guardian-langchain`                                 | `remote`     | the default; `mode: "inProcess"` opts out                                                               |
+| `@odingard/guardian-vercel-ai`                                 | `remote`     | the default; `mode: "inProcess"` opts out                                                               |
+| `@odingard/guardian-openai-agents`                             | `inProcess`  | `mode: "remote"`, or `modes`                                                                            |
+| Python `Guard`                                                 | `in_process` | `mode="remote"`, or `modes={"send_wire": "remote"}`                                                     |
+| Microsoft Agent Framework (Python, unreleased)                 | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| Semantic Kernel (Python, unreleased)                           | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| `guardian-mcp proxy`                                           | in-process   | none: the proxy always forwards an allowed call to the upstream server. Use `guardian-mcp` (see below). |
+
+`modes` is keyed by the tool name Guardian sees.
+
+**`createGuard`**
+
+```ts
+import { createGuard } from "@odingard/guardian-sdk";
+
+const guard = createGuard({
+  client: guardian,
+  connectionId: "pcn_…",
+  mode: "remote",
+});
+const sendWire = guard(
+  "send_wire", // registered on the connection as a call Guardian makes
+  async (_wire: { amountCents: number; payeeId: string }) => {
+    throw new Error("never runs: Guardian makes this call");
+  },
+);
+
+const result = await sendWire({ amountCents: 1_240_000, payeeId: "acme" });
+// { guardian: { decision: "ALLOW", requestId, toolName: "send_wire", receipt } }
+// ASK → GuardianApprovalPending; resume() after approval makes Guardian perform it.
+```
+
+**LangChain.js** (`guardianTool`, `guardianTools`): remote is the default.
+
+```ts
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+import { guardianTool } from "@odingard/guardian-langchain";
+
+const sendWire = guardianTool(
+  tool(async () => "never runs: Guardian makes this call", {
+    name: "send_wire",
+    description: "Send a wire transfer",
+    schema: z.object({ amountCents: z.number(), payeeId: z.string() }),
+  }),
+  { client: guardian, connectionId: "pcn_…" }, // mode: "remote" is the default
+);
+
+await sendWire.invoke({ amountCents: 1_240_000, payeeId: "acme" });
+// { guardian: { decision: "ALLOW", requestId, toolName: "send_wire", receipt } }
+```
+
+**Vercel AI SDK** (`withGuardian`): remote is the default. The tool's result is Guardian's.
+
+```ts
+import { tool } from "ai";
+import { z } from "zod";
+import { withGuardian } from "@odingard/guardian-vercel-ai";
+
+const tools = withGuardian(
+  {
+    send_wire: tool({
+      description: "Send a wire transfer",
+      inputSchema: z.object({ amountCents: z.number(), payeeId: z.string() }),
+      execute: async () => "never runs: Guardian makes this call",
+    }),
+  },
+  { client: guardian, connectionId: "pcn_…" }, // mode: "remote" is the default
+);
+```
+
+**OpenAI Agents SDK** (`guardianTool`, `createGuardianTool`): in-process is the default. In remote mode the model gets Guardian's result as the tool output, and a call that did not complete is reported to the model as not completed.
+
+```ts
+import { z } from "zod";
+import { createGuardianTool } from "@odingard/guardian-openai-agents";
+
+const governed = createGuardianTool({
+  client: guardian,
+  connectionId: "pcn_…",
+  mode: "remote",
+});
+const sendWire = governed({
+  name: "send_wire",
+  description: "Send a wire transfer",
+  parameters: z.object({ amountCents: z.number(), payeeId: z.string() }),
+  execute: async () => "never runs: Guardian makes this call",
+});
+```
+
+**Python `Guard`**
+
+```python
+from odingard_guardian import Guard, GuardianClient
+
+guard = Guard(GuardianClient(credential=...), connection_id="pcn_…", mode="remote")
+
+@guard("send_wire")
+def send_wire(amount_cents: int, payee_id: str):
+    raise RuntimeError("never runs: Guardian makes this call")
+
+result = send_wire(amount_cents=1_240_000, payee_id="acme")
+# {"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": "send_wire", "receipt": …}}
+```
+
+**Microsoft Agent Framework** (unreleased). The middleware does not call the tool's function. The tool result the model sees is Guardian's result as JSON text.
+
+```python
+guardian = GuardianFunctionMiddleware(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"send_wire": "remote"},  # or mode="remote" for every tool
+)
+agent = Agent(client=..., tools=[send_wire, lookup_order], middleware=[guardian])
+```
+
+**Semantic Kernel** (unreleased). The kernel function does not run. Its result is Guardian's result as JSON text. `modes` is keyed by the Guardian tool name, by default `plugin-function`.
+
+```python
+guardian = GuardianFunctionInvocationFilter(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"billing-send_wire": "remote"},  # or mode="remote" for every function
+)
+kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)
+```
+
+In both Python integrations a `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the integration is built.
+
+**MCP**. `guardian-mcp proxy` has no remote mode: after ALLOW it forwards the call to the upstream MCP server, which runs the tool, and then redeems the capability (in-process). For a call Guardian makes itself, give the agent the `guardian-mcp` server without `proxy`: its `guardian_invoke_tool` takes the registered `toolName` and `arguments` (and a `connectionId` unless `GUARDIAN_CONNECTION_ID` is set), Guardian performs an allowed call and the tool returns the decision, `requestId` and receipt; `guardian_claim` does the same for a request a person approved.
+
+```json
+{
+  "mcpServers": {
+    "guardian": {
+      "command": "guardian-mcp",
+      "env": {
+        "GUARDIAN_BASE_URL": "https://guardian-api.odingard.com",
+        "GUARDIAN_AGENT_CREDENTIAL": "gak_…",
+        "GUARDIAN_CONNECTION_ID": "pcn_…"
+      }
+    }
+  }
+}
+```
+
 ## Govern an MCP server you already use
 
 ```bash

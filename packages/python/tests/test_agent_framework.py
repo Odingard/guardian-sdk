@@ -5,6 +5,8 @@ Guardian; the agent, its function-calling loop and the middleware pipeline
 are Agent Framework's own.
 """
 
+import json
+
 import pytest
 
 af = pytest.importorskip("agent_framework")
@@ -289,3 +291,95 @@ async def test_a_tool_that_changes_its_own_inputs_is_still_recorded():
     )
     assert ran == ["submitted"] and receipts == ["req_allow"]
     assert model.results() == ["submitted"]
+
+
+# --- remote mode: Guardian performs the call; the tool's own function never runs ---
+
+
+def guardian_result(text):
+    return json.loads(text)["guardian"]
+
+
+async def test_remote_allow_never_runs_the_tool_and_the_model_gets_guardians_result():
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    model, _ = await run(
+        [CALL], middleware(guardian, mode="remote", on_receipt=lambda t, r, rc: receipts.append((t, r)))
+    )
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert guardian.last_invocation["arguments"] == {"order_id": "o42", "amount_cents": 500}
+    assert guardian_result(model.results()[0]) == {
+        "decision": "ALLOW",
+        "request_id": "req_allow",
+        "tool_name": "refund_order",
+        "receipt": {"schemaVersion": 1, "requestId": "req_allow", "status": "sent-verified"},
+    }
+    assert receipts == [("refund_order", "req_allow")]
+
+
+async def test_remote_held_then_approved_is_performed_by_guardian_on_the_same_call():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    model, _ = await run([CALL, CALL], middleware(guardian, mode="remote"))
+    assert ran == []
+    assert "held for human approval (request_id req_ask)" in model.results()[0]
+    assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
+    assert guardian_result(model.results()[1])["decision"] == "ALLOW"
+    assert guardian_result(model.results()[1])["request_id"] == "req_ask"
+
+
+async def test_remote_denied_or_unreachable_performs_nothing():
+    for answer in (DENIED, UNREACHABLE):
+        guardian = FakeClient(answer)
+        model, _ = await run([CALL], middleware(guardian, mode="remote"))
+        assert ran == []
+        assert guardian.calls == ["request:tool.invoke"]
+        assert "refund_order" in model.results()[0] and "ALLOW" not in model.results()[0]
+
+
+async def test_remote_a_call_guardian_did_not_send_is_not_reported_as_done():
+    guardian = FakeClient(ALLOW, receipt_status="not-sent")
+    errors = []
+    model, _ = await run([CALL], middleware(guardian, mode="remote", on_execution_error=errors.append))
+    assert ran == []
+    assert [error.reason_code for error in errors] == ["EXECUTION_NOT_SENT"]
+    assert '"decision": "ALLOW"' not in model.results()[0]
+    assert "refund_order" in model.results()[0]
+
+
+async def test_modes_set_the_mode_per_guardian_tool_name():
+    @tool(approval_mode="never_require")
+    def lookup_order(order_id: str) -> str:
+        """Look up an order."""
+        ran.append(("lookup", order_id))
+        return "order o42"
+
+    guardian = FakeClient(ALLOW)
+    model, _ = await run(
+        [("lookup_order", {"order_id": "o42"}), CALL],
+        middleware(guardian, tool_names={"refund_order": "billing.refund"}, modes={"billing.refund": "remote"}),
+        tools=(refund_order, lookup_order),
+    )
+    assert ran == [("lookup", "o42")]  # in-process by default; the refund is Guardian's
+    assert model.results()[0] == "order o42"
+    assert guardian_result(model.results()[1])["tool_name"] == "billing.refund"
+
+
+async def test_remote_a_generator_tool_is_performed_by_guardian():
+    @tool(approval_mode="never_require")
+    def export_rows(n: int):
+        """Export rows."""
+        ran.append("started")
+        yield from range(n)
+
+    guardian = FakeClient(ALLOW)
+    model, _ = await run([("export_rows", {"n": 2})], middleware(guardian, mode="remote"), tools=(export_rows,))
+    assert ran == []
+    assert guardian_result(model.results()[0])["decision"] == "ALLOW"
+
+
+def test_a_mistyped_mode_is_refused():
+    with pytest.raises(ValueError, match="in_process"):
+        middleware(FakeClient(ALLOW), mode="Remote")
+    with pytest.raises(ValueError, match="in_process"):
+        middleware(FakeClient(ALLOW), modes={"refund_order": "inProcess"})

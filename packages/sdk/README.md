@@ -132,6 +132,8 @@ after the effect and thrown as `GuardianExecutionFailed` with
 `localEffectRan: true`. Treat that as an incident. Where Guardian itself must
 perform the call, use `mode: "remote"` with a tool registered on your
 connection. The LangChain and Vercel AI adapters use this same core.
+What remote mode does, needs and does not support, per framework:
+[Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 
 **First-run setup:**
 

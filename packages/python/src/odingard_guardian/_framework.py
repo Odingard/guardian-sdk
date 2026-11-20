@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
 from .client import AsyncGuardianClient
-from .guard import Guard, GuardianExecutionFailed
+from .guard import Guard, GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -34,7 +34,11 @@ class Outcome:
 
     ``ran`` is True once the tool step started. ``message`` is what the
     model should be told instead of the tool's own result (``None`` when
-    the tool ran and Guardian recorded it).
+    the tool ran and Guardian recorded it). For a ``remote`` tool that
+    Guardian performed, the tool step never starts and ``message`` is
+    Guardian's result as JSON text:
+    ``{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …,
+    "receipt": …}}``.
     """
 
     ran: bool
@@ -54,10 +58,18 @@ def build_guard(
     amount_args: Optional[Mapping[str, Mapping[str, Any]]],
     on_receipt: Optional[Callable[..., Any]],
     on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]],
+    mode: Mode = "in_process",
+    modes: Optional[Mapping[str, Mode]] = None,
 ) -> Guard:
+    # A mistyped mode must not quietly run the local tool.
+    for value in (mode, *(modes or {}).values()):
+        if value not in ("in_process", "remote"):
+            raise ValueError('mode takes "in_process" or "remote"')
     guard = Guard(
         client,
         connection_id=connection_id,
+        mode=mode,
+        modes=modes,
         agent_name=agent_name,
         adapter_id=adapter_id,
         purpose=purpose,
@@ -156,10 +168,15 @@ async def decide_and_run(
     info = out.get("guardian") if isinstance(out, dict) else None
     if not isinstance(info, dict):  # pragma: no cover - Guard results always carry it
         return unchecked(tool_name) if not started else Outcome(ran=True, decision="ALLOW")
+    message = info.get("message")
+    if message is None and not started and info.get("decision") == "ALLOW":
+        # A remote tool: Guardian performed the call and the tool step never
+        # started. The model gets Guardian's result in place of the tool's.
+        message = json.dumps(out, sort_keys=True, default=str)
     return Outcome(
         ran=started,
         decision=str(info.get("decision")),
-        message=info.get("message"),
+        message=message,
         request_id=info.get("request_id"),
         reason_code=info.get("reason_code"),
     )

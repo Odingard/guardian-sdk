@@ -36,6 +36,9 @@ withGuardian(tools, {
 `inProcess` needs a `transport: "record"` catalog entry on the connection so
 `execute` commits evidence instead of performing an HTTP call.
 
+What `remote` mode does, needs and does not support:
+[Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+
 **Register the tool in the Guardian console first** (connect a tool server,
 add the tool as "My own code (record-only)", allow it for the agent). That is
 all the adapter needs: `installRecordTransport` is off by default, so the

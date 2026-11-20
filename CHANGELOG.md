@@ -37,6 +37,11 @@
 - **Python, Microsoft Agent Framework** (`odingard_guardian.agent_framework`): a tool that is a generator function is refused before anything is proposed. Agent Framework does not iterate a tool's generator, so its body never ran, and Guardian recorded the call as run.
 - **Python, Semantic Kernel** (`odingard_guardian.semantic_kernel`): no change. `invoke()` consumes a generator function before the filter's step returns, so it was already recorded after it ran; a test now covers it.
 
+### Added: remote mode for Agent Framework and Semantic Kernel, and one guide to the enforced mode
+
+- **Python, Microsoft Agent Framework and Semantic Kernel** (`odingard_guardian.agent_framework`, `odingard_guardian.semantic_kernel`): `GuardianFunctionMiddleware` and `GuardianFunctionInvocationFilter` take `mode` (`"in_process"`, the default, or `"remote"`) and `modes` (per Guardian tool name), as `Guard` does. In remote mode Guardian performs an allowed call itself: the tool's own function does not run, and the tool result the model sees is Guardian's result as JSON text, `{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …, "receipt": …}}`. A held call is performed by Guardian when the same call is made again after approval; a call Guardian did not send is reported to the model as a failure, not as done. A `mode` other than those two values raises a `ValueError` when the middleware or filter is built. In remote mode Agent Framework's generator tools are not refused, since nothing local runs.
+- **Docs**: [Enforced mode](docs/guides.md#enforced-mode-guardian-makes-the-call-remote) in `docs/guides.md` says what remote mode does, needs and does not support, with the option and a snippet for `createGuard`, LangChain, Vercel AI, the OpenAI Agents SDK, Python `Guard`, Agent Framework, Semantic Kernel and MCP. The package READMEs link to it. `guardian-mcp proxy` has no remote mode; `guardian-mcp` without `proxy` is the MCP path where Guardian makes the call.
+
 ## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions

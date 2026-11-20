@@ -6,6 +6,8 @@ the calls the model asks for) and its filter pipeline; a fake client stands
 in for Guardian.
 """
 
+import json
+
 import pytest
 
 pytest.importorskip("semantic_kernel")
@@ -245,3 +247,75 @@ async def test_streaming_invocation_is_refused():
         async for _ in function.invoke_stream(kernel, KernelArguments(order_id="o1", amount_cents=1)):
             pass
     assert billing.ran == [] and guardian.calls == []
+
+
+# --- remote mode: Guardian performs the call; the kernel function never runs ---
+
+
+def guardian_result(text):
+    return json.loads(text)["guardian"]
+
+
+async def test_remote_allow_never_runs_the_function_and_the_result_is_guardians():
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    kernel, billing = kernel_with(guardian, mode="remote", on_receipt=lambda t, r, rc: receipts.append((t, r)))
+    result = guardian_result(await model_calls(kernel))
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert guardian.last_invocation["arguments"] == {"order_id": "o42", "amount_cents": 500}
+    assert result == {
+        "decision": "ALLOW",
+        "request_id": "req_allow",
+        "tool_name": "billing-refund_order",
+        "receipt": {"schemaVersion": 1, "requestId": "req_allow", "status": "sent-verified"},
+    }
+    assert receipts == [("billing-refund_order", "req_allow")]
+
+
+async def test_remote_held_then_approved_is_performed_by_guardian_on_the_same_call():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    kernel, billing = kernel_with(guardian, mode="remote")
+    assert "held for human approval (request_id req_ask)" in await model_calls(kernel)
+    assert guardian_result(await model_calls(kernel))["request_id"] == "req_ask"
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
+
+
+async def test_remote_denied_or_unreachable_performs_nothing():
+    for answer in (DENIED, UNREACHABLE):
+        guardian = FakeClient(answer)
+        kernel, billing = kernel_with(guardian, mode="remote")
+        text = await model_calls(kernel)
+        assert billing.ran == []
+        assert guardian.calls == ["request:tool.invoke"]
+        assert "billing-refund_order" in text and "ALLOW" not in text
+
+
+async def test_remote_a_call_guardian_did_not_send_is_not_reported_as_done():
+    guardian = FakeClient(ALLOW, receipt_status="not-sent")
+    errors = []
+    kernel, billing = kernel_with(guardian, mode="remote", on_execution_error=errors.append)
+    text = await model_calls(kernel)
+    assert billing.ran == []
+    assert [error.reason_code for error in errors] == ["EXECUTION_NOT_SENT"]
+    assert '"decision": "ALLOW"' not in text
+
+
+async def test_modes_set_the_mode_per_guardian_tool_name():
+    guardian = FakeClient(ALLOW)
+    kernel, billing = kernel_with(guardian, modes={"billing-refund_order": "remote"})
+    assert guardian_result(await model_calls(kernel))["decision"] == "ALLOW"
+    assert billing.ran == []
+
+    guardian = FakeClient(ALLOW)
+    kernel, billing = kernel_with(guardian, modes={"billing-other": "remote"})
+    assert await model_calls(kernel) == "refunded o42"  # in-process by default
+    assert billing.ran == [("o42", 500)]
+
+
+def test_a_mistyped_mode_is_refused():
+    with pytest.raises(ValueError, match="in_process"):
+        kernel_with(FakeClient(ALLOW), mode="Remote")
+    with pytest.raises(ValueError, match="in_process"):
+        kernel_with(FakeClient(ALLOW), modes={"billing-refund_order": "inProcess"})
