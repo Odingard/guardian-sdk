@@ -111,6 +111,7 @@ Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as i
 | `@odingard/guardian-langchain`                                 | `remote`     | the default; `mode: "inProcess"` opts out                                                               |
 | `@odingard/guardian-vercel-ai`                                 | `remote`     | the default; `mode: "inProcess"` opts out                                                               |
 | `@odingard/guardian-openai-agents`                             | `inProcess`  | `mode: "remote"`, or `modes`                                                                            |
+| `@odingard/guardian-mastra` (unreleased)                       | `remote`     | the default; `mode: "inProcess"` opts out (unreleased)                                                  |
 | Python `Guard`                                                 | `in_process` | `mode="remote"`, or `modes={"send_wire": "remote"}`                                                     |
 | Microsoft Agent Framework (Python, unreleased)                 | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | Semantic Kernel (Python, unreleased)                           | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
@@ -196,6 +197,28 @@ const sendWire = governed({
   parameters: z.object({ amountCents: z.number(), payeeId: z.string() }),
   execute: async () => "never runs: Guardian makes this call",
 });
+```
+
+**Mastra** (`guardianTool`, `guardianTools`; unreleased): remote is the default. The model gets Guardian's result as the tool result; the tool's `outputSchema` and `toModelOutput` are not applied to it.
+
+```ts
+import { createTool } from "@mastra/core/tools";
+import { z } from "zod";
+import { guardianTools } from "@odingard/guardian-mastra";
+
+const tools = guardianTools(
+  {
+    send_wire: createTool({
+      id: "send_wire", // Guardian knows the tool by its id
+      description: "Send a wire transfer",
+      inputSchema: z.object({ amountCents: z.number(), payeeId: z.string() }),
+      execute: async () => {
+        throw new Error("never runs: Guardian makes this call");
+      },
+    }),
+  },
+  { client: guardian, connectionId: "pcn_…" }, // mode: "remote" is the default
+);
 ```
 
 **Python `Guard`**

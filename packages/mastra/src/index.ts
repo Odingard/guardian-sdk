@@ -3,7 +3,7 @@ import {
   validateToolInput,
   type Tool,
 } from "@mastra/core/tools";
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import { abortable } from "@odingard/guardian-sdk";
 
 import {
   createGuardianContext,
@@ -57,109 +57,6 @@ type ToolContext = {
 };
 type Suspend = (payload: unknown, options?: unknown) => Promise<unknown>;
 type Execute = (input: unknown, context?: unknown) => Promise<unknown>;
-
-/**
- * Honour Mastra's `context.abortSignal` (the run's abort signal). The
- * Guardian client has no timeout of its own, so without this an unanswered
- * Guardian call hangs the run even after the caller aborted.
- *
- * Each call gets its own view of the Guardian client:
- * - Before the tool starts, an abort rejects the call at once and refuses
- *   every later step of it: a late ALLOW neither runs the local impl
- *   (inProcess) nor asks Guardian to perform the call (remote).
- * - Once the tool starts (the local impl runs, or Guardian is asked to
- *   execute the tool call), an abort no longer rejects early: the call
- *   waits for the real outcome, so the caller is never told a started
- *   action did not happen.
- * - Executing a record-transport setup step (mcp.install / mcp.enable)
- *   is not the tool starting.
- * - Once the call has settled, the gate opens, so a later
- *   `GuardianApprovalPending.resume()` (after a human approves) is
- *   unaffected.
- */
-function abortable<R>(
-  client: GuardianClient,
-  signal: AbortSignal | undefined,
-  run: (client: GuardianClient, startTool: () => void) => Promise<R>,
-): Promise<R> {
-  if (signal?.aborted) {
-    return Promise.reject(signal.reason ?? new Error("aborted"));
-  }
-  if (!signal) {
-    return run(client, () => {});
-  }
-  let state: "deciding" | "started" | "settled" = "deciding";
-  const refuseIfAborted = () => {
-    if (state === "deciding" && signal.aborted) {
-      throw signal.reason ?? new Error("aborted");
-    }
-  };
-  const startTool = () => {
-    refuseIfAborted();
-    if (state === "deciding") state = "started";
-  };
-  const setupIds = new Set<string>();
-  const noteSetup = (result: unknown): void => {
-    const id = (result as { requestId?: unknown } | null)?.requestId;
-    if (typeof id === "string" && id.length > 0) setupIds.add(id);
-  };
-  const overrides: Record<PropertyKey, unknown> = {
-    request: async (input: Parameters<GuardianClient["request"]>[0]) => {
-      refuseIfAborted();
-      const result = await client.request(input);
-      if (input.action === "mcp.install" || input.action === "mcp.enable") {
-        noteSetup(result);
-      }
-      return result;
-    },
-    claim: async (requestId: string) => {
-      refuseIfAborted();
-      const result = await client.claim(requestId);
-      if (setupIds.has(requestId)) noteSetup(result);
-      return result;
-    },
-    execute: (input: Parameters<GuardianClient["execute"]>[0]) => {
-      if (setupIds.has(input.requestId)) {
-        refuseIfAborted();
-      } else {
-        // Guardian performing the tool call is the tool starting.
-        startTool();
-      }
-      return client.execute(input);
-    },
-  };
-  const gated = new Proxy(client, {
-    get(target, prop, receiver) {
-      if (Object.prototype.hasOwnProperty.call(overrides, prop)) {
-        return overrides[prop];
-      }
-      const value = Reflect.get(target, prop, receiver) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const inner = run(gated, startTool).finally(() => {
-    state = "settled";
-  });
-  return new Promise<R>((resolve, reject) => {
-    const onAbort = () => {
-      // A started tool is never abandoned: wait for its real outcome.
-      if (state === "deciding") {
-        reject(signal.reason ?? new Error("aborted"));
-      }
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    inner.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
-}
 
 /**
  * The wrapped tool refused the approved input with its own input
@@ -257,6 +154,11 @@ function wrapWithContext<T extends MastraTool>(
       input = parsed.data;
     }
     try {
+      // Honour Mastra's `context.abortSignal` (the run's abort signal): an
+      // abort before the tool starts rejects at once, so an unanswered
+      // Guardian call does not hang the run, and refuses every later step;
+      // a started tool runs to its real outcome (`abortable` in
+      // @odingard/guardian-sdk).
       return await abortable(
         ctx.options.client,
         toolContext?.abortSignal,

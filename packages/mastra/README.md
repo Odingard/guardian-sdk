@@ -19,7 +19,8 @@ npm install @odingard/guardian-mastra @odingard/guardian-sdk @mastra/core
 ```
 
 `@mastra/core` (`>=1.83.0 <2.0.0`) and `@odingard/guardian-sdk` are peer
-dependencies. Tested with `@mastra/core` 1.83.0, 1.84.0 and 1.85.0; the
+dependencies. The package needs the `@odingard/guardian-sdk` release that
+adds `abortable`; with an earlier SDK it fails to load. Tested with `@mastra/core` 1.83.0, 1.84.0 and 1.85.0; the
 repository's tests run against 1.85.0.
 
 ## Usage
@@ -103,6 +104,9 @@ What each mode guarantees:
   checked after the effect. Code that calls the unwrapped tool, or the
   service behind it, directly is not stopped. Use `remote` where Guardian
   must hold the effect itself.
+
+What remote mode needs, and what it does not support, is in
+[Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 
 `inProcess` needs a `transport: "record"` catalog entry on the connection so
 `execute` commits evidence instead of performing an HTTP call.

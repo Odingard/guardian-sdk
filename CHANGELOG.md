@@ -10,6 +10,7 @@
   - `onAsk: "suspend"` suspends the Mastra run with the `requestId` in its suspend payload. A resumed run asks Guardian again and runs the tool only if a person approved the request in Guardian; the resume data passed to Mastra is not read. Mastra's own tool approval (`requireApproval`) stays in place and does not stand in for Guardian's decision.
   - In an agent run Guardian decides on the arguments as parsed by the tool's `inputSchema`, and the tool receives a copy of exactly those. Mastra's `abortSignal` is honoured. `fileArgs` and `amountArgs` are passed to the SDK, keyed by tool id.
   - Peer dependency `@mastra/core` `>=1.83.0 <2.0.0`; tested with 1.83.0, 1.84.0 and 1.85.0.
+  - It imports `abortable` from the SDK, so it needs the `@odingard/guardian-sdk` release that adds `abortable`; with an earlier SDK it fails to load. Its SDK version range is not changed here and must name that release when the adapter is released.
   - Example: `examples/agents/mastra-agent.mjs` (a Mastra agent with a scripted model and the local demo policy; no account or API key).
 
 ## guardian-mcp 0.6.0, unreleased
