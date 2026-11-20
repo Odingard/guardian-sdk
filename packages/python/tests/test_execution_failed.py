@@ -298,7 +298,8 @@ def test_agents_recipe_recording_failure_is_not_retried():
     first = _invoke(tool, ARGS)
     assert effects == [("INV-1", 48000, "acme")]
     assert "Please try again" not in first
-    assert "ran, but Guardian could not record it" in first and "Do not call it again" in first
+    # The answer to the redemption was lost and the lookup did not settle it.
+    assert "ran, but Guardian could not confirm that it recorded it" in first and "Do not call it again" in first
 
 
 def test_agents_recipe_remote_outcome_pending_is_not_retried():

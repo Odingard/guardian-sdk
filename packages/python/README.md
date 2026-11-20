@@ -272,7 +272,7 @@ guard.run("refund_order", {"order_id": "o42"}, do_refund, scope=authenticated_us
 - A `scope` function that returns `None` (a `ContextVar` your app has not set yet) means the session is not known: the call is treated as `SCOPE_UNKNOWN`, not as unscoped. An empty string as a scope, from the function or given with the call, is a missing id and is treated the same; other falsy values such as `0` are scopes. `guard.run(..., scope=None)` means "use the Guard's `scope` function"; only a `Guard` without a `scope` function is unscoped.
 - With `on_ask="raise"` nothing is remembered: `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
 
-The Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.
+The LangChain / LangGraph integration, the Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.
 
 ### Framework recipes
 
@@ -280,9 +280,13 @@ The Agent Framework middleware and the Semantic Kernel filter below scope held r
 wherever your framework expects a tool. These are recipes, not separate
 integrations:
 
-- **LangChain / LangGraph**: `StructuredTool.from_function(pay_invoice)`, or `@tool` on top of
-  `@guard`. Map `GuardianApprovalPending` to a LangGraph `interrupt`.
-- **OpenAI Agents SDK**:
+- **LangChain / LangGraph**: use the integration below
+  ([`odingard_guardian.langchain`](#langchain-and-langgraph-odingard_guardianlangchain-unreleased)):
+  governed tools, agent middleware, and ASK as a LangGraph `interrupt`.
+- **OpenAI Agents SDK**: use `guardian_tool` / `create_guardian_tool`
+  ([below](#openai-agents-sdk-odingard_guardianopenai_agents-unreleased)),
+  which make each tool a governed `FunctionTool`. To keep `@guard` on the
+  function instead:
 
   ```python
   from agents import function_tool
@@ -307,10 +311,12 @@ integrations:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI**: `@tool("Pay invoice")` on top of `@guard`. A recipe only: this
-  repository has no CrewAI example or test yet.
+- **crewAI**: wrap the agent's tools with `guardian_tools` (see
+  [crewAI](#crewai-odingard_guardiancrewai-unreleased) below).
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
+- **Google ADK**: use the plugin in the [Google ADK section](#google-adk-odingard_guardiangoogle_adk-unreleased)
+  below, which decides every tool call of every agent.
 - **Strands Agents**: use the hook provider below, which decides every tool
   call the agent makes.
 - **Claude Agent SDK**: guard the handler of a tool you define, or put
@@ -345,6 +351,262 @@ integrations:
   or a new `Guard` is refused that way even for an entry the SDK created
   itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
+
+## LangChain and LangGraph: `odingard_guardian.langchain` (unreleased)
+
+[LangChain](https://docs.langchain.com/oss/python/langchain/overview) agents
+(`langchain.agents.create_agent`) and [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
+graphs run the tools a model asks for. `odingard_guardian.langchain` sends each
+of those calls to Guardian before the tool runs.
+
+```bash
+pip install "odingard-guardian[langchain]"   # Python 3.11+
+```
+
+```python
+import os
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.langchain import GuardianMiddleware
+
+@tool
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianMiddleware(
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = create_agent(model, [refund_order], middleware=[guardian])  # list Guardian's middleware last
+```
+
+There are three ways to put it in place. They take the same options and can
+share one `GuardianGate`:
+
+| Where                                 | How                                                                                                                                                              |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any tool (`bind_tools`, any graph)    | `guardian_tool(tool, client, connection_id=...)`, or `guardian_tools([...], client, connection_id=...)`: a `BaseTool` with the same name, description and schema |
+| `create_agent(..., middleware=[...])` | `GuardianMiddleware(client, connection_id=...)`: every tool call of the agent (`wrap_tool_call` / `awrap_tool_call`)                                             |
+| LangGraph `ToolNode`                  | `gate = GuardianGate(client, connection_id=...)`, then `ToolNode(tools, wrap_tool_call=gate.wrap_tool_call, awrap_tool_call=gate.awrap_tool_call)`               |
+
+| Decision                 | What happens                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded. The model gets the tool's own result.                                                                                            |
+| **ASK**                  | The tool does not run. `on_ask="result"` (default): the model is told the call is held for a person; after the person approves, the same call (same tool, same arguments) in the same thread runs the approved request. `on_ask="interrupt"`: the graph pauses, see below. |
+| **DENY**                 | The tool does not run. The model gets `Guardian denied refund_order (POLICY_DENY). Do not retry the same call.` in a `ToolMessage` with `status="error"`.                                                                                               |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                                 |
+
+**Held requests are scoped per session.** A held call is remembered for the
+LangGraph thread it was made in, `config["configurable"]["thread_id"]`: the
+same call (same tool, same arguments) in the same thread claims the approved
+request, and an identical call in another thread is proposed as its own
+request and needs its own approval. One `GuardianGate`, middleware or
+governed tool can therefore serve many conversations.
+
+- The thread id is what your application passes when it invokes the graph
+  (`agent.invoke(..., {"configurable": {"thread_id": "order-42"}})`). It
+  reaches the tool in its run config, not in the tool call, so the model
+  cannot write it. A string is used as it is, a number as its string form.
+- `scope=callback(config)` names the session yourself, from the tool's run
+  config: for example `scope=lambda config: config["metadata"]["user_id"]`.
+  It replaces the thread id. **Take the scope from data your application
+  sets** (the authenticated user, the request's session), never from the
+  tool call's arguments or anything else the model writes.
+- **With no thread id and no `scope`** (a graph invoked without a thread id,
+  a bare `tool.invoke(args)`), the session is not known: the held request is
+  not remembered, the same call again is proposed as a new request, and the
+  message says so. The same holds when `scope` returns `None` or an empty
+  string, raises, or returns something that cannot be a key. `0` is a scope.
+  With `on_ask="interrupt"` such a call does not pause the graph (a resume
+  could never claim its request); the model is told it is held.
+- The scope is part of an in-memory key and is not sent to Guardian. See
+  [Held requests are scoped per session](#held-requests-are-scoped-per-session-unreleased).
+
+When the model gets Guardian's message in place of the tool's result, the
+`ToolMessage` carries the decision in `message.artifact["guardian"]`
+(`decision`, `tool_name`, `reason_code`, `request_id`), so your app can read
+the request id without parsing text.
+
+### Pause the graph on ASK: `on_ask="interrupt"`
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+
+agent = create_agent(
+    model,
+    [refund_order],
+    middleware=[GuardianMiddleware(client, connection_id=..., on_ask="interrupt")],
+    checkpointer=InMemorySaver(),  # interrupts need a checkpointer
+)
+thread = {"configurable": {"thread_id": "order-42"}}
+
+state = agent.invoke({"messages": [("user", "Refund order 42")]}, thread)
+held = state["__interrupt__"][0].value
+# {"type": "guardian_approval", "decision": "ASK", "request_id": "req_…", "tool_name": "refund_order",
+#  "tool": "refund_order", "tool_call_id": "…", "arguments": {...}, "message": "…"}
+
+# Show held["request_id"] to the person; they approve it in Guardian. Then:
+state = agent.invoke(Command(resume=True), thread)
+```
+
+- A held call pauses the graph with LangGraph's `interrupt`. The Guardian
+  `request_id` and the proposed arguments are in the interrupt payload.
+- **Resuming is not approving.** On resume the call claims its request from
+  Guardian. If a person approved it, the tool runs once. If it is still
+  pending, nothing runs and the graph pauses again with the same
+  `request_id`. If the person declined, the model is told the call was
+  denied. The resume value is not read: nothing in it can stand in for
+  Guardian's approval. Pass any value other than `None`.
+- The graph needs a checkpointer. Without one the run still stops at the
+  held call and nothing runs, but LangGraph cannot resume it.
+- When several calls of one model turn are held, LangGraph asks for a resume
+  value per interrupt: `Command(resume={interrupt.id: True for interrupt in state["__interrupt__"]})`.
+  Each call still needs its own approval.
+- **Several tool calls in one node.** LangGraph runs an interrupted node
+  again from its start when the graph resumes, so everything the node did
+  before the pause happens again. `create_agent` is not affected: it runs
+  each tool call as its own task, and a pause belongs to the held call
+  alone. A hand-built graph whose `ToolNode` gets all of a model turn's tool
+  calls at once is affected, so there a governed call pauses the graph only
+  while no governed call of that node has started to act:
+  - If another governed call of the node already ran (or is running), the
+    held call does not pause. The model is told it is held, as with
+    `on_ask="result"`, and the same call after approval runs the approved
+    request. Nothing runs twice.
+  - If the held call pauses first, governed calls of the node that have not
+    started yet do not run in that pass. They are proposed again when the
+    graph resumes and run then, once.
+  - This covers tools behind Guardian (any `GuardianGate` in the process).
+    A tool in the same `ToolNode` that is **not** behind Guardian is run
+    again by LangGraph on resume, as with any interrupt. Use
+    `gate.wrap_tool_call` on the `ToolNode` so every call of the node is
+    governed, or send each tool call to the node on its own (`Send`), as
+    `create_agent` does.
+- Which request a paused call waits for is kept in the process's memory. If
+  another process resumes the thread (a restart, another worker), the call
+  is proposed again and pauses with a new `request_id` that needs its own
+  approval. It never runs on the earlier resume.
+- **A tool that calls `interrupt()` itself and a call that needs approval
+  do not go together.** LangGraph runs such a tool again from the start
+  when the graph resumes, and Guardian decides on that run again. A person's
+  approval is used once, so it cannot wait for the tool's own pause: the
+  next run would need a new approval, then stop at the tool's question
+  again, without end. So when a tool that started under an approved request
+  (after ASK, with `on_ask="interrupt"` or `"result"`) calls `interrupt()`,
+  the pause is not passed on. The call ends there, the model gets an error
+  `ToolMessage` saying it was approved, started and did not complete
+  (`reason_code` `INTERRUPT_AFTER_APPROVAL`), and a warning is logged.
+  Whatever the tool did before its `interrupt()` has happened; nothing after
+  it runs. Ask the person before the tool call instead, or pass the answer
+  as an argument, so it is part of what is approved.
+- A tool that calls `interrupt()` and is allowed without a person (ALLOW by
+  rule) works: on resume the call is decided again and the tool gets its
+  answer. A value sent to resume Guardian's pause is not handed to a
+  tool's `interrupt()` (which pauses were Guardian's is kept in the process's
+  memory). Other calls of the same node that already ran are
+  run again by LangGraph when a tool interrupts itself.
+- Outside a LangGraph run (a plain `tool.invoke`) there is nothing to pause;
+  a held call answers as with `on_ask="result"`.
+
+### Enforced mode: `mode="remote"`
+
+```python
+gate = GuardianGate(client, connection_id=..., modes={"send_wire": "remote"})
+tools = gate.tools([send_wire, lookup_order])
+```
+
+| Mode                     | What runs after ALLOW                                                                                                                                                                | What it guarantees                                                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"in_process"` (default) | Your tool, in your process, then Guardian records it. Register the tool once in the console as "My own code (record-only)".                                                          | Decision-gated: the integration does not start the tool without ALLOW. Your process holds the credentials, so code that calls the upstream without going through the governed tool is not stopped. A revocation between ALLOW and the record is reported after the effect. |
+| `"remote"`               | Guardian makes the call to a tool registered in the connection. The local tool body never runs; the model gets `{"guardian": {"decision": "ALLOW", "request_id": …, "receipt": …}}`. | Enforced: Guardian holds the credential and performs the call, so the action cannot happen without its decision. A receipt status other than `sent-verified` is reported to the model as "may have run, do not call it again", never as done.                              |
+
+In remote mode the LangChain tool supplies the name, description and schema
+the model sees; its function is not called, and the model gets Guardian's
+result as JSON text. If something fails after Guardian was asked to make the
+call, the model is told Guardian may have performed it and not to call it
+again, never that it did not run. A `mode` other than `"in_process"` or
+`"remote"` raises a `ValueError`. What remote mode needs and does not
+support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+
+### Arguments
+
+- Guardian decides on the arguments as the tool's own schema validated them
+  (`"500"` for an `int` parameter is proposed as `500`), and the tool runs
+  with exactly those: the wrapped tool's `_run` / `_arun` is called directly,
+  so a schema that transforms its input is applied once. Arguments that fail
+  validation are never proposed.
+- The decision is taken inside the tool invocation. With the middleware or
+  the `ToolNode` hook, a middleware that changes the call's arguments, before
+  or after Guardian's, changes what Guardian decides on, not what runs after
+  the decision.
+- Arguments LangChain and LangGraph fill in (`InjectedState`, `InjectedStore`,
+  `ToolRuntime`, `InjectedToolCallId`) are not proposed and reach the tool
+  unchanged. `ToolNode` and `create_agent` overwrite anything a model puts
+  in them. An argument your app injects (`Annotated[str, InjectedToolArg]`)
+  is proposed like any other, so it must be JSON.
+- Arguments that cannot be written as JSON are refused before anything is
+  proposed.
+
+### Options and limits
+
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps
+  LangChain tool names to Guardian tool names. `amount_args`, `purpose`,
+  `agent_name`, `adapter_id`, `on_receipt` and `on_execution_error` are
+  `Guard`'s. `on_approval_pending=callback(tool_name, request_id)` is called
+  once per held request. `on_approval_pending`, `on_receipt` and
+  `on_execution_error` may be coroutine functions for async calls. On a sync
+  call (`invoke`, a sync graph) a coroutine callback cannot be awaited, so
+  the call raises `TypeError` before anything is proposed.
+- **Sync and async.** A `GuardianClient` serves `invoke` and `ainvoke` (async
+  calls make each Guardian call in a worker thread). An `AsyncGuardianClient`
+  serves `ainvoke` only: a sync call raises `TypeError` before anything runs.
+- **List `GuardianMiddleware` last.** It puts the call's tool behind Guardian
+  and hands the call on. A middleware listed after it runs closer to the
+  tool and could answer the call itself or replace the tool; Guardian's
+  middleware cannot see that. `guardian_tools` does not have this limit: the
+  governed tool is the only tool the agent has.
+- A call to a tool the hook was not given (a name the model made up, or a
+  tool another middleware adds later in the chain) is refused, and the model
+  is told it did not run.
+- A tool whose function is a generator function is refused at wrap time: a
+  LangChain tool returns its result, and a generator's body would run after
+  the call was recorded, or not at all.
+- A single-string `Tool` without an `args_schema` is refused at wrap time;
+  build it with `@tool` or `StructuredTool`. A single-input call (a `Tool`
+  with a one-field `args_schema`, or a string passed to a one-argument tool)
+  is proposed under that argument's name, for example `{"q": "abc"}`, so
+  `amount_args` and console rules see the name the model sees.
+- A tool that is already behind another `GuardianGate` is refused
+  (`TypeError` from `gate.tool`, a refusal message from the middleware and
+  the `ToolNode` hook): neither gate's decision is skipped. Give each gate
+  the original tool, or share one gate.
+- Tools with a JSON-schema `args_schema` (as MCP adapters build them) work;
+  a sync call of an async-only tool is refused before anything is proposed.
+- If Guardian allowed the call and the tool ran but redeeming the capability
+  failed, the model is told the tool ran and not to call it again.
+- The tool's own errors are the tool's: `ToolException`, `handle_tool_error`
+  and `ToolNode(handle_tool_errors=...)` work as without Guardian. The
+  governed tool copies the wrapped tool's `return_direct`, `response_format`,
+  callbacks, tags and metadata.
+- `file_args` (content pins) and watch mode are not available here; use
+  `Guard` directly for those.
+- Unlike `@odingard/guardian-langchain` (LangChain.js), which raises
+  `GuardianDenied` / `GuardianApprovalPending` by default and defaults to
+  `remote`, this integration answers the model with a message and defaults
+  to `in_process`, like the other Python integrations.
+- Not covered: tools the model provider runs itself (server-side tools), and
+  code that calls your function without going through the governed tool.
+- Tested with `langchain` 1.5.2, `langchain-core` 1.8.4 and `langgraph`
+  1.2.24: `create_agent`, hand-built graphs with `ToolNode`, `InMemorySaver`
+  and real interrupts, sync, async and streaming, with a scripted model and
+  a stand-in Guardian. Before relying on it, run one governed tool with your
+  model against your Guardian and check that an Ask waits for approval.
+  Example: [`examples/python/langchain_agent.py`](../../examples/python/langchain_agent.py).
 
 ## Microsoft Agent Framework: `odingard_guardian.agent_framework` (0.5.0)
 
@@ -424,6 +686,256 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - **Held calls are scoped per session, and Semantic Kernel does not name one.** Its filter context carries the function, the kernel and the arguments, nothing that identifies a conversation. So by default a held call is never claimed by a later call: each call asks for its own approval, and the result says so. Pass `scope=callback(context)` returning a hashable value for the user or conversation, read from something your app sets per request and the model cannot write, such as a `contextvars.ContextVar`: `scope=lambda context: current_user.get(None)`. Then the same call in the same scope runs the approved request. `None`, an empty string or an error means unknown. **Do not read the scope from `context.arguments`.** Kernel arguments are writable by the model: Semantic Kernel puts the arguments the model wrote in its function call over the ones your app passed, so for a function with a `user_id` parameter the model can put another user's id there and the call would claim that user's approval. (semantic-kernel 1.47.0 refuses a model argument the function has no parameter for, before any filter runs; do not rely on that.) The filter cannot tell where your `scope` reads from.
 - `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
+
+## OpenAI Agents SDK: `odingard_guardian.openai_agents` (unreleased)
+
+The [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) runs
+each tool the model asks for as a `FunctionTool`. `guardian_tool` and
+`create_guardian_tool` turn a function, or a `FunctionTool` you already have,
+into a `FunctionTool` with the same name, description, parameter schema and
+settings whose every call is sent to Guardian before it runs.
+
+```bash
+pip install "odingard-guardian[openai-agents]"   # Python 3.10+
+```
+
+```python
+import os
+from agents import Agent, Runner
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.openai_agents import create_guardian_tool, find_approval_pending
+
+governed = create_guardian_tool(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+)
+
+@governed                       # or governed(existing_function_tool), or @governed(name_override=...)
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+agent = Agent(name="Billing", tools=[refund_order])
+
+try:
+    result = await Runner.run(agent, "Refund order 42")
+except Exception as error:
+    pending = find_approval_pending(error)
+    if pending is None:
+        raise
+    # Show pending.request_id to a person. After they approve in Guardian:
+    resumed = await pending.resume()    # claims the approval and runs the tool once
+```
+
+`guardian_tool(tool_or_function, client, connection_id=..., ...)` wraps one
+tool; `create_guardian_tool(client, ...)` binds the Guardian options once, and
+tools made by it share the held requests, each under its own scope (below). For a function, any `function_tool`
+option (`name_override`, `strict_mode`, `failure_error_function`, `timeout`,
+…) can be passed along. `billing` stands for your own code.
+
+| Decision                 | What happens                                                                                                                                                                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded (`on_receipt` gets the record).                                                                                                                                     |
+| **ASK**                  | The tool does not run. What happens next is set by `on_ask` (below). In every case the tool runs only by claiming the request a person approved in Guardian.                                                                                                                              |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry. With `on_deny="raise"`, `GuardianDenied` goes to the tool's `failure_error_function`: the default one still tells the model, your own one gets the error, and `failure_error_function=None` fails the run. |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it and to try again later.                                                                                                                                                                            |
+
+`on_ask` chooses how a held call reaches you:
+
+- `"raise"` (default): `GuardianApprovalPending` ends the run. The Agents SDK wraps it in its own `UserError`; `find_approval_pending(error)` finds it. After a person approves, `await pending.resume()` claims the approval, runs the tool once and returns its output (`resumed.output`). Before they decide, `resume()` raises a new `GuardianApprovalPending`; if they deny, or the request expires, it raises `GuardianDenied` and the tool never runs. The run itself is over: the output goes to your code, not to the model.
+- `"result"`: the run goes on. The model is told the call is held, with the `request_id`. With the `scope` option (below), when the model calls the tool again with the same arguments in the same session, that call claims the held request: it runs if a person approved, and is reported as still held (no second approval request) if not. Without `scope` nothing is remembered: every call proposes its own request and needs its own approval.
+- `"interrupt"`: the run pauses the way the Agents SDK's own `needs_approval` pauses it. It needs the `scope` option (below); without it the tool is refused with a `ValueError` when it is built. `result.interruptions` lists the held call and `guardian_request_id(interruption, scope)` gives the Guardian request to show to a person, for the scope of that run. After they approve in Guardian, approve the interruption and resume:
+
+  ```python
+  governed = create_guardian_tool(client, connection_id=..., on_ask="interrupt",
+                                  scope=lambda context: context.context.session_id)
+
+  result = await Runner.run(agent, "Refund order 42", context=app_context)   # app_context.session_id: set by your app
+  while result.interruptions:
+      state = result.to_state()
+      for held in result.interruptions:
+          request_id = guardian_request_id(held, app_context.session_id)
+          print("waiting for approval of", request_id)   # a person approves in Guardian
+          state.approve(held)
+      result = await Runner.run(agent, state)
+  ```
+
+  `state.approve(...)` is not the approval. It only lets the SDK invoke the call again; the tool then claims Guardian's request and runs only if a person approved it there. Resumed too early, the tool does not run and the model is told the call is still held; denied in Guardian, the model is told so. `state.reject(...)` skips the call without asking Guardian again. The other tool calls of the same turn are not held back.
+
+`on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in each mode.
+
+**Held requests are scoped per session** (`scope=`). One governed tool usually serves many users and conversations, so a held request must be claimed only by the same call of the same session:
+
+```python
+governed = create_guardian_tool(
+    client,
+    connection_id=...,
+    on_ask="result",
+    scope=lambda context: context.context.session_id,   # what your app passed to Runner.run(context=...)
+)
+result = await Runner.run(agent, user_message, context=AppContext(session_id=authenticated_session))
+```
+
+- **There is no default scope.** The Agents SDK gives a tool no session identity that outlives a paused run: a `Session` passed to `Runner.run` is not reachable from the tool's context, `RunConfig.group_id` is a tracing label that the approval check does not receive, and a run's own state is copied when it is paused. Without `scope`, a held request is not remembered, so no later call can claim it and each call asks for its own approval. `on_ask="raise"` needs no scope: `resume()` claims that call's own request.
+- `scope` is called with the Agents SDK's run context (a `RunContextWrapper` at the approval check, a `ToolContext` at invocation) and returns any hashable value. **Read it from data your application sets**, `context.context`, the object you pass to `Runner.run(context=...)`, which the model never sees. Never read it from the tool call's arguments (`context.tool_arguments`) or anything else the model writes: a model could then name another session.
+- A `scope` that returns `None` or an empty string, cannot be hashed, or raises, means the session is not known for that call: nothing is remembered for it, and with `on_ask="interrupt"` the call is not paused but reported to the model as held when it is invoked. `0` and other falsy values are scopes.
+- An identical call in another scope is proposed as its own request and never claims the first one's approval. The scope is part of an in-memory key only and is not sent to Guardian.
+- With `on_ask="interrupt"`, a call Guardian allowed during the approval check is started only by the run that asked, in the same scope and with the same call id and arguments. Any other call is decided on its own.
+
+**Two execution modes** (`mode=`, or `modes={"tool_name": ...}` per Guardian tool name; what remote mode needs and does not support is in [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote)):
+
+| Mode                     | What happens on ALLOW                                                                                                                                                          | What it guarantees                                                                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `"in_process"` (default) | Your function runs here, then the capability is redeemed and the record kept. Register the tool once in the Guardian console as "My own code (record-only)".                   | The function does not start without Guardian's ALLOW or a person's approval. It runs before the capability is redeemed, so a revocation in that window is found after the effect; the model is told the tool ran and not to call it again. |
+| `"remote"`               | The tool name is a registered catalog entry Guardian calls itself, with the credential it holds. Your local function never runs; the model gets Guardian's record of the call. | The effect happens in Guardian, under the capability. A call Guardian performed whose record is not `sent-verified` is reported to the model as "may have run, do not call it again", never as a result. An error while Guardian handles the call is reported as "Guardian may have performed it", never as "did not run". |
+
+Limits:
+
+- **Arguments.** Guardian decides on the JSON arguments of the tool call as the model sent them, and the original tool is handed that same text, so nothing changes them between the decision and the tool. The Agents SDK validates them for your function afterwards and may convert a value to the parameter's type (`"500"` to `500` for an `int`); the decision and its record hold what the model sent. With the SDK's default strict schema, arguments from an OpenAI model already match the schema. Arguments that are not a JSON object, repeat a key or hold a value JSON cannot carry are not proposed and the tool does not run.
+- **Generator tools are refused.** The Agents SDK hands the model the generator object of a generator function (sync or async) and never runs its body, so Guardian would record a call that did not happen. Wrapping one raises `TypeError`; return the result instead.
+- **A tool that raises** is not redeemed. The model gets what the tool's own `failure_error_function` says, as without Guardian. If the tool ran and redeeming the capability then failed, the model is told the tool ran and not to call it again, and `on_execution_error` gets the `GuardianExecutionFailed`.
+- **Timeouts and cancelled runs.** Each Guardian call is bounded by the client's `timeout` (30 s by default). If the SDK's own tool `timeout` or a cancelled run stops a call while Guardian is still deciding, the tool does not run and a late ALLOW is dropped. Once the tool has started (or, in remote mode, once Guardian was asked to perform the call), neither stops it: the tool runs to its end in the background and the capability is then redeemed, although the SDK may already have told the model the tool timed out. This holds for async tools too, so keep a tool within the SDK timeout and make its side effects idempotent. The background work lives on the event loop of the run: if your program closes that loop before the tool has finished (for example `asyncio.run` returning right after a cancelled run), a sync tool's worker thread can still complete the action and nothing is recorded for it. Let the loop run until the tool is done.
+- **`on_ask="interrupt"`** asks Guardian during the SDK's approval check, before the SDK's tool input guardrails and `on_tool_start` hooks; in the other modes Guardian is asked when the tool is invoked, after them. An allowed call waits up to 30 seconds for the SDK to invoke it, and in remote mode Guardian is asked to perform the call only then. Which Guardian request a paused call waits on is kept in memory by the tool, under the call's scope: a `RunState` serialized and resumed in another process, or with tools built anew, asks Guardian again, which starts a new request that needs its own approval. Nothing runs unapproved in either case. Use `"raise"` or `"result"` when the approval may outlive the process.
+- The SDK's own `needs_approval` on a tool is kept. It adds a local approval step before Guardian is asked and never replaces Guardian's decision. A callable policy is evaluated by the Agents SDK against the original tool, with the SDK's own check: a call whose arguments the tool's validation would default or convert needs manual approval, as without Guardian. On an SDK version without that evaluation, a tool with a callable policy always needs manual approval.
+- A tool with an output schema (`output_type`) cannot return a plain message, so its refusals are raised (the run fails with the Guardian error) and it needs `on_ask="raise"`. It cannot run in remote mode, where the tool output is Guardian's record and not the tool's type: that combination is refused with a `ValueError` when the tool is built.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agents SDK tool names to Guardian tool names. `amount_args` takes dollar amounts on tools, keyed by the Guardian tool name, as for `Guard`. `file_args` (content pins) and `watch_mode` are not available here; use `@guard` with the recipe above for those.
+- Not covered: hosted tools (web search, file search, code interpreter, hosted MCP), computer, shell and apply-patch tools, handoffs, agents used as tools, tools the SDK builds from MCP servers (put those servers behind `guardian-mcp`, see the [MCP package](../mcp)), and realtime or voice agents, which were not tested.
+- Tested with `openai-agents` 0.25.0 through `Runner.run`, `Runner.run_sync` and `Runner.run_streamed`, with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval. A runnable example with a scripted model: [`examples/python/openai_agents_agent.py`](../../examples/python/openai_agents_agent.py).
+
+## crewAI: `odingard_guardian.crewai` (unreleased)
+
+[crewAI](https://docs.crewai.com/) runs a tool either through native function
+calling or through its text (ReAct) loop. Both end in the tool's `_run`.
+`guardian_tools` wraps each tool in a `GuardianTool`, a crewAI `BaseTool`
+whose `_run` asks Guardian and then calls the tool it wraps.
+
+```bash
+pip install "odingard-guardian[crewai]"   # Python 3.10 to 3.13
+```
+
+```python
+import os
+from crewai import Agent
+from crewai.tools import tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.crewai import guardian_tools
+
+@tool("refund_order")
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+tools = guardian_tools(
+    [refund_order],
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    scope=lambda tool: current_user.get(),  # a ContextVar your app sets per request
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(role="Billing", goal="...", backstory="...", tools=tools)  # the wrapped tools only
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                             |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person. With a `scope` (see below), after the person approves, the same call in the same session runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                      |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                            |
+
+- **Two modes.** `mode="in_process"` (default): the wrapped tool is the action. It runs after ALLOW and before the capability is redeemed, so this mode is decision-gated (see [Honest limits](#honest-limits)); register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. `mode="remote"`: the tool name is a tool registered on your Guardian connection that Guardian calls itself. The wrapped tool's code never runs, Guardian holds the credential for the call, and the tool result is Guardian's answer as JSON: `{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`. Set it for every tool with `mode="remote"` or per tool with `modes={"send_wire": "remote"}` (Guardian tool names); any other mode raises `ValueError`. If an error is raised while Guardian handles a remote call (for example the client raises during the redemption), the model is told Guardian may have performed it and not to call it again, never that it did not run. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- **Give the agent the wrapped tools only.** A tool passed to an agent unwrapped is not governed. `guardian_tool(tool, client, ...)` wraps one tool.
+- Guardian decides on the arguments as crewAI validated them against the tool's schema (for example `"500"` for an `int` parameter is proposed as `500`). The wrapper then calls the wrapped tool's own `_run` with those arguments, so nothing validates or changes them again between the decision and the tool.
+- **A refusal is a crewAI `ToolFailure`**, not a string: ASK (`code="APPROVAL_REQUIRED"`, `retryable=True`), DENY (the reason code), Guardian unreachable before a decision (`SERVICE_UNAVAILABLE`, `retryable=True`), and a call that ran but could not be recorded (never `retryable`). The model sees the message. The failure, with `details["guardian"]["request_id"]`, is on `TaskOutput.tool_failures`, a `result_as_answer` tool never returns a refusal as the final answer, and crewAI's `tool_failure_policy="raise"` (on the tool, agent, task or crew) stops the run with `ToolExecutionFailedError` at the first held or refused call. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
+- **Use a `GuardianClient` (sync).** crewAI calls tools synchronously, also under `akickoff()` and `kickoff_async()`; an `AsyncGuardianClient` is refused when the tools are wrapped. Async tool functions are supported: the wrapper runs the coroutine to its end before the capability is redeemed.
+- **Held calls are scoped per session, and crewAI does not name one.** A tool's `_run` receives the arguments and nothing else, and nothing crewAI sets identifies the user or conversation (a crew, its tasks and one set of wrapped tools can serve many users). So by default (`SCOPE_UNKNOWN`) a held call is never claimed by a later call: every call proposes its own request, and the model is told that calling again asks for a new approval. Pass `scope=` to say which session a call belongs to; then the same call in the same session claims the approved request, and an identical call from another session proposes its own.
+  - `scope=lambda tool: current_user.get()`: a function called for each call, reading what your app set (a `ContextVar` with the authenticated user or the conversation id).
+  - `scope="user-42"`: a value for everything these wrapped tools do; wrap the tools once per user or conversation.
+  - `scope=kickoff_scope` (from `odingard_guardian.crewai`): one kickoff is one session. The scope is crewAI's execution id, set by crewAI or the host for the outermost crew or flow run. Only for apps where one kickoff serves one user (a flow that runs crews for several users is one execution); a held call is then not claimed in a later kickoff.
+  - **The scope must come from data your application sets**, never from the tool call's arguments or anything else the model writes. `None`, an empty string, a value that cannot be hashed and a function that raises mean no session is known. See [Held requests are scoped per session](#held-requests-are-scoped-per-session-unreleased).
+- **Retrying a held call** (with a `scope`). Held requests are kept in memory by the wrapped tools, so claim the approval with the same wrapped tools in the same process and the same scope (a later task or `kickoff()` is fine, except with `kickoff_scope`).
+  - Native function calling: the model can call the tool again in the same run. After the same call with the same result five times in a row, crewAI stops the agent's tool use.
+  - Text (ReAct) path: crewAI answers a call identical to the previous one itself ("I tried reusing the same input…") before it reaches the tool. The same call claims the approval after another tool call, or in the next task or kickoff.
+- **crewAI's tool cache** (`Crew(cache=True)`, off by default) answers a repeated call before the tool is reached: nothing runs and nothing is proposed for the repeat. A held, refused or unrecorded call is never cached, so the retry reaches Guardian. For a call that ran, the wrapped tool's own `cache_function` decides.
+- `max_usage_count` on the wrapped tool counts the calls that ran, that Guardian performed, or that may have happened. A use is taken before Guardian is asked and given back when the call is held or refused, so calls that crewAI runs in parallel cannot pass the limit together; while a call is in flight it holds its use, so a parallel call can be refused by the limit even if the first one ends up held. Nothing is proposed for a tool whose limit is spent. The budget starts again when crewAI prepares the tool for a task (each task and each kickoff) and on `reset_usage_count()`, as for an unwrapped tool. It is counted per scope: one session cannot spend or reset another's budget; calls without a known session share one budget. A count is kept until crewAI resets it in that session or you call `wrapped_tool.reset_usage(scope)`, and it is never dropped to make room: once 4,096 sessions hold a count for one wrapped tool that has a `max_usage_count`, a call from a further session is refused (`USAGE_TABLE_FULL`, the tool does not run and nothing is proposed), so release the sessions that will not come back (for example each finished kickoff under `kickoff_scope`).
+- A tool whose function is a generator function is refused when it is wrapped (`TypeError`): crewAI does not consume a tool's stream, so its body would never run and Guardian would record a call that did not happen. Return the result instead. (In remote mode the body never runs, so such a tool is accepted.)
+- An error after the tool ran is never handed to crewAI as a tool error, because crewAI would tell the model the call failed and, on the text path, call the tool again. An error your `on_receipt` raises is logged and ignored (the call is recorded by then, and the model gets the tool's result). Any other error after the tool finished is a `ToolFailure` (`EXECUTION_OUTCOME_UNKNOWN`) that says the tool ran and must not be called again; `on_execution_error` sees it. No failure for a call that ran or may have run is `retryable`.
+- If the tool raises after ALLOW, the capability is not redeemed and crewAI reports the error to the model. On the text path crewAI then calls the tool again by itself (up to six times in 1.15.44); each of those calls is decided by Guardian again.
+- **Why not crewAI's tool-call hooks.** `before_tool_call` can block a call, but in crewAI 1.15.44 a hook that raises is ignored and the tool runs, the hook sees the arguments before the tool's schema validated them, hooks registered later can change them, and the text path retries a tool that raised without running the before hook again. Hooks still run around a governed tool: a `before_tool_call` hook runs before Guardian's decision, so what it changes is what Guardian decides on, and an `after_tool_call` hook can rewrite the text the model sees.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps crewAI tool names to Guardian tool names. The default is the sanitized name the model calls (`"Refund order"` is `refund_order`).
+- A `GuardianTool` restored from a crewAI checkpoint has no Guardian client: it refuses every call. Wrap the tools again after a restore.
+- Not covered: content pins (`file_args`) and watch mode (use `@guard` for those), tools given to an agent unwrapped (including the delegation tools crewAI adds itself), tools the model provider runs itself, and MCP servers that crewAI connects for the agent (`mcps=`); put those behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `crewai` 1.15.44 on Python 3.13, in a real `Agent` + `Task` + `Crew.kickoff()` on both tool-calling paths, with a scripted model and a stand-in Guardian. Example: [`examples/python/crewai_agent.py`](../../examples/python/crewai_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
+
+## Google ADK: `odingard_guardian.google_adk` (unreleased)
+
+[Google's Agent Development Kit](https://google.github.io/adk-docs/) runs the
+`before_tool_callback` of every plugin registered on the `App` before each tool
+call of every agent, ahead of the agents' own callbacks. `GuardianPlugin` sends
+each call to Guardian there.
+
+```bash
+pip install "odingard-guardian[google-adk]"   # Python 3.11+
+```
+
+```python
+import os
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from odingard_guardian import AsyncGuardianClient
+from odingard_guardian.google_adk import GuardianPlugin
+
+def refund_order(order_id: str, amount_cents: int) -> dict:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianPlugin(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = LlmAgent(name="billing", model="gemini-2.5-flash", tools=[refund_order])
+app = App(name="billing_app", root_agent=agent, plugins=[guardian])  # every agent and tool
+runner = Runner(app=app, session_service=InMemorySessionService())
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded. The model gets the tool's result.                                                                                              |
+| **ASK**                  | The tool does not run. The model gets `{"error": <message>, "guardian": {"decision": "ASK", "request_id": ...}}`. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                                         |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                               |
+
+- **After ALLOW, Guardian's plugin runs the tool itself** (`tool.run_async`) inside its `before_tool_callback`, with the arguments Guardian decided on, and returns the tool's result as the callback's answer. ADK then skips its own tool step. A before-tool callback that only decided would leave ADK to run the later callbacks and then the tool, and those callbacks could change the arguments after the decision. This way nothing can, and the capability is redeemed right after the tool returns.
+- What other callbacks see, for a call Guardian's plugin handled (run or refused):
+  - `before_tool_callback` of plugins listed **before** Guardian's runs first. Guardian decides on the arguments as they left them. If one of them answers the call, ADK does not run the tool and Guardian is not asked.
+  - `before_tool_callback` of plugins listed **after** Guardian's, and of the agents, does not run. List Guardian's plugin last.
+  - `after_tool_callback` of every plugin and agent runs, with the call's arguments and the tool's result or Guardian's refusal. One that returns a value replaces what the model is told; the tool has run by then.
+  - `on_tool_error_callback` of every plugin and agent runs when the tool raises, and its answer goes to the model. With no answer the error ends the run, as in ADK; raised from a plugin callback it arrives wrapped in ADK's `RuntimeError`, with the tool's error as its cause. A tool that raises is not recorded as run. When the tool is cancelled, every `on_tool_error_callback` is told for cleanup, as in ADK, and the call stays cancelled and unrecorded.
+- **A held request belongs to the ADK session that made the call** (app, user and session id). Only the same call from that session claims it after approval; the same tool and arguments from another user or another session is proposed as a request of its own. A call made inside an `AgentTool` that Guardian's plugin ran belongs to the session that called the agent tool, because ADK gives the sub-agent a new session on every call. With `agent_before_tool_callback` on a sub-agent behind an `AgentTool` and no plugin on the `App`, each `AgentTool` call is a new session, so a held call there asks again instead of claiming. Held requests are kept in memory, per plugin instance.
+- **The scope rule.** The default scope of a call is its ADK session, `(app_name, user_id, session id)`: the values your app passes to `Runner.run_async(user_id=..., session_id=...)`, which the model cannot write. `scope=callback(tool_context)` overrides it with any hashable value your app sets (a tenant from your own context, for example). The scope is never read from the tool call's arguments, which the model writes; do not read it from them in your callback either. A `scope` callback that returns `None` or an empty string, or raises, means the session is unknown: the call is still decided, but a held call is then never claimed by a later call and asks again. Without a `scope` callback, a call whose ADK session cannot be read is refused and nothing is proposed (`SESSION_UNKNOWN`). See [Held requests are scoped per session](#held-requests-are-scoped-per-session-unreleased).
+- **One agent only:** pass `guardian.agent_before_tool_callback` as that agent's `before_tool_callback` (last in its list) instead of registering the plugin. Plugins' before-tool callbacks run before it.
+- **`on_ask="confirmation"`** maps a held call to ADK's own tool confirmation: the run pauses on an `adk_request_confirmation` call whose hint and payload carry Guardian's `request_id`. When the person approved in Guardian, answer it (`confirmed: true`); ADK repeats the call, which claims the approved request and runs. The local answer never stands in for Guardian's approval: answered before the person approved, the call stays held and the model is told so; answered with `confirmed: false`, the call does not run and Guardian is not asked. ADK asks for one confirmation per call. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person in either mode.
+- A tool with ADK's `require_confirmation` is held for that local confirmation first, before anything is proposed to Guardian. It adds a step; it does not replace Guardian's decision.
+- **`mode="remote"`** (or `modes={"refund_order": "remote"}` for single tools): Guardian performs a tool registered in your Guardian connection itself, with the credential it holds. The ADK tool's body does not run; the model gets Guardian's result as the tool's response, `{"guardian": {"decision": "ALLOW", "request_id": ..., "tool_name": ..., "receipt": ...}}`. Only a `sent-verified` receipt is reported as done. If something fails while Guardian handles a remote call (a raising `on_receipt`, for example), the model is told Guardian may have performed it and not to call it again (`EXECUTION_OUTCOME_UNKNOWN`), never that it did not run. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError`. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- What each mode guarantees. In-process (default): the ADK tool runs only after ALLOW, once, with the decided arguments. It is decision-gated: the capability is redeemed after the tool returned, so a revocation in that window is found after the effect, and the model is told the tool ran and not to call it again (see [Honest limits](#honest-limits)). The agent's process holds the tool's credentials, so code that calls your function without ADK is not governed. Remote: the tool's credential stays with Guardian, and the call happens only when Guardian redeems the capability.
+- Guardian decides on the arguments the model sent (after earlier plugins). ADK checks a function tool's mandatory arguments inside the tool step: a call it answers with "mandatory input parameters are not present" was allowed and recorded, although your function body did not run.
+- ADK's own tools are tool calls too: `transfer_to_agent`, an `AgentTool` call, a `mode="single_turn"` sub-agent's call, a task agent's `finish_task` and `LongRunningFunctionTool` starts are decided like any other tool, so register and allow them. A sub-agent's tools are decided as well, through `sub_agents` and through `AgentTool` (which hands the plugins on by default). A long-running tool is decided when it starts; its later result is not a tool call.
+- **Task-mode sub-agents (`mode="task"`) are decided when the sub-agent is about to start, not in the tool step.** ADK starts such a sub-agent from its agent wrapper and skips the tool step for the model's call, so no before-tool callback runs for it. The plugin's `before_agent_callback` proposes that call, under the sub-agent's name and with the arguments the model wrote, in the session's scope, and the sub-agent starts only after ALLOW. This needs the plugin on the `App`.
+  - ALLOW: the capability is redeemed before the sub-agent starts, so the delegation is recorded as started (not as finished), and it does not start if it cannot be recorded. A sub-agent that runs over several user turns is decided once; after a process restart a resumed one is decided again.
+  - DENY, Guardian unreachable, arguments Guardian cannot read: the sub-agent, its model and its tools do not run. The turn ends with Guardian's message, and the delegation is answered with `{"error": ..., "guardian": {...}}`, which the coordinator's model reads on the next turn.
+  - ASK: the sub-agent does not start and the turn ends with the held message and `request_id`. The delegation stays open in the session; on that session's next turn ADK starts it again, and that same call claims the approved request (or is held again if the person has not decided). `on_ask="confirmation"` does not apply to a delegation.
+  - `mode="remote"` for a sub-agent's name is refused: Guardian cannot perform a sub-agent. Nothing is proposed and it does not start.
+  - A task-mode agent that has a parent agent but was not started by a model's delegation call the plugin can find in the session (for example one placed under a workflow agent) is refused and does not start.
+- **`agent_before_tool_callback` cannot govern task-mode sub-agents.** Without the plugin on the `App`, ADK starts a task-mode sub-agent of the governed agent with no Guardian check, and the sub-agent's own tools are not governed either. Every tool call of an agent that has task-mode sub-agents is therefore refused through this callback (`TASK_DELEGATION_NOT_GOVERNED`), but a turn in which that agent only delegates is not seen by it. Use the plugin on the `App` for such agents. More generally this callback governs the tool calls of the agent it is set on, and nothing a sub-agent does.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps ADK tool names to Guardian tool names. In-process, register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
+- **Generator (streaming) function tools.** Calling a generator function runs none of its body, so the capability must only be redeemed after the stream was consumed. In `Runner.run_async` and `Runner.run`, ADK runs a generator function tool to its end inside the tool step, so it is decided before it starts and recorded after it ended. In a live run (`Runner.run_live`), and for a tool with an `input_stream` parameter, ADK starts the stream in the background instead; such a call is refused before anything is proposed (`STREAMING_NOT_GOVERNED`) and does not run. In remote mode nothing local runs, so there is no stream.
+- Not covered: tools the model runs on its own side (Google Search, built-in code execution), which never reach a callback. `Runner.run_live` (bidirectional streaming) was not tested end to end; the refusal of streaming tools there was tested by marking an invocation as live. Workflow tool nodes outside an `LlmAgent` run plugin callbacks too, but were not tested. `MCPToolset` tools are ADK tools and go through the same callback, but were not tested against an MCP server; you can also put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `google-adk` 2.15.0 on ADK's own loop (`LlmAgent`, `App`, `Runner.run_async` and `Runner.run`, `InMemorySessionService`) with a scripted model and a stand-in Guardian: sync and async function tools (also on ADK's tool thread pool), generator function tools, a cancelled tool, two users and two sessions on one `App`, parallel calls in one model turn, a custom `BaseTool`, `LongRunningFunctionTool`, `AgentTool`, agent transfer, task-mode and single-turn sub-agents, and tool confirmation. Example: [`examples/python/google_adk_agent.py`](../../examples/python/google_adk_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
 ## Strands Agents: `odingard_guardian.strands` (unreleased)
 

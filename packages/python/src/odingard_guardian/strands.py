@@ -56,6 +56,7 @@ from ._framework import (
     build_guard,
     decide_and_run,
     json_record,
+    performed_remotely,
     resolve_scope,
     resolve_tool_name,
     unchecked,
@@ -288,11 +289,9 @@ class _GuardianTool(AgentTool):
             if final:
                 yield final[0]  # ALLOW: the tool ran and Guardian recorded it
             return
-        info = (outcome.result or {}).get("guardian") or {}
-        if outcome.decision == "ALLOW" and not outcome.ran and "outcome" not in info:
+        if performed_remotely(outcome):
             # Remote mode: Guardian performed the call; its answer is the result.
-            # (A remote call that could not be confirmed carries an "outcome"
-            # and is reported as an error below.)
+            # (A remote call that could not be confirmed is reported as an error below.)
             yield told(outcome.message, "success")
             return
         if held:
