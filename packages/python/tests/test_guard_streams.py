@@ -856,6 +856,20 @@ async def test_async_a_coroutine_returning_an_async_generator_is_redeemed_when_i
     assert [item async for item in stream] == ["row 0"]
 
 
+async def test_async_a_sync_function_returning_a_generator_gets_the_generator_itself():
+    log, _, guard = asetup()
+
+    @guard("rows")
+    def rows(n: int):
+        log.append("body")
+        return (i for i in range(n))
+
+    out = await rows(2)
+    assert inspect.isgenerator(out)  # not wrapped in an async stream
+    assert log == ["request", "body", "execute:req_allow"]  # redeemed at the return
+    assert list(out) == [0, 1]
+
+
 async def test_async_guard_run_with_an_async_generator_function_defers():
     log, _, guard = asetup()
 
