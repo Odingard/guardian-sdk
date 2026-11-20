@@ -921,3 +921,191 @@ async def test_a_generator_tool_whose_stream_comes_back_unconsumed_is_not_record
     result = model.results()[0]
     assert result["guardian"]["reason_code"] == "STREAMING_NOT_GOVERNED"
     assert "nothing ran and nothing was recorded" in text_of(result)
+
+
+# --- thread pool, cancellation, sessions -----------------------------------------
+
+
+async def test_a_sync_tool_runs_on_adks_tool_thread_pool_when_configured():
+    import threading
+
+    from google.adk.agents.run_config import RunConfig, ToolThreadPoolConfig
+
+    threads = []
+
+    def blocking_refund(order_id: str) -> dict:
+        """Refund an order (blocking)."""
+        threads.append(threading.get_ident())
+        return {"status": "refunded"}
+
+    guardian = FakeClient(ALLOW)
+    harness = Harness(scripted(("blocking_refund", {"order_id": "o42"})), [plugin(guardian)], tools=(blocking_refund,))
+    session = await harness.runner.session_service.create_session(app_name="billing_app", user_id="u")
+    config = RunConfig(tool_thread_pool_config=ToolThreadPoolConfig(max_workers=2))
+    async for _ in harness.runner.run_async(
+        user_id="u", session_id=session.id, new_message=user(), run_config=config
+    ):
+        pass
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert threads and threads[0] != threading.get_ident()
+
+
+class Cleanup(BasePlugin):
+    """Releases what it holds for a call in its error callback, as ADK documents for cancellation."""
+
+    def __init__(self):
+        super().__init__(name="cleanup")
+        self.errors = []
+
+    async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
+        self.errors.append((tool.name, type(error).__name__))
+        return {"status": "ignored for a cancelled call"}
+
+
+async def _cancel_while_the_tool_waits(plugins, **agent_options):
+    import asyncio
+
+    started = asyncio.Event()
+
+    async def slow_refund(order_id: str) -> dict:
+        """Refund an order (slow)."""
+        ran.append(("slow", order_id))
+        started.set()
+        await asyncio.Event().wait()
+        return {"status": "refunded"}
+
+    harness = Harness(scripted(("slow_refund", {"order_id": "o42"})), plugins, tools=(slow_refund,), **agent_options)
+    task = asyncio.ensure_future(harness.send())
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_adk_alone_tells_error_callbacks_about_a_cancelled_tool():
+    cleanup = Cleanup()
+    await _cancel_while_the_tool_waits([cleanup])
+    assert cleanup.errors == [("slow_refund", "CancelledError")]
+
+
+async def test_a_cancelled_tool_reaches_every_error_callback_and_is_not_recorded():
+    guardian = FakeClient(ALLOW)
+    first, agent_seen = Cleanup(), []
+
+    class Raising(BasePlugin):
+        def __init__(self):
+            super().__init__(name="raising")
+
+        async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
+            raise RuntimeError("cleanup failed")
+
+    def agent_cleanup(tool, args, tool_context, error):
+        agent_seen.append(type(error).__name__)
+
+    await _cancel_while_the_tool_waits(
+        [Raising(), first, plugin(guardian)], on_tool_error_callback=agent_cleanup
+    )
+    assert ran == [("slow", "o42")]
+    # Every handler is told, whatever the others return or raise; the call stays cancelled.
+    assert first.errors == [("slow_refund", "CancelledError")]
+    assert agent_seen == ["CancelledError"]
+    assert guardian.calls == ["request:tool.invoke"]  # nothing redeemed
+
+
+async def test_an_approval_for_one_users_session_is_not_claimed_from_another():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    harness = Harness(scripted(), [plugin(guardian)])
+    service = harness.runner.session_service
+    alice = await service.create_session(app_name="billing_app", user_id="alice")
+    bob = await service.create_session(app_name="billing_app", user_id="bob")
+
+    async def send(session):
+        harness.model.turns.append([CALL])  # one call per run
+        async for _ in harness.runner.run_async(user_id=session.user_id, session_id=session.id, new_message=user()):
+            pass
+
+    await send(alice)  # held: req_ask belongs to alice's session
+    assert guardian.calls == ["request:tool.invoke"]
+    await send(bob)  # the same tool and arguments, from bob
+    # Bob's call is proposed as a request of its own; it never claims alice's.
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+
+
+async def test_an_approval_is_not_claimed_from_another_session_of_the_same_user():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    harness = Harness(scripted(), [plugin(guardian)])
+    service = harness.runner.session_service
+    one = await service.create_session(app_name="billing_app", user_id="alice")
+    two = await service.create_session(app_name="billing_app", user_id="alice")
+
+    async def send(session):
+        harness.model.turns.append([CALL])  # one call per run
+        async for _ in harness.runner.run_async(user_id="alice", session_id=session.id, new_message=user()):
+            pass
+
+    await send(one)
+    await send(two)
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+    # Back in the first session, the same call claims the request held there.
+    await send(one)
+    assert guardian.calls[2:] == ["claim:req_ask", "execute:req_ask"]
+    assert ran == [("o42", 500)]
+
+
+@_agent_tool_warning
+async def test_a_held_call_inside_an_agent_tool_is_claimed_by_the_same_sessions_next_call():
+    # AgentTool runs the sub-agent in a new session for every call. The held
+    # request belongs to the session that called the agent tool.
+    class Policy(FakeClient):
+        def request(self, invocation):
+            super().request(invocation)
+            return HELD if invocation["tool_name"] == "refund_order" else ALLOW
+
+    guardian = Policy(ALLOW, claims=[APPROVED])
+    delegate = ("refunder", {"request": "refund o42"})
+    inner = LlmAgent(name="refunder", model=scripted(CALL), tools=[refund_order])
+    harness = Harness(scripted(delegate), [plugin(guardian)], tools=(AgentTool(agent=inner),))
+    await harness.send()
+    assert ran == [] and "claim:req_ask" not in guardian.calls
+    # The next turn in the same session delegates again; the sub-agent makes the same call.
+    inner.model.turns.append([CALL])
+    harness.model.turns.append([delegate])
+    await harness.send()
+    assert "claim:req_ask" in guardian.calls and "execute:req_ask" in guardian.calls
+    assert ran == [("o42", 500)]
+
+
+async def test_sessions_without_held_requests_are_not_kept():
+    guardian = FakeClient(ALLOW)
+    governed = plugin(guardian)
+    harness = Harness(scripted(CALL), [governed])
+    await harness.send()
+    assert ran == [("o42", 500)]
+    assert len(governed._guards) == 0
+
+    held = plugin(FakeClient(HELD))
+    await Harness(scripted(CALL), [held]).send()
+    assert len(held._guards) == 1  # kept until the held request is claimed
+
+
+@_agent_tool_warning
+async def test_a_sub_agent_governed_only_by_its_own_callback_asks_again_per_agent_tool_call():
+    # A documented limit: without the plugin on the App, each AgentTool call
+    # is a new ADK session, so a request held in one is not claimed from the next.
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    delegate = ("refunder", {"request": "refund o42"})
+    inner = LlmAgent(
+        name="refunder",
+        model=scripted(CALL),
+        tools=[refund_order],
+        before_tool_callback=plugin(guardian).agent_before_tool_callback,
+    )
+    harness = Harness(scripted(delegate), [], tools=(AgentTool(agent=inner),))
+    await harness.send()
+    inner.model.turns.append([CALL])
+    harness.model.turns.append([delegate])
+    await harness.send()
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
