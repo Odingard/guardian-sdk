@@ -51,9 +51,6 @@ jobs:
       - name: Microsoft Agent Framework and Semantic Kernel (Python 3.11+)
         if: matrix.python-version == '3.13'
         run: pip install "agent-framework-core==1.26.0" "semantic-kernel==1.47.0"
-      - name: crewAI (Python 3.10 to 3.13)
-        if: matrix.python-version == '3.13'
-        run: pip install "crewai==1.15.44"
       - name: LangChain and LangGraph (Python 3.11+)
         if: matrix.python-version == '3.13'
         run: pip install "langchain==1.5.2" "langchain-core==1.8.4" "langgraph==1.2.24"
@@ -70,12 +67,18 @@ jobs:
           python scripts/check-dist.py
       - name: Python example runs (local demo policy)
         run: python ../../examples/python/invoice_agent.py > /dev/null
-      - name: crewAI example runs (scripted model, local demo policy)
-        if: matrix.python-version == '3.13'
-        run: python ../../examples/python/crewai_agent.py > /dev/null
       - name: Python LangChain example runs (local demo policy)
         if: matrix.python-version == '3.13'
         run: python ../../examples/python/langchain_agent.py > /dev/null
       - name: OpenAI Agents SDK example runs (scripted model, local demo policy)
         if: matrix.python-version == '3.13'
         run: python ../../examples/python/openai_agents_agent.py > /dev/null
+      # crewAI 1.15.44 requires openai<3 and the OpenAI Agents SDK pin requires a newer openai, so crewAI is installed and tested in its own environment.
+      - name: crewAI in its own environment (Python 3.10 to 3.13)
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m venv .venv-crewai
+          .venv-crewai/bin/python -m pip install -e ".[test]" "crewai==1.15.44"
+          .venv-crewai/bin/python -m pip check
+          .venv-crewai/bin/python -m pytest -q tests/test_crewai.py
+          .venv-crewai/bin/python ../../examples/python/crewai_agent.py > /dev/null
