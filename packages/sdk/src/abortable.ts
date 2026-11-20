@@ -1,4 +1,5 @@
 import type { GuardianClient } from "./client.js";
+import type { GuardianContext } from "./guard.js";
 
 /**
  * Honour a caller's `AbortSignal` around one guarded tool call
@@ -19,6 +20,7 @@ import type { GuardianClient } from "./client.js";
  *       return runTheTool(approved);
  *     },
  *   ),
+ *   ctx,
  * );
  * ```
  *
@@ -36,7 +38,10 @@ import type { GuardianClient } from "./client.js";
  *   waits for the real outcome, so the caller is never told a started
  *   action did not happen.
  * - Executing a record-transport setup step (mcp.install / mcp.enable)
- *   is not the tool starting.
+ *   is not the tool starting. Pass the Guardian context as `held` so this
+ *   also holds for a setup step an earlier call left held for approval:
+ *   this call claims and executes it, and without the context its id
+ *   cannot be told from the tool call's.
  * - Once the call has settled, the gate opens, so a later
  *   `GuardianApprovalPending.resume()` (after a human approves) is
  *   unaffected.
@@ -49,6 +54,7 @@ export function abortable<R>(
   client: GuardianClient,
   signal: AbortSignal | undefined,
   run: (client: GuardianClient, startTool: () => void) => Promise<R>,
+  held?: Pick<GuardianContext, "heldSetup">,
 ): Promise<R> {
   if (signal?.aborted) {
     return Promise.reject(signal.reason ?? new Error("aborted"));
@@ -82,6 +88,11 @@ export function abortable<R>(
     },
     claim: async (requestId: string) => {
       refuseIfAborted();
+      // A setup step held by an earlier call: read before the claim, which
+      // forgets it once the answer is definitive.
+      for (const step of held?.heldSetup?.values() ?? []) {
+        if (step.requestId === requestId) setupIds.add(requestId);
+      }
       const result = await client.claim(requestId);
       if (setupIds.has(requestId)) noteSetup(result);
       return result;

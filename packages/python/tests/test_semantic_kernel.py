@@ -6,6 +6,7 @@ the calls the model asks for) and its filter pipeline; a fake client stands
 in for Guardian.
 """
 
+import contextvars
 import json
 
 import pytest
@@ -36,6 +37,11 @@ class Billing:
     def refund_order(self, order_id: str, amount_cents: int) -> str:
         self.ran.append((order_id, amount_cents))
         return f"refunded {order_id}"
+
+
+def ONE_CONVERSATION(context):
+    """The app says which conversation a call belongs to; Semantic Kernel does not."""
+    return "conversation-1"
 
 
 def kernel_with(guardian, *before, **options):
@@ -71,7 +77,7 @@ async def test_allow_runs_the_function_once_then_records_it():
 
 async def test_held_then_approved_runs_on_the_same_call():
     guardian = FakeClient(HELD, claims=[APPROVED])
-    kernel, billing = kernel_with(guardian)
+    kernel, billing = kernel_with(guardian, scope=ONE_CONVERSATION)
     assert "held for human approval (request_id req_ask)" in await model_calls(kernel)
     assert billing.ran == []
     assert await model_calls(kernel) == "refunded o42"
@@ -81,7 +87,7 @@ async def test_held_then_approved_runs_on_the_same_call():
 
 async def test_held_then_declined_never_runs():
     guardian = FakeClient(HELD, claims=[DECLINED])
-    kernel, billing = kernel_with(guardian)
+    kernel, billing = kernel_with(guardian, scope=ONE_CONVERSATION)
     await model_calls(kernel)
     assert "Guardian denied billing-refund_order (APPROVAL_DENIED)" in await model_calls(kernel)
     assert billing.ran == []
@@ -275,7 +281,7 @@ async def test_remote_allow_never_runs_the_function_and_the_result_is_guardians(
 
 async def test_remote_held_then_approved_is_performed_by_guardian_on_the_same_call():
     guardian = FakeClient(HELD, claims=[APPROVED])
-    kernel, billing = kernel_with(guardian, mode="remote")
+    kernel, billing = kernel_with(guardian, mode="remote", scope=ONE_CONVERSATION)
     assert "held for human approval (request_id req_ask)" in await model_calls(kernel)
     assert guardian_result(await model_calls(kernel))["request_id"] == "req_ask"
     assert billing.ran == []
@@ -319,3 +325,184 @@ def test_a_mistyped_mode_is_refused():
         kernel_with(FakeClient(ALLOW), mode="Remote")
     with pytest.raises(ValueError, match="in_process"):
         kernel_with(FakeClient(ALLOW), modes={"billing-refund_order": "inProcess"})
+
+
+# --- held requests are scoped per session -----------------------------------------
+
+
+class TwoRequests(FakeClient):
+    """Holds every request under its own id and approves each one on claim."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.count = 0
+
+    def request(self, invocation):
+        self.count += 1
+        self.last_invocation = invocation
+        self.calls.append(f"request:{invocation['action']}")
+        return RequestResult(ok=False, request_id=f"req_{self.count}", reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+
+
+#: Set by the app for each request; the model cannot write it.
+current_user = contextvars.ContextVar("current_user", default=None)
+
+
+def SCOPE(context):
+    return current_user.get()
+
+
+async def call_as(kernel, user=None, model_arguments='{"order_id": "o42", "amount_cents": 500}'):
+    """The same tool call, in the conversation of ``user``: the app sets
+    ``current_user`` for the request, as its request handler would."""
+    history = ChatHistory()
+    call = FunctionCallContent(
+        id="call_1",
+        function_name="refund_order",
+        plugin_name="billing",
+        arguments=model_arguments,
+    )
+    token = current_user.set(user)
+    try:
+        await kernel.invoke_function_call(call, history, arguments=KernelArguments())
+    finally:
+        current_user.reset(token)
+    return str(history.messages[-1].items[0].result)
+
+
+async def test_without_a_scope_a_held_request_is_never_claimed_by_a_later_call():
+    """Semantic Kernel's filter context names no conversation, so by default
+    a held request is not reused: an identical call from another
+    conversation on the same kernel can never claim it."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian)
+    assert "request_id req_1" in await call_as(kernel, "alice")
+    assert "request_id req_2" in await call_as(kernel, "bob")
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_a_held_request_is_claimed_only_by_the_same_scope():
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=SCOPE)
+    assert "request_id req_1" in await call_as(kernel, "alice")
+    # Another conversation makes the identical call: it is its own request.
+    assert "request_id req_2" in await call_as(kernel, "bob")
+    assert billing.ran == []
+    # The first conversation's repeat call claims its own approved request, once.
+    assert await call_as(kernel, "alice") == "refunded o42"
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke", "claim:req_1", "execute:req_1"]
+    assert billing.ran == [("o42", 500)]
+    # The scope is not proposed to Guardian.
+    assert guardian.last_invocation["arguments"] == {"order_id": "o42", "amount_cents": 500}
+
+
+async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
+    def broken(context):
+        raise RuntimeError("no user")
+
+    for scope in (broken, lambda context: None):
+        guardian = TwoRequests()
+        kernel, billing = kernel_with(guardian, scope=scope)
+        await call_as(kernel, "alice")
+        await call_as(kernel, "alice")
+        assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_an_empty_scope_names_no_conversation():
+    """An empty id for callers without one: the empty string must not
+    become one scope they all share."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=lambda context: current_user.get() or "")
+    assert "request_id req_1" in await call_as(kernel)  # one caller without an id
+    assert "request_id req_2" in await call_as(kernel)  # another one, same call
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    # A caller with an id is scoped as usual.
+    assert "request_id req_3" in await call_as(kernel, "alice")
+    assert await call_as(kernel, "alice") == "refunded o42"
+
+
+class Accounts:
+    """A function that takes the user as a parameter, so the model writes it."""
+
+    def __init__(self):
+        self.ran = []
+
+    @kernel_function(name="close_account", description="Close a user's account")
+    def close_account(self, user_id: str) -> str:
+        self.ran.append(user_id)
+        return f"closed {user_id}"
+
+
+async def close_account_as(kernel, user, model_user_id):
+    """A close_account call in the conversation of ``user``; the model wrote ``model_user_id``."""
+    history = ChatHistory()
+    call = FunctionCallContent(
+        id="call_1",
+        function_name="close_account",
+        plugin_name="accounts",
+        arguments=json.dumps({"user_id": model_user_id}),
+    )
+    token = current_user.set(user)
+    try:
+        # The app also passes its own user_id as a kernel argument.
+        await kernel.invoke_function_call(call, history, arguments=KernelArguments(user_id=user))
+    finally:
+        current_user.reset(token)
+    return str(history.messages[-1].items[0].result)
+
+
+def accounts_kernel(guardian, scope, seen):
+    def recording(context):
+        seen.append(context.arguments.get("user_id"))
+        return scope(context)
+
+    kernel = Kernel()
+    accounts = Accounts()
+    kernel.add_plugin(accounts, plugin_name="accounts")
+    kernel.add_filter(
+        FilterTypes.FUNCTION_INVOCATION,
+        GuardianFunctionInvocationFilter(AsyncFake(guardian), connection_id=CONNECTION, scope=recording),
+    )
+    return kernel, accounts
+
+
+async def test_kernel_arguments_are_written_by_the_model_so_the_scope_is_not_read_from_them():
+    """Semantic Kernel puts the arguments the model wrote in its function
+    call over the invocation's kernel arguments. A scope read from
+    ``context.arguments`` is therefore the model's to choose; a scope the app
+    sets (a ContextVar here) is not."""
+    # Read from the arguments: bob's model names alice and gets her approval.
+    guardian = TwoRequests()
+    seen = []
+    kernel, accounts = accounts_kernel(guardian, lambda context: context.arguments.get("user_id"), seen)
+    assert "request_id req_1" in await close_account_as(kernel, "alice", "alice")
+    assert await close_account_as(kernel, "bob", "alice") == "closed alice"
+    assert seen == ["alice", "alice"]  # the app passed user_id="bob"; the model's value won
+    assert guardian.calls == ["request:tool.invoke", "claim:req_1", "execute:req_1"]
+
+    # Set by the app: the same forged call is bob's own request.
+    guardian = TwoRequests()
+    kernel, accounts = accounts_kernel(guardian, SCOPE, [])
+    assert "request_id req_1" in await close_account_as(kernel, "alice", "alice")
+    assert "request_id req_2" in await close_account_as(kernel, "bob", "alice")
+    assert accounts.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    # alice's own repeat call still claims her request, once.
+    assert await close_account_as(kernel, "alice", "alice") == "closed alice"
+    assert guardian.calls[2:] == ["claim:req_1", "execute:req_1"]
+
+
+async def test_semantic_kernel_refuses_a_model_argument_the_function_does_not_take():
+    """In semantic-kernel 1.47.0 a function call with an argument the
+    function has no parameter for is answered before any filter runs."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=SCOPE)
+    forged = '{"order_id": "o42", "amount_cents": 500, "user_id": "alice"}'
+    assert "unexpected argument" in await call_as(kernel, "bob", model_arguments=forged)
+    assert guardian.calls == [] and billing.ran == []
