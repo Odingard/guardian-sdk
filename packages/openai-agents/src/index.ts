@@ -22,6 +22,9 @@ import {
   normalizeFileArgPreviewRoots,
   normalizeFileArgPreviews,
   normalizeFileArgsSpec,
+  resolveHeldScope,
+  scopeHeldRequests,
+  type SCOPE_UNKNOWN,
 } from "@odingard/guardian-sdk";
 import { canonicalJson } from "@odingard/guardian-sdk/contracts";
 
@@ -53,6 +56,30 @@ export type GuardianOpenAIAgentsOptions = GuardianAdapterOptions &
      * back from Guardian at once.
      */
     decisionTimeoutMs?: number;
+    /**
+     * Held requests are scoped per session. The scope of one call: the
+     * conversation or user it belongs to, from the run context the Agents
+     * SDK passes the tool. Read it from what your app sets (a user id in
+     * `runContext.context`, which is not sent to the model), never from the
+     * tool's input or from `details`, the model's tool call.
+     * A held call is claimed only by the same call in the same scope; an
+     * identical call in another scope is its own request.
+     *
+     * The run context names no conversation by itself, so there is no
+     * default: without this option held calls are shared by every call of
+     * the tools made with these options, which must then serve one
+     * principal.
+     *
+     * With this option, return a non-empty string. Anything else means the
+     * session is not known, and a held call is then never claimed by a
+     * later call: `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`),
+     * `undefined`, `null`, an empty string, any other value, or the
+     * function throwing. The scope stays in this process.
+     */
+    scope?: (
+      runContext: RunContext<any> | undefined,
+      details: ToolDetails | undefined,
+    ) => string | typeof SCOPE_UNKNOWN | null | undefined;
     /**
      * Called with the pending approval whenever Guardian answers ASK, before
      * the call throws (onAsk "throw") or returns its message (onAsk
@@ -333,13 +360,21 @@ function buildTool(
       timeoutMs,
       ...(details?.signal ? { signal: details.signal } : {}),
     });
-    const ctx: GuardianContext = {
-      options: { ...coreOptions, client: gate.client },
-      ensured: shared.ensured,
-      installed: shared.installed,
-      heldSetup: shared.heldSetup,
-      heldInvocations: shared.heldInvocations,
-    };
+    // Held requests are scoped per session: this call sees only the held
+    // calls of its own scope.
+    const readScope = options.scope;
+    const ctx: GuardianContext = scopeHeldRequests(
+      {
+        options: { ...coreOptions, client: gate.client },
+        ensured: shared.ensured,
+        installed: shared.installed,
+        heldSetup: shared.heldSetup,
+        heldInvocations: shared.heldInvocations,
+      },
+      readScope === undefined
+        ? undefined
+        : resolveHeldScope(() => readScope(runContext, details)),
+    );
     try {
       // `input` is the call's own arguments, parsed by the Agents SDK from
       // the tool call. The tool gets the copy Guardian decided on, not the

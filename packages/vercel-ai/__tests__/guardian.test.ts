@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { jsonSchema, tool } from "ai";
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import { SCOPE_UNKNOWN, type GuardianClient } from "@odingard/guardian-sdk";
 import {
   GuardianApprovalPending,
   GuardianDenied,
@@ -797,4 +797,163 @@ describe("withGuardian against the hosted gateway's replies", () => {
       "tool.invoke",
     ]);
   });
+});
+
+/**
+ * A stand-in Guardian for the held-setup path: `mcp.install` is held until
+ * `approve()`, `mcp.enable` is already done, and the tool call's own
+ * decision waits for `decide()`.
+ */
+function heldSetupGuardian() {
+  let approved = false;
+  let decide!: (value: unknown) => void;
+  const decision = new Promise((resolve) => (decide = resolve));
+  const request = vi.fn(async (input: { action: string }) => {
+    if (input.action === "mcp.install") {
+      return { ok: true, requestId: "req_setup", decision: "ASK" };
+    }
+    if (input.action === "mcp.enable") {
+      return { ok: false, reasonCode: "TOOL_ALREADY_ENABLED" };
+    }
+    return decision;
+  });
+  const claim = vi.fn(async (requestId: string) =>
+    approved
+      ? { ok: true, requestId, decision: "ALLOW", capabilityToken: "cap_1" }
+      : { ok: false, requestId, reasonCode: "APPROVAL_PENDING" },
+  );
+  const execute = vi.fn(async () => ({
+    ok: true,
+    receipt: { status: "sent-verified" },
+  }));
+  return {
+    client: {
+      request,
+      claim,
+      execute,
+      receipts: vi.fn(),
+    } as unknown as GuardianClient,
+    request,
+    execute,
+    approve: () => {
+      approved = true;
+    },
+    decide,
+  };
+}
+
+describe("withGuardian abort after a setup step held by an earlier call", () => {
+  it("an abort while Guardian decides the tool call rejects, and a late ALLOW runs nothing", async () => {
+    const guardian = heldSetupGuardian();
+    const run = vi.fn();
+    const tools = withGuardian(
+      { send_email: fakeTool(run) },
+      {
+        client: guardian.client,
+        connectionId: "con_1",
+        mode: "inProcess",
+        installRecordTransport: true,
+      },
+    );
+    const execute = (
+      tools.send_email as unknown as {
+        execute: (i: unknown, o: unknown) => Promise<unknown>;
+      }
+    ).execute;
+    // Call 1: the registration step is held for approval.
+    await expect(execute({}, callOptions)).rejects.toBeInstanceOf(
+      GuardianApprovalPending,
+    );
+    guardian.approve();
+    // Call 2 claims and executes the approved step, then asks for the tool.
+    const controller = new AbortController();
+    const second = execute(
+      {},
+      { ...callOptions, abortSignal: controller.signal },
+    ).then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    await vi.waitFor(() =>
+      expect(guardian.request).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "tool.invoke" }),
+      ),
+    );
+    controller.abort(new Error("cancelled by caller"));
+    expect(await second).toBe("cancelled by caller");
+    guardian.decide({
+      ok: true,
+      requestId: "req_tool",
+      decision: "ALLOW",
+      capabilityToken: "cap_2",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
+    expect(guardian.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("withGuardian abort after a held setup step, with scoped held requests", () => {
+  // Held setup steps are not scoped (they register the tool and run no
+  // call), so the gate must still tell them from the tool call in a scope.
+  const byUser = (options: Record<string, unknown> | undefined) =>
+    (options?.experimental_context as { user: string }).user;
+  const cases: [string, unknown, string, string][] = [
+    ["the same scope", byUser, "alice", "alice"],
+    ["another scope", byUser, "alice", "bob"],
+    ["an unknown scope", () => SCOPE_UNKNOWN, "alice", "alice"],
+  ];
+  for (const [name, scope, first, second] of cases) {
+    it(`${name}: an abort while Guardian decides the tool call rejects, and a late ALLOW runs nothing`, async () => {
+      const guardian = heldSetupGuardian();
+      const run = vi.fn();
+      const tools = withGuardian(
+        { send_email: fakeTool(run) },
+        {
+          client: guardian.client,
+          connectionId: "con_1",
+          mode: "inProcess",
+          installRecordTransport: true,
+          scope: scope as never,
+        },
+      );
+      const execute = (
+        tools.send_email as unknown as {
+          execute: (i: unknown, o: unknown) => Promise<unknown>;
+        }
+      ).execute;
+      const as = (user: string) => ({
+        ...callOptions,
+        experimental_context: { user },
+      });
+      await expect(execute({}, as(first))).rejects.toBeInstanceOf(
+        GuardianApprovalPending,
+      );
+      guardian.approve();
+      const controller = new AbortController();
+      const call = execute(
+        {},
+        { ...as(second), abortSignal: controller.signal },
+      ).then(
+        () => "resolved",
+        (error: Error) => error.message,
+      );
+      await vi.waitFor(() =>
+        expect(guardian.request).toHaveBeenCalledWith(
+          expect.objectContaining({ action: "tool.invoke" }),
+        ),
+      );
+      controller.abort(new Error("cancelled by caller"));
+      expect(await call).toBe("cancelled by caller");
+      guardian.decide({
+        ok: true,
+        requestId: "req_tool",
+        decision: "ALLOW",
+        capabilityToken: "cap_2",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(run).not.toHaveBeenCalled();
+      expect(guardian.execute).toHaveBeenCalledTimes(1); // the setup step only
+    });
+  }
 });
