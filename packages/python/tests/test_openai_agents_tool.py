@@ -643,6 +643,33 @@ async def test_a_call_the_sdk_times_out_while_guardian_decides_never_runs():
     assert ran == [] and guardian.calls == ["request"]
 
 
+async def test_a_call_cancelled_just_after_guardian_allowed_it_never_runs_and_leaves_no_task(monkeypatch):
+    # The SDK stops waiting in the same loop iteration in which Guardian's
+    # ALLOW reached the gate: the call is committed, but the tool was never
+    # started. It must not run, nothing is redeemed, and the decision task ends.
+    from agents.tool_context import ToolContext
+
+    guardian = FakeClient(ALLOW)
+    tool = governed(guardian)
+    text = json.dumps(CALL[1])
+    context = ToolContext(context=None, tool_name=tool.name, tool_call_id="call_1", tool_arguments=text)
+    before = asyncio.all_tasks()
+    invoking = asyncio.ensure_future(tool.on_invoke_tool(context, text))
+    gate = module._Call.gate
+
+    async def gate_then_cancel(call):
+        await gate(call)
+        invoking.cancel()
+
+    monkeypatch.setattr(module._Call, "gate", gate_then_cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await invoking
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert ran == [] and guardian.calls == ["request:tool.invoke"]
+    assert [task for task in asyncio.all_tasks() - before if not task.done()] == []
+
+
 async def test_a_tool_that_ran_is_recorded_even_when_the_sdk_stops_waiting():
     release = asyncio.Event()
 

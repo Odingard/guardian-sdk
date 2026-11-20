@@ -571,6 +571,12 @@ class _GovernedTool:
             await asyncio.wait({call.task, call.at_gate}, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
             call.abandon()  # still deciding: a late ALLOW must not start the action
+            if call.wants_tool and not call.finished.done():
+                # Guardian's ALLOW reached the gate in the same loop iteration,
+                # so the call is committed, but the tool was not started and
+                # now never will be (it only starts below). End the tool step
+                # that waits for it: nothing ran, nothing is redeemed.
+                call.finished.cancel()
             raise
         if call.wants_tool and not call.task.done():
             # ALLOW, in-process: the original tool, with the text Guardian decided on.
