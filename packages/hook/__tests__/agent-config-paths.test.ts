@@ -249,6 +249,75 @@ describe("links are resolved as the operating system resolves them", () => {
     },
   );
 
+  // On POSIX a backslash is an ordinary character wherever it stands in a
+  // name. The path the operating system reads is never rewritten.
+  describe.skipIf(process.platform === "win32")(
+    "a backslash in a link's own name",
+    () => {
+      it.each([
+        ["at the start", "\\s"],
+        ["in the middle", "m\\n"],
+        ["at the end", "x\\"],
+        ["repeated at the end", "y\\\\"],
+        ["repeated in the middle", "a\\\\b"],
+        ["as the whole name", "\\"],
+        ["twice as the whole name", "\\\\"],
+      ])("%s: %s", (_where, name) => {
+        const target = join(proj, ".claude", `settings.${encodeURIComponent(name)}.json`);
+        symlinkSync(target, join(proj, name));
+        lands(join(proj, name), proj, target);
+      });
+
+      it("a relative path, and a link whose target does not exist yet", () => {
+        symlinkSync(join(proj, ".claude", "settings.rel.json"), join(proj, "r\\"));
+        lands("r\\", proj, join(proj, ".claude", "settings.rel.json"));
+        symlinkSync("../../settings.nested.json", join(proj, "d", "n\\"));
+        lands(join(proj, "d", "n\\"), proj, join(proj, ".claude", "settings.nested.json"));
+      });
+
+      it("a folder link on the way whose name ends in a backslash", () => {
+        symlinkSync(join(proj, ".claude"), join(proj, "cfg\\"), "dir");
+        lands(join(proj, "cfg\\", "settings.dir.json"), proj, join(proj, ".claude", "settings.dir.json"));
+        lands("cfg\\/settings.dir2.json", proj, join(proj, ".claude", "settings.dir2.json"));
+        expect(resolveLinks(join(proj, "cfg\\") + "/")).toBe(join(proj, ".claude"));
+      });
+
+      it("a real folder or file with a backslash in its name is not rewritten", () => {
+        mkdirSync(join(proj, "real\\"));
+        writeFileSync(join(proj, "real\\", "f\\"), "x");
+        for (const path of [
+          join(proj, "real\\"),
+          join(proj, "real\\") + "/",
+          join(proj, "real\\", "f\\"),
+        ]) {
+          expect(resolveLinks(path), path).toBe(realpathSync.native(path));
+        }
+        // What does not exist yet keeps its name as written.
+        expect(resolveLinks(join(proj, "real\\", "new\\"))).toBe(
+          join(proj, "real\\", "new\\"),
+        );
+        const call = governedCall({
+          tool: "Write",
+          input: { file_path: join(proj, "real\\", "new\\"), content: "x" },
+          cwd: proj,
+        })!;
+        expect(call.toolName).toBe("file_write");
+      });
+
+      it("a backslash written as a separator is still caught by the text check", () => {
+        for (const path of [
+          "/work/.claude\\settings.json",
+          ".claude\\settings.json",
+          "\\work\\.claude\\hooks\\pre.sh",
+          "/work/.claude\\\\settings.json",
+          "/work/.claude\\",
+        ]) {
+          expect(isAgentConfigPath(path, "/work"), path).toBe(true);
+        }
+      });
+    },
+  );
+
   it("resolveLinks agrees with the operating system for paths that exist", () => {
     for (const path of [
       join(proj, "d"),

@@ -1,6 +1,7 @@
 """Hermes Agent pre_tool_call plugin: a fake Guardian, a fake clock, no network."""
 
 import json
+import os
 
 import pytest
 
@@ -979,3 +980,32 @@ def test_nested_links_into_hermes_home_resolve_as_the_operating_system_does(tmp_
             handle.write("x")
         assert lands.read_text() == "x"
     assert governed_call("read_file", {"path": str(work / "d" / "f1")}, protected=roots).tool_name == "hermes_config"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a backslash is a separator on Windows")
+@pytest.mark.parametrize("name", ["\\s", "m\\n", "x\\", "y\\\\", "\\", "\\\\"])
+def test_a_link_with_a_backslash_in_its_own_name_into_hermes_home_needs_approval(tmp_path, name):
+    # On POSIX a backslash is an ordinary character wherever it stands in a name.
+    home = tmp_path / "home"
+    home.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    roots = hermes.protected_paths({"HERMES_HOME": str(home)})
+    link = os.path.join(str(work), name)
+    os.symlink(str(home / "config.yaml"), link)
+    os.symlink(str(home), link + "dir", target_is_directory=True)
+    for path, lands in ((link, home / "config.yaml"), (os.path.join(link + "dir", ".env"), home / ".env")):
+        for tool_name, args in (
+            ("write_file", {"path": path, "content": ""}),
+            ("patch", {"path": path, "old_string": "a", "new_string": "b"}),
+            ("patch", {"mode": "patch", "patch": f"*** Begin Patch\n*** Add File: {path}\n"}),
+        ):
+            call = governed_call(tool_name, args, protected=roots)
+            assert call is not None and call.tool_name == "hermes_config", (tool_name, path)
+        assert not lands.exists()
+        with open(path, "w") as handle:
+            handle.write("x")
+        assert lands.read_text() == "x"
+    assert governed_call("read_file", {"path": os.path.join(link + "dir", ".env")}, protected=roots).tool_name == "hermes_config"
+    plain = governed_call("write_file", {"path": os.path.join(str(work), "plain" + name), "content": ""}, protected=roots)
+    assert plain.tool_name == "file_write"

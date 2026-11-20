@@ -113,6 +113,29 @@ describe("paths that lead into OpenClaw's control plane", () => {
     expect(existsSync(join(state, "data.bin"))).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32").each([
+    ["at the start", "\\s"],
+    ["in the middle", "m\\n"],
+    ["at the end", "x\\"],
+    ["repeated at the end", "y\\\\"],
+    ["as the whole name", "\\"],
+  ])("a link whose name has a backslash %s → Ask tier", (_where, name) => {
+    // On POSIX a backslash is an ordinary character in a file name.
+    const out = mkdtempSync(join(tmpdir(), "guardian-oc-"));
+    symlinkSync(join(state, "data.bin"), join(out, name));
+    expect(routes(join(out, name))).toEqual([
+      "shell_destructive",
+      "shell_destructive",
+      "shell_destructive",
+    ]);
+    symlinkSync(state, join(out, `dir${name}`), "dir");
+    expect(routes(join(out, `dir${name}`, "data2.bin"))).toEqual([
+      "shell_destructive",
+      "shell_destructive",
+      "shell_destructive",
+    ]);
+  });
+
   it("the path is proposed as the agent wrote it", () => {
     const path = join(workspace, "innocent.json");
     const call = governOpenClawCall({

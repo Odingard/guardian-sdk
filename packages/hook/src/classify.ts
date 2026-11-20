@@ -1433,19 +1433,28 @@ function routeCommand(command: string, sensitive: boolean): HookToolName {
  * Throws when a part cannot be resolved (a link loop, a folder that cannot
  * be read, a NUL byte).
  *
- * Nothing here is normalized as text before it is resolved: `a/link/..` is
- * the parent of the link's target, not `a`.
+ * Nothing here is normalized or rewritten as text before it is resolved:
+ * `a/link/..` is the parent of the link's target, not `a`, and off Windows a
+ * backslash stays the ordinary character it is in a name.
  */
+const ON_WINDOWS = process.platform === "win32";
+const TRAILING_SEPARATORS = ON_WINDOWS ? /[/\\]+$/ : /\/+$/;
+/** A path the file system gave back, with `/` as its separator. */
+const asSlashes = (path: string) =>
+  ON_WINDOWS ? path.replace(/\\/g, "/") : path;
+
 export function resolveLinks(path: string): string {
   const pending: string[] = [];
   let at = path;
   let followed = 0;
   for (;;) {
-    // `lstat("link/")` follows the link; the name without the separator is the link.
-    const trimmed = at.replace(/[/\\]+$/, "");
+    // `lstat("link/")` follows the link; the name without the separator is
+    // the link. A backslash is a separator on Windows only: elsewhere it is
+    // an ordinary character and may be the end of a name, or all of it.
+    const trimmed = at.replace(TRAILING_SEPARATORS, "");
     if (trimmed !== "") at = trimmed;
     try {
-      const real = realpathSync.native(at).replace(/\\/g, "/");
+      const real = asSlashes(realpathSync.native(at));
       // Only names that do not exist are left, so no link is skipped here.
       return pending.length > 0
         ? posix.join(real, ...pending.reverse())
@@ -1495,6 +1504,8 @@ function pathForms(path: string, cwd: string | undefined): string[] {
       ? expanded
       : `${from}/${expanded}`;
   };
+  // The text forms read a backslash as a separator, so a Windows-style
+  // spelling is caught wherever the hook runs.
   const slashes = path.replace(/\\/g, "/");
   const absolute = absoluteOf(slashes).replace(/\\/g, "/");
   return [
@@ -1506,8 +1517,9 @@ function pathForms(path: string, cwd: string | undefined): string[] {
       // As the operating system reads it: `..` applies after a link is
       // followed (`normalize` drops the link first).
       resolveLinks(absolute),
-      // And with the separators as written: where a backslash is an
-      // ordinary character, it can be part of a link's own name.
+      // And exactly as written, the path the operating system is given:
+      // where a backslash is an ordinary character, it can be part of a
+      // link's own name, at its start, in it, at its end, or all of it.
       resolveLinks(absoluteOf(path)),
     ]),
   ];
