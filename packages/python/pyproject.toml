@@ -31,6 +31,11 @@ test = ["pytest>=8; python_version < '3.10'", "pytest>=9.2.0; python_version >= 
 # 1.26.0 and semantic-kernel 1.47.0.
 agent-framework = ["agent-framework-core>=1.26,<2"]
 semantic-kernel = ["semantic-kernel>=1.47,<2"]
+# Python 3.11+ (LangChain's own minimum). Tested with langchain 1.5.2,
+# langchain-core 1.8.4 and langgraph 1.2.24.
+langchain = ["langchain>=1.5,<2", "langchain-core>=1.8,<2", "langgraph>=1.2,<2"]
+# Python 3.10+ (the Agents SDK's own minimum). Tested with openai-agents 0.25.0.
+openai-agents = ["openai-agents>=0.25,<1"]
 
 # Hermes Agent discovers this as the plugin "guardian"; it stays off until
 # listed in Hermes' plugins.enabled.
