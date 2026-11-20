@@ -12,6 +12,7 @@
     "packages/langchain",
     "packages/vercel-ai",
     "packages/openai-agents",
+    "packages/mastra",
     "packages/steel",
     "packages/x402",
     "packages/ap2",
