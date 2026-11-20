@@ -88,6 +88,12 @@ export {
 } from "./guard.js";
 export { abortable } from "./abortable.js";
 export {
+  SCOPE_UNKNOWN,
+  resolveHeldScope,
+  scopeHeldRequests,
+  type HeldScope,
+} from "./held-scope.js";
+export {
   GUARDIAN_DEFAULT_CALL_TIMEOUT_MS,
   GUARDIAN_MAX_CALL_TIMEOUT_MS,
   createTimeoutFetch,

@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import EXECUTION_OUTCOME_UNKNOWN, Guard, GuardianExecutionFailed, Mode
+from .guard import EXECUTION_OUTCOME_UNKNOWN, SCOPE_UNKNOWN, Guard, GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -125,6 +125,40 @@ def is_stream_function(fn: Any) -> bool:
     return inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
 
 
+#: ``scope=`` option of an integration: the framework's call context to
+#: the scope of the call (the session it belongs to), any hashable value.
+ScopeOption = Optional[Callable[[Any], Any]]
+
+
+def resolve_scope(scope: ScopeOption, context: Any, default: Any = SCOPE_UNKNOWN) -> Any:
+    """The scope of one tool call, for :func:`decide_and_run`.
+
+    ``default`` is what the integration read from the framework's context
+    (a session or conversation id), or :data:`SCOPE_UNKNOWN` when the
+    framework does not say. The app's ``scope`` option overrides it. A
+    scope must come from data the application sets, never from the tool
+    call's arguments, which the model writes. A scope
+    that is ``None`` or an empty string (a missing id), cannot be hashed, or
+    a ``scope`` option that raises, is :data:`SCOPE_UNKNOWN`: a held request
+    is then never claimed by a later call, so no other session can use its
+    approval. Any other value is a scope, falsy ones such as ``0`` included.
+    """
+    value = default
+    if scope is not None:
+        try:
+            value = scope(context)
+        except Exception:  # noqa: BLE001 - an unknown session is the strict side
+            _logger.warning("Guardian scope option failed; held requests are not reused", exc_info=True)
+            return SCOPE_UNKNOWN
+    if value is None or (isinstance(value, (str, bytes)) and len(value) == 0):
+        return SCOPE_UNKNOWN
+    try:
+        hash(value)
+    except TypeError:
+        return SCOPE_UNKNOWN
+    return value
+
+
 def resolve_tool_name(tool_names: ToolNames, name: str) -> str:
     if tool_names is None:
         return name
@@ -183,8 +217,18 @@ async def decide_and_run(
     tool_name: str,
     proposed: Dict[str, Any],
     run_tool: Callable[[], Awaitable[None]],
+    *,
+    scope: Any = None,
 ) -> Outcome:
     """Ask Guardian about ``tool_name(proposed)``; await ``run_tool`` after ALLOW, never before.
+
+    ``scope`` is the session the call belongs to (see :func:`resolve_scope`):
+    a held request is claimed only by the same call under the same scope.
+    Pass :data:`SCOPE_UNKNOWN` when the session cannot be determined; a held
+    request is then never claimed by a later call. ``None`` (the default,
+    for integrations written before scopes) shares held requests between
+    every call the guard sees, so it is only right for a guard that serves
+    one session.
 
     The capability is redeemed when ``run_tool`` returns, so the tool must
     have run by then: a stream the tool produces has to be consumed inside
@@ -199,7 +243,7 @@ async def decide_and_run(
         return _RAN
 
     try:
-        out = await guard.run(tool_name, copy.deepcopy(proposed), body)
+        out = await guard.run(tool_name, copy.deepcopy(proposed), body, scope=scope)
     except Exception:
         if started:
             raise  # the tool's own error, or a hook after this one: not ours to hide
@@ -239,9 +283,11 @@ def decide_and_run_sync(
     tool_name: str,
     proposed: Dict[str, Any],
     run_tool: Callable[[], None],
+    *,
+    scope: Any = None,
 ) -> Outcome:
     """:func:`decide_and_run` for a sync :class:`Guard` (``build_guard(require_async=False)``)
-    and a sync tool step. Same outcomes, case for case."""
+    and a sync tool step. Same outcomes, case for case, and the same ``scope``."""
     started = False
 
     def body() -> Any:
@@ -251,7 +297,7 @@ def decide_and_run_sync(
         return _RAN
 
     try:
-        out = guard.run(tool_name, copy.deepcopy(proposed), body)
+        out = guard.run(tool_name, copy.deepcopy(proposed), body, scope=scope)
     except Exception:
         if started:
             raise

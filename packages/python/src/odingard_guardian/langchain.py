@@ -45,6 +45,12 @@ store, the tool runtime, the tool call id) are not proposed and reach the
 tool unchanged; an argument the app injects (``InjectedToolArg``) is decided
 on like any other.
 
+Held requests are scoped per session: a held call is claimed only by the
+same call in the same LangGraph thread (``config["configurable"]["thread_id"]``,
+which the application sets and the model cannot write), or in the scope the
+``scope=`` option returns. With no thread id and no ``scope`` the session is
+not known: nothing is remembered, and the same call again is a new request.
+
 ``mode="remote"`` (or ``modes={"tool": "remote"}``) is for a tool registered
 in the Guardian connection that Guardian performs itself: the local tool
 body never runs and the model gets Guardian's result, with its receipt.
@@ -94,10 +100,12 @@ from ._framework import (
     is_stream_function,
     json_record,
     performed_remotely,
+    resolve_scope,
     resolve_tool_name,
+    ScopeOption,
 )
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import GuardianExecutionFailed, Mode, _held_key
+from .guard import SCOPE_UNKNOWN, GuardianExecutionFailed, Mode, _held_key
 
 try:  # LangGraph is needed for on_ask="interrupt" only.
     from langgraph.errors import GraphBubbleUp as _GraphBubbleUp
@@ -147,6 +155,7 @@ __all__ = [
     "INTERRUPT_TYPE",
     "guardian_tool",
     "guardian_tools",
+    "thread_scope",
 ]
 
 OnAsk = Literal["result", "interrupt"]
@@ -198,8 +207,8 @@ _STEPS: "weakref.WeakKeyDictionary[Any, _Step]" = weakref.WeakKeyDictionary()
 #: holding the scratchpad so the id stays its own, oldest dropped first.
 _STEPS_BY_ID: Dict[int, _Step] = {}
 _STEPS_LOCK = threading.Lock()
-#: Interrupt positions a paused call owns, by (thread, task, tool call id).
-_PAUSES: Dict[Tuple[Any, Any, Any], Tuple[Dict[str, Any], int]] = {}
+#: Interrupt positions a paused call owns, by (scope, thread, task, tool call id).
+_PAUSES: Dict[Tuple[Any, ...], Tuple[Dict[str, Any], int]] = {}
 
 
 def _step_of(config: Any) -> Optional[_Step]:
@@ -223,15 +232,38 @@ def _step_of(config: Any) -> Optional[_Step]:
         return step
 
 
+def thread_scope(config: Any) -> Any:
+    """The default scope of a call: LangGraph's ``config["configurable"]["thread_id"]``.
+
+    The application sets it when it invokes the graph (or the tool), and it
+    reaches the tool in its run config, not in the tool call's arguments, so
+    the model cannot write it. A non-empty string is the scope; a number is
+    its string form (``7`` and ``"7"`` are one thread). Anything else, or no
+    thread id, is :data:`SCOPE_UNKNOWN`.
+    """
+    conf = config.get("configurable") if isinstance(config, Mapping) else None
+    thread_id = conf.get("thread_id") if isinstance(conf, Mapping) else None
+    if isinstance(thread_id, str):
+        return thread_id if thread_id else SCOPE_UNKNOWN
+    if isinstance(thread_id, bool):
+        return SCOPE_UNKNOWN
+    if isinstance(thread_id, int) or (isinstance(thread_id, float) and thread_id == thread_id and abs(thread_id) != float("inf")):
+        return str(thread_id)
+    return SCOPE_UNKNOWN
+
+
 class _Call:
     """One governed call inside a LangGraph task: when it may pause and when it may act."""
 
-    def __init__(self, gate: "GuardianGate", config: Any, call_id: Any) -> None:
+    def __init__(self, gate: "GuardianGate", config: Any, call_id: Any, scope: Any) -> None:
         self.gate = gate
         self.step = _step_of(config)
         conf = config.get("configurable") if isinstance(config, Mapping) else None
+        # The pause record of a call belongs to its session (scope), its
+        # LangGraph thread and task, and its tool call id.
+        self.scope = scope
         self.key = (
-            (conf.get("thread_id"), conf.get("checkpoint_ns"), call_id)
+            (scope, thread_scope(config), conf.get("checkpoint_ns"), call_id)
             if self.step is not None and isinstance(conf, Mapping) and call_id is not None
             else None
         )
@@ -243,6 +275,10 @@ class _Call:
         paused: not asked for, no graph, or a call of this task already acted."""
         step = self.step
         if self.gate._on_ask != "interrupt" or _interrupt is None or step is None:
+            return False
+        if self.scope is SCOPE_UNKNOWN:
+            # The held request is not remembered, so a resume could never
+            # claim it: every resume would ask for one more approval.
             return False
         with step.lock:
             if step.effects:
@@ -404,6 +440,15 @@ class GuardianGate:
         to pause, so a held call answers as with ``"result"``.
     :param on_approval_pending: ``callback(tool_name, request_id)`` when a
         call is held, once per request, so the app can show it to a person.
+    :param scope: ``callback(config)`` returning the scope of a call: the
+        session (user, conversation) it belongs to, read from the tool's run
+        config. A held request is claimed only by the same call in the same
+        scope. Default: :func:`thread_scope`, LangGraph's
+        ``config["configurable"]["thread_id"]``. Take a scope from what your
+        application sets, never from the tool call's arguments. A call with
+        no scope (no thread id; ``None``, an empty string or an error from
+        the callback) is not remembered: the same call again is proposed as
+        a new request.
     :param on_receipt / on_execution_error: as for :class:`Guard`.
     """
 
@@ -423,7 +468,10 @@ class GuardianGate:
         on_approval_pending: Optional[Callable[[str, str], Any]] = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
+        scope: ScopeOption = None,
     ) -> None:
+        if scope is not None and not callable(scope):
+            raise TypeError("scope takes a function of the tool's run config")
         if on_ask not in ("result", "interrupt"):
             raise ValueError('on_ask takes "result" or "interrupt"')
         if on_ask == "interrupt" and _interrupt is None:
@@ -456,6 +504,7 @@ class GuardianGate:
             self._aguard._opts = first._opts
             self._aguard._ensured = first._ensured
         self._tool_names = tool_names
+        self._scope = scope
         self._on_ask = on_ask
         self._on_approval_pending = on_approval_pending
         self._sync_only_plain = {
@@ -594,9 +643,18 @@ class GuardianGate:
                     "or call the tool with ainvoke(). Nothing was proposed and the tool did not run."
                 )
 
-    def _claiming(self, guard: Any, name: str, proposed: Dict[str, Any]) -> Optional[str]:
+    def _scope_of(self, config: Any) -> Any:
+        """The session a call belongs to: the ``scope`` option, else the thread id."""
+        scope = resolve_scope(self._scope, config, thread_scope(config))
+        try:
+            hash(scope)
+        except TypeError:
+            return SCOPE_UNKNOWN  # cannot key a held request: nothing is remembered
+        return scope
+
+    def _claiming(self, guard: Any, name: str, proposed: Dict[str, Any], scope: Any) -> Optional[str]:
         """The held request the next decision will claim for this call, if any."""
-        key = _held_key(guard._opts, "tool", name, proposed)
+        key = _held_key(guard._opts, "tool", name, proposed, scope)
         return guard._opts.held.get(key) if key is not None else None
 
     def _stopped(self, tool: "GuardianTool", name: str, request_id: str, call_id: Any) -> Any:
@@ -689,7 +747,8 @@ class GuardianGate:
         except Exception:  # noqa: BLE001 - arguments Guardian cannot read never run
             return self._unreadable(tool, call_id)
         output: List[Any] = []
-        call = _Call(self, config, call_id)
+        scope = self._scope_of(config)
+        call = _Call(self, config, call_id, scope)
         remote = self._guard._opts.mode_for(name) == "remote"
 
         claimed: List[Optional[str]] = [None]
@@ -711,8 +770,8 @@ class GuardianGate:
             for _ in range(_MAX_RESUMES):
                 if remote:
                     call.acting()  # Guardian performs a remote call as soon as it allows it
-                claimed[0] = self._claiming(self._guard, name, proposed)
-                outcome = decide_and_run_sync(self._guard, name, proposed, run_tool)
+                claimed[0] = self._claiming(self._guard, name, proposed, scope)
+                outcome = decide_and_run_sync(self._guard, name, proposed, run_tool, scope=scope)
                 if outcome.decision != "ASK" or not outcome.request_id:
                     break
                 call.did_not_act()
@@ -756,7 +815,8 @@ class GuardianGate:
         except Exception:  # noqa: BLE001 - arguments Guardian cannot read never run
             return self._unreadable(tool, call_id)
         output: List[Any] = []
-        call = _Call(self, config, call_id)
+        scope = self._scope_of(config)
+        call = _Call(self, config, call_id, scope)
         remote = self._aguard._opts.mode_for(name) == "remote"
 
         claimed: List[Optional[str]] = [None]
@@ -778,8 +838,8 @@ class GuardianGate:
             for _ in range(_MAX_RESUMES):
                 if remote:
                     call.acting()
-                claimed[0] = self._claiming(self._aguard, name, proposed)
-                outcome = await decide_and_run(self._aguard, name, proposed, run_tool)
+                claimed[0] = self._claiming(self._aguard, name, proposed, scope)
+                outcome = await decide_and_run(self._aguard, name, proposed, run_tool, scope=scope)
                 if outcome.decision != "ASK" or not outcome.request_id:
                     break
                 call.did_not_act()

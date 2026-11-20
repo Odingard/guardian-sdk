@@ -49,7 +49,15 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 from semantic_kernel.filters import FunctionInvocationContext
 from semantic_kernel.functions import FunctionResult
 
-from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
+from ._framework import (
+    ScopeOption,
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    json_record,
+    resolve_scope,
+    resolve_tool_name,
+)
 from .client import AsyncGuardianClient
 from .guard import GuardianDenied, GuardianExecutionFailed, Mode
 
@@ -80,6 +88,18 @@ class GuardianFunctionInvocationFilter:
         qualified function name (``plugin-function``), as a mapping or a
         function. Default: that name.
     :param on_receipt / on_execution_error: as for :class:`Guard`.
+    :param scope: ``callback(context)`` returning the scope of a call: the
+        conversation or user it belongs to, any hashable value. Read it
+        from something your app sets per request and the model cannot
+        write, such as a ``contextvars.ContextVar``:
+        ``scope=lambda context: current_user.get(None)``. Never read it
+        from ``context.arguments``: Semantic Kernel puts the arguments the
+        model wrote in its function call over the kernel arguments, so the
+        model could name another user's scope. A
+        held call is claimed only by the same call in the same scope.
+        Semantic Kernel's filter context does not identify a
+        conversation, so without this option a held call is never
+        claimed by a later call: each call asks for its own approval.
     :param mode / modes: ``"in_process"`` (default): the function runs in
         your process after ALLOW. ``"remote"``: Guardian performs the call
         itself and the kernel function never runs; its result is Guardian's
@@ -100,6 +120,7 @@ class GuardianFunctionInvocationFilter:
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
         mode: Mode = "in_process",
         modes: Optional[Mapping[str, Mode]] = None,
+        scope: ScopeOption = None,
     ) -> None:
         self._guard = build_guard(
             client,
@@ -114,6 +135,7 @@ class GuardianFunctionInvocationFilter:
             modes=modes,
         )
         self._tool_names = tool_names
+        self._scope = scope
 
     @staticmethod
     def _parameters(context: FunctionInvocationContext) -> Dict[str, Any]:
@@ -188,7 +210,10 @@ class GuardianFunctionInvocationFilter:
                 context.arguments[name] = copy.deepcopy(value)
             await next(context)  # this filter is the last one: next is the function
 
-        outcome = await decide_and_run(self._guard, tool_name, proposed, run_function)
+        # Semantic Kernel's filter context names no conversation, so the
+        # scope comes from the app's ``scope`` option or is unknown.
+        scope = resolve_scope(self._scope, context)
+        outcome = await decide_and_run(self._guard, tool_name, proposed, run_function, scope=scope)
         if outcome.message is not None:
             # A refusal, a call that could not be confirmed, or (remote mode)
             # Guardian's result for the call it performed.

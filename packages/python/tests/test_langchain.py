@@ -361,7 +361,7 @@ def test_held_then_approved_runs_on_the_same_call():
     governed = guardian_tool(
         refund_order, guardian, connection_id=CONNECTION, on_approval_pending=lambda t, r: pending.append((t, r))
     )
-    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT)
+    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT, THREAD)
     assert pending == [("refund_order", "req_ask")]
     held, done = tool_messages(state)
     assert "held for human approval (request_id req_ask)" in held.content
@@ -379,7 +379,7 @@ def test_held_and_not_yet_approved_does_not_run_or_ask_twice():
     governed = guardian_tool(
         refund_order, guardian, connection_id=CONNECTION, on_approval_pending=lambda t, r: pending.append(r)
     )
-    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT)
+    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT, THREAD)
     assert ran == []
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
     assert all("held for human approval" in text for text in texts(state))
@@ -388,9 +388,7 @@ def test_held_and_not_yet_approved_does_not_run_or_ask_twice():
 
 def test_held_then_declined_never_runs():
     guardian = FakeClient(HELD, claims=[DECLINED])
-    state = create_agent(model(CALL, CALL), [guardian_tool(refund_order, guardian, connection_id=CONNECTION)]).invoke(
-        START_INPUT
-    )
+    state = create_agent(model(CALL, CALL), [guardian_tool(refund_order, guardian, connection_id=CONNECTION)]).invoke(START_INPUT, THREAD)
     assert ran == []
     assert "Guardian denied refund_order (APPROVAL_DENIED)" in texts(state)[1]
     assert "execute:req_ask" not in guardian.calls
@@ -640,7 +638,7 @@ def test_remote_mode_unverified_receipt_is_not_reported_as_done():
 def test_remote_mode_held_then_approved_is_performed_by_guardian():
     guardian = FakeClient(HELD, claims=[APPROVED])
     governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, mode="remote")
-    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT)
+    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT, THREAD)
     assert ran == []
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
     assert json.loads(texts(state)[1])["guardian"]["receipt"]["requestId"] == "req_ask"
@@ -708,8 +706,8 @@ async def test_async_client_with_a_sync_tool_called_async():
 async def test_sync_client_serves_async_calls_and_shares_held_requests():
     guardian = FakeClient(HELD, claims=[APPROVED])
     governed = guardian_tool(refund_order_async, guardian, connection_id=CONNECTION)
-    assert "held for human approval" in await governed.ainvoke(CALL[1])
-    assert await governed.ainvoke(CALL[1]) == "refunded o42"
+    assert "held for human approval" in await governed.ainvoke(CALL[1], THREAD)
+    assert await governed.ainvoke(CALL[1], THREAD) == "refunded o42"
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
     assert ran == [("o42", 500)]
 
@@ -719,8 +717,8 @@ def test_a_request_held_on_the_sync_path_is_claimed_on_the_async_path():
 
     guardian = FakeClient(HELD, claims=[APPROVED])
     governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION)
-    assert "held for human approval" in governed.invoke(CALL[1])
-    assert asyncio.run(governed.ainvoke(CALL[1])) == "refunded o42"
+    assert "held for human approval" in governed.invoke(CALL[1], THREAD)
+    assert asyncio.run(governed.ainvoke(CALL[1], THREAD)) == "refunded o42"
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
 
 
@@ -759,20 +757,20 @@ async def test_async_on_approval_pending_may_be_a_coroutine():
 def test_middleware_allow_deny_and_ask():
     guardian = FakeClient(ALLOW)
     agent = create_agent(model(CALL), [refund_order], middleware=[GuardianMiddleware(guardian, connection_id=CONNECTION)])
-    state = agent.invoke(START_INPUT)
+    state = agent.invoke(START_INPUT, THREAD)
     assert ran == [("o42", 500)] and texts(state) == ["refunded o42"]
     assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
 
     ran.clear()
     denied = create_agent(
         model(CALL), [refund_order], middleware=[GuardianMiddleware(FakeClient(DENIED), connection_id=CONNECTION)]
-    ).invoke(START_INPUT)
+    ).invoke(START_INPUT, THREAD)
     assert ran == [] and "Guardian denied refund_order (POLICY_DENY)" in texts(denied)[0]
 
     guardian = FakeClient(HELD, claims=[APPROVED])
     held = create_agent(
         model(CALL, CALL), [refund_order], middleware=[GuardianMiddleware(guardian, connection_id=CONNECTION)]
-    ).invoke(START_INPUT)
+    ).invoke(START_INPUT, THREAD)
     assert "held for human approval (request_id req_ask)" in texts(held)[0]
     assert texts(held)[1] == "refunded o42" and ran == [("o42", 500)]
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
@@ -1109,9 +1107,9 @@ def test_a_new_process_proposes_again_and_waits_for_that_approval():
 def test_on_ask_interrupt_outside_a_graph_answers_as_a_held_result():
     guardian = FakeClient(HELD, claims=[APPROVED])
     governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_ask="interrupt")
-    assert "held for human approval (request_id req_ask)" in governed.invoke(CALL[1])
+    assert "held for human approval (request_id req_ask)" in governed.invoke(CALL[1], THREAD)
     assert ran == []
-    assert governed.invoke(CALL[1]) == "refunded o42"
+    assert governed.invoke(CALL[1], THREAD) == "refunded o42"
 
 
 def test_an_unknown_on_ask_is_refused():
@@ -1330,12 +1328,12 @@ def test_a_sync_on_approval_pending_that_returns_an_awaitable_is_refused_and_not
         refund_order, guardian, connection_id=CONNECTION, on_approval_pending=lambda t, r: later(r)
     )
     with pytest.raises(TypeError, match="on_approval_pending"):
-        governed.invoke(CALL[1])
+        governed.invoke(CALL[1], THREAD)
     assert ran == [] and pending == []
 
     import asyncio
 
-    asyncio.run(governed.ainvoke(CALL[1]))  # claims the same held request, and tells the person
+    asyncio.run(governed.ainvoke(CALL[1], THREAD))  # claims the same held request, and tells the person
     assert pending == ["req_ask"]
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
 
@@ -1552,3 +1550,179 @@ def test_a_sync_graph_with_a_coroutine_callback_never_runs_the_tool():
     with pytest.raises(TypeError, match="on_execution_error"):
         graph([governed], [CALL]).invoke(START_INPUT)
     assert ran == [] and guardian.calls == []
+
+
+# --- held requests are scoped per LangGraph thread ---------------------------------
+
+THREAD_2 = {"configurable": {"thread_id": "t2"}}
+
+
+def test_two_threads_on_one_gate_do_not_share_a_held_request():
+    guardian = AlwaysAsks()
+    gate = GuardianGate(guardian, connection_id=CONNECTION)
+
+    def agent(*turns):
+        return create_agent(model(*turns), [refund_order], middleware=[GuardianMiddleware(gate)])
+
+    first = agent(CALL).invoke(START_INPUT, THREAD)
+    assert "held for human approval (request_id req_1)" in texts(first)[0]
+    guardian.approved.add("req_1")
+
+    # Another conversation makes the same call: it proposes its own request
+    # and never claims the first conversation's approval.
+    second = agent(CALL).invoke(START_INPUT, THREAD_2)
+    assert "held for human approval (request_id req_2)" in texts(second)[0]
+    assert ran == [] and "claim:req_1" not in guardian.calls
+
+    # The first conversation's repeat call claims its own request and runs once.
+    again = agent(CALL).invoke(START_INPUT, THREAD)
+    assert texts(again) == ["refunded o42"] and ran == [("o42", 500)]
+    assert guardian.calls == ["request:req_1", "request:req_2", "claim:req_1", "execute:req_1"]
+
+
+def test_two_threads_paused_on_the_same_call_each_need_their_own_approval():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, on_ask="interrupt")
+    saver = InMemorySaver()
+    one, two = graph([governed], [CALL], saver), graph([governed], [CALL], saver)
+    assert interrupts(one.invoke(START_INPUT, THREAD))[0]["request_id"] == "req_1"
+    guardian.approved.add("req_1")
+    assert interrupts(two.invoke(START_INPUT, THREAD_2))[0]["request_id"] == "req_2"
+    # Resuming the second thread does not run under the first thread's approval.
+    still = two.invoke(Command(resume=True), THREAD_2)
+    assert interrupts(still)[0]["request_id"] == "req_2" and ran == []
+    done = one.invoke(Command(resume=True), THREAD)
+    assert ran == [("o42", 500)] and texts(done) == ["refunded o42"]
+    assert "claim:req_1" in guardian.calls and guardian.calls.count("execute:req_1") == 1
+
+
+def test_the_models_arguments_cannot_name_another_threads_session():
+    guardian = AlwaysAsks()
+    gate = GuardianGate(guardian, connection_id=CONNECTION)
+    governed = gate.tool(refund_order)
+    create_agent(model(CALL), [governed]).invoke(START_INPUT, THREAD)
+    guardian.approved.add("req_1")
+    forged = (
+        "refund_order",
+        {**CALL[1], "thread_id": "t1", "config": {"configurable": {"thread_id": "t1"}}, "scope": "t1"},
+    )
+    state = create_agent(model(forged), [governed]).invoke(START_INPUT, THREAD_2)
+    assert ran == [] and "claim:req_1" not in guardian.calls
+    assert "held for human approval (request_id req_2)" in texts(state)[0]
+
+
+def test_without_a_thread_id_a_held_request_is_not_remembered():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION)
+    first = governed.invoke(CALL[1])
+    assert "held for human approval (request_id req_1)" in first
+    assert "the approved request runs then" not in first  # nothing promises a claim
+    guardian.approved.add("req_1")
+    # No session is known, so nothing can show this is the same caller: the
+    # call is proposed again, and the approved request is not claimed.
+    assert "request_id req_2" in governed.invoke(CALL[1])
+    assert ran == [] and guardian.calls == ["request:req_1", "request:req_2"]
+
+    state = create_agent(model(CALL, CALL), [governed]).invoke(START_INPUT)  # a graph run without a thread id
+    assert ran == [] and not any(call.startswith("claim") for call in guardian.calls)
+    assert len(texts(state)) == 2
+
+
+def test_the_scope_option_names_the_session_from_what_the_app_sets():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(
+        refund_order,
+        guardian,
+        connection_id=CONNECTION,
+        scope=lambda config: config.get("metadata", {}).get("user_id"),
+    )
+    alice, bob = {"metadata": {"user_id": "alice"}}, {"metadata": {"user_id": "bob"}}
+    assert "request_id req_1" in governed.invoke(CALL[1], alice)
+    guardian.approved.add("req_1")
+    assert "request_id req_2" in governed.invoke(CALL[1], bob)  # bob's own request
+    assert ran == []
+    assert governed.invoke(CALL[1], alice) == "refunded o42"
+    assert guardian.calls == ["request:req_1", "request:req_2", "claim:req_1", "execute:req_1"]
+
+
+def test_the_scope_option_overrides_the_thread_id():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(
+        refund_order, guardian, connection_id=CONNECTION, scope=lambda config: config["metadata"]["user_id"]
+    )
+    same_thread = lambda user: {"configurable": {"thread_id": "shared"}, "metadata": {"user_id": user}}  # noqa: E731
+    governed.invoke(CALL[1], same_thread("alice"))
+    guardian.approved.add("req_1")
+    assert "request_id req_2" in governed.invoke(CALL[1], same_thread("bob"))
+    assert ran == []
+
+
+@pytest.mark.parametrize("unknown", [lambda config: None, lambda config: "", lambda config: 1 / 0, lambda config: []])
+def test_a_scope_option_that_gives_no_session_is_strict(unknown):
+    guardian = AlwaysAsks()
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, scope=unknown)
+    governed.invoke(CALL[1], THREAD)  # the thread id is not a fallback for the app's own rule
+    guardian.approved.add("req_1")
+    assert "request_id req_2" in governed.invoke(CALL[1], THREAD)
+    assert ran == [] and guardian.calls == ["request:req_1", "request:req_2"]
+
+
+def test_zero_is_a_scope_and_a_numeric_thread_id_is_its_string_form():
+    from odingard_guardian import SCOPE_UNKNOWN
+    from odingard_guardian.langchain import thread_scope
+
+    guardian = AlwaysAsks()
+    governed = guardian_tool(refund_order, guardian, connection_id=CONNECTION, scope=lambda config: 0)
+    governed.invoke(CALL[1])
+    guardian.approved.add("req_1")
+    assert governed.invoke(CALL[1]) == "refunded o42"
+
+    def scope(thread_id):
+        return thread_scope({"configurable": {"thread_id": thread_id}})
+
+    assert scope("t1") == "t1" and scope(7) == scope("7") == "7" and scope(0) == "0"
+    for missing in ("", None, True, ["t1"], {"id": "t1"}, float("nan")):
+        assert scope(missing) is SCOPE_UNKNOWN
+    assert thread_scope({}) is SCOPE_UNKNOWN and thread_scope(None) is SCOPE_UNKNOWN
+
+    with pytest.raises(TypeError, match="scope"):
+        GuardianGate(FakeClient(ALLOW), connection_id=CONNECTION, scope="t1")
+
+
+async def test_two_threads_async_do_not_share_a_held_request():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(refund_order_async, AsyncFake(guardian), connection_id=CONNECTION)
+    assert "request_id req_1" in await governed.ainvoke(CALL[1], THREAD)
+    guardian.approved.add("req_1")
+    assert "request_id req_2" in await governed.ainvoke(CALL[1], THREAD_2)
+    assert ran == []
+    assert await governed.ainvoke(CALL[1], THREAD) == "refunded o42"
+    assert guardian.calls == ["request:req_1", "request:req_2", "claim:req_1", "execute:req_1"]
+
+
+def test_an_approved_tool_that_interrupts_itself_is_detected_per_thread():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(held_tool_with_its_own_interrupt(), guardian, connection_id=CONNECTION, on_ask="interrupt")
+    saver = InMemorySaver()
+    call = ("pay", {"order_id": "o42"})
+    one, two = graph([governed], [call], saver), graph([governed], [call], saver)
+    one.invoke(START_INPUT, THREAD)
+    two.invoke(START_INPUT, THREAD_2)
+    guardian.approved.update({"req_1", "req_2"})
+    for app, thread, request in ((one, THREAD, "req_1"), (two, THREAD_2, "req_2")):
+        done = app.invoke(Command(resume=True), thread)
+        assert "__interrupt__" not in done and request in texts(done)[0]
+        assert "paused the graph with its own interrupt()" in texts(done)[0]
+    assert guardian.calls == ["request:req_1", "request:req_2", "claim:req_1", "claim:req_2"]
+
+
+def test_interrupt_does_not_pause_a_call_whose_session_is_not_known():
+    guardian = AlwaysAsks()
+    governed = guardian_tool(
+        refund_order, guardian, connection_id=CONNECTION, on_ask="interrupt", scope=lambda config: None
+    )
+    state = graph([governed], [CALL], checkpointer=InMemorySaver()).invoke(START_INPUT, THREAD)
+    # A pause could never end: with no session the approved request cannot be
+    # claimed on resume. The model is told the call is held instead.
+    assert "__interrupt__" not in state and ran == []
+    assert "held for human approval (request_id req_1)" in texts(state)[0]
