@@ -68,7 +68,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import inspect
-import json
 import logging
 import os
 import re
@@ -78,7 +77,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Opti
 
 from claude_agent_sdk import HookMatcher, SdkMcpTool
 
-from ._framework import ToolNames, json_record, resolve_tool_name
+from ._framework import ToolNames, build_guard, decide_and_run, is_stream_function, json_record, resolve_tool_name
 from ._hook import (
     REQUEST_TTL_S,
     CredentialHolder,
@@ -102,7 +101,7 @@ from .content_pins import (
     ContentPinError,
     pin_file,
 )
-from .guard import Guard, GuardianExecutionFailed, Mode
+from .guard import GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian.claude_agent_sdk")
 
@@ -644,10 +643,6 @@ def setup_text() -> str:
 
 # --- tools you write: @tool + create_sdk_mcp_server ---------------------------
 
-#: Marks the handler's own result, so it can be told from a Guard result.
-_RAN = object()
-
-
 def _text(message: str, *, error: bool) -> Dict[str, Any]:
     return {"content": [{"type": "text", "text": message}], **({"is_error": True} if error else {})}
 
@@ -697,26 +692,18 @@ class GuardianTools:
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
     ) -> None:
-        for value in (mode, *(modes or {}).values()):
-            if value not in ("in_process", "remote"):
-                raise ValueError('mode takes "in_process" or "remote"')
-        self._guard = Guard(
+        self._guard = build_guard(
             client,
             connection_id=connection_id,
-            mode=mode,
-            modes=modes,
             agent_name=agent_name,
-            purpose=purpose,
             adapter_id=adapter_id,
+            purpose=purpose,
             amount_args=amount_args,
-            on_ask="result",
-            on_deny="result",
-            on_execution_failed="result",
             on_receipt=on_receipt,
             on_execution_error=on_execution_error,
+            mode=mode,
+            modes=modes,
         )
-        if not self._guard._async:
-            raise TypeError("use an AsyncGuardianClient: SDK MCP tool handlers are async")
         self._tool_names = tool_names
         self._on_approval_pending = on_approval_pending
 
@@ -731,6 +718,9 @@ class GuardianTools:
         self, name: str, handler: Callable[[Any], Awaitable[Dict[str, Any]]]
     ) -> Callable[[Any], Awaitable[Dict[str, Any]]]:
         """Govern a raw handler (``async def handler(args) -> dict``) registered as SDK tool ``name``."""
+        if is_stream_function(handler):
+            # Calling one runs none of its body, so Guardian would record a call that never ran.
+            raise TypeError(f"{name}: an SDK MCP tool handler returns its result; a generator cannot be governed")
         tool_name = resolve_tool_name(self._tool_names, name)
         guard = self._guard
 
@@ -744,37 +734,25 @@ class GuardianTools:
                     "proposed and did not run.",
                     error=True,
                 )
-            started = False
             result: Dict[str, Any] = {}
 
-            async def body() -> Any:
-                nonlocal started, result
-                started = True
+            async def run_handler() -> None:
+                nonlocal result
                 # The handler gets the arguments Guardian decided on.
                 result = await handler(copy.deepcopy(decided))
-                return _RAN
 
-            try:
-                out = await guard.run(tool_name, copy.deepcopy(proposed), body)
-            except Exception:
-                if started:
-                    raise  # the handler's own error: the SDK reports it to the model
-                _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
-                return _text(f"Guardian could not check {tool_name}, so it did not run. Try again later.", error=True)
-            if out is _RAN:
+            # The handler's own error is raised from here: the SDK reports it to the model.
+            outcome = await decide_and_run(guard, tool_name, proposed, run_handler)
+            if outcome.message is None:
                 return result  # ALLOW: the handler ran and Guardian recorded it
-            info = out.get("guardian") if isinstance(out, dict) else None
-            if not isinstance(info, dict):  # pragma: no cover - Guard results always carry it
-                return _text(f"Guardian could not check {tool_name}, so it did not run.", error=True)
-            message = info.get("message")
-            if message is None and info.get("decision") == "ALLOW":
-                # Remote mode: Guardian made the call; this is its result.
-                return _text(json.dumps(out, sort_keys=True, default=str), error=False)
-            if info.get("decision") == "ASK" and self._on_approval_pending is not None and info.get("request_id"):
-                pending = self._on_approval_pending(tool_name, info["request_id"])
+            if outcome.decision == "ALLOW" and not outcome.ran and outcome.reason_code is None:
+                # Remote mode: Guardian made the call; the message is its result.
+                return _text(outcome.message, error=False)
+            if outcome.decision == "ASK" and self._on_approval_pending is not None and outcome.request_id:
+                pending = self._on_approval_pending(tool_name, outcome.request_id)
                 if inspect.isawaitable(pending):
                     await pending
-            return _text(str(message), error=True)
+            return _text(outcome.message, error=True)
 
         return governed
 

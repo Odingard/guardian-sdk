@@ -902,6 +902,38 @@ async def test_remote_mode_unverified_receipt_is_an_error_result():
     assert result.startswith("ERROR: ") and ran == []
 
 
+async def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_reported_as_not_run():
+    def broken_receipt_hook(tool_name, request_id, receipt):
+        raise RuntimeError("the app's receipt hook failed")
+
+    guardian = FakeClient(TOOL_ALLOW)
+    (result,) = await call_tools(guardian, [REFUND], mode="remote", on_receipt=broken_receipt_hook)
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]  # Guardian made the call
+    assert ran == []
+    assert result.startswith("ERROR: ")
+    assert "may have performed it" in result and "Do not call it again" in result
+    assert "did not run" not in result
+
+
+async def test_remote_mode_a_failing_guardian_call_is_reported_as_unknown_not_as_not_run():
+    class Broken(FakeClient):
+        def execute(self, *, request_id, capability_token):
+            raise ConnectionError("lost")
+
+    (result,) = await call_tools(Broken(TOOL_ALLOW), [REFUND], mode="remote")
+    assert result.startswith("ERROR: ") and "did not run" not in result
+    assert ran == []
+
+
+def test_a_generator_handler_is_refused_when_wrapped():
+    async def stream(args):
+        yield {"content": []}
+
+    tools = GuardianTools(AsyncFake(FakeClient(TOOL_ALLOW)), connection_id=CONNECTION)
+    with pytest.raises(TypeError):
+        tools.handler("stream", stream)
+
+
 async def test_remote_mode_per_tool_and_guardian_tool_names():
     guardian = FakeClient(TOOL_ALLOW)
     (result,) = await call_tools(guardian, [REFUND], modes={"billing.refund": "remote"},
