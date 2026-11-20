@@ -43,19 +43,36 @@ The routing (which Hermes tool is proposed as which Guardian tool) mirrors
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
-import tempfile
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from .client import DEFAULT_BASE_URL, ExecuteResult, GuardianClient, RequestResult
-from .guard import EXECUTION_OUTCOME_UNKNOWN, _lookup_answer, _outcome_unknown
+from ._hook import (  # noqa: F401 - shared with the Claude Agent SDK hook; the names stay importable here
+    FINAL_CHECK_LEAD_S,
+    MAX_TEXT,
+    REQUEST_TTL_S,
+    CredentialHolder,
+    GovernedCall,
+    HookVerdict,
+    PendingStore,
+    _bounded,
+    _digest,
+    _input_fields,
+    _json,
+    _mcp_name,
+    _proposal_key,
+    _str,
+    _text_fields,
+    classify_command,
+    decide,
+)
+from .client import DEFAULT_BASE_URL, GuardianClient
+
+#: The verdict of :func:`decide` (the name this module has always used).
+HermesVerdict = HookVerdict
 
 _logger = logging.getLogger("odingard_guardian.hermes")
 
@@ -139,113 +156,11 @@ _PROCESS_READ_ACTIONS = frozenset({"list", "poll", "log", "wait"})
 _CRON_READ_ACTIONS = frozenset({"list"})
 _BROWSER_TOOLS = frozenset({"browser_exec", "browser_cdp", "browser_dialog", "browser_vault"})
 
-MAX_TEXT = 2_000
-
-# Same patterns as packages/hook/src/classify.ts. They err toward the Ask
-# tools: a false match costs one approval; a miss runs under "shell".
-_DEPLOY = [
-    re.compile(p, f)
-    for p, f in [
-        (r"\b(terraform|tofu)\b.*\s(apply|destroy|import|state\s+(rm|mv|push))\b", 0),
-        (r"\bpulumi\s+(up|destroy|update)\b", 0),
-        (r"\bkubectl\b.*\s(apply|delete|create|replace|patch|scale|rollout|drain|cordon)\b", 0),
-        (r"\bhelm\s+(install|upgrade|uninstall|rollback|delete)\b", 0),
-        (r"\b(cdk|serverless|sls|sam)\s+(deploy|destroy|remove)\b", 0),
-        (r"\bfly(ctl)?\s+(deploy|destroy|apps\s+destroy|scale)\b", 0),
-        (r"\bvercel\b.*(--prod\b|\bdeploy\b|\bpromote\b|\bremove\b)", 0),
-        (r"\bnetlify\s+deploy\b.*--prod\b", 0),
-        (r"\bgcloud\s+.*\b(deploy|delete)\b", 0),
-        (r"\baws\s+.*\b(deploy|delete-stack|create-stack|update-stack|terminate-instances|delete-db-instance)\b", 0),
-        (r"\baz\s+.*\b(deploy|delete|create)\b", 0),
-        (r"\bwrangler\s+(deploy|publish|delete)\b", 0),
-        (r"\bdocker\s+(push|compose\s+.*\bup\b.*--remote)\b", 0),
-        (r"\b(npm|pnpm|yarn)\s+publish\b", 0),
-        (r"\btwine\s+upload\b", 0),
-        (r"\bgh\s+(release\s+create|workflow\s+run|pr\s+merge)\b", 0),
-    ]
-]
-_DESTRUCTIVE = [
-    re.compile(p, f)
-    for p, f in [
-        (r"\brm\s+(?:-\S*[rR]\S*\s+(?:-\S+\s+)*|-\S*f\S*\s+-\S*[rR])", 0),
-        (r"\bgit\s+reset\s+.*--hard\b", 0),
-        (r"\bgit\s+clean\s+-\S*f", 0),
-        (r"\bgit\s+push\b.*(\s--force\b|\s-f\b|--force-with-lease|\s\+\S)", 0),
-        (r"\bgit\s+(branch\s+-D|checkout\s+--\s|restore\s+--source)\b", 0),
-        (r"\b(drop|truncate)\s+(table|database|schema)\b", re.IGNORECASE),
-        (r"\bdelete\s+from\s+\w+\s*(;|$)", re.IGNORECASE),
-        (r"\b(mkfs|dd\s+if=|shred|wipefs)\b", 0),
-        (r"\bchmod\s+-R\s+777\b", 0),
-        (r"\bfind\b.*\s-delete\b", 0),
-    ]
-]
-_GIT_PUSH = re.compile(r"\bgit\s+push\b")
-
-
-def classify_command(command: str) -> str:
-    """``shell`` / ``shell_deploy`` / ``shell_destructive`` / ``git_push`` for one command line."""
-    if any(p.search(command) for p in _DESTRUCTIVE):
-        return "shell_destructive"
-    if any(p.search(command) for p in _DEPLOY):
-        return "shell_deploy"
-    if _GIT_PUSH.search(command):
-        return "git_push"
-    return "shell"
-
-
-def _part(text: str) -> str:
-    out = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    out = re.sub(r"^(\d)", r"x\1", out)
-    return out or "x"
-
-
-def _mcp_name(*parts: str) -> str:
-    """Guardian tool names: ``^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$``, at most 64 chars."""
-    return re.sub(r"[._-]+$", "", ("mcp." + ".".join(_part(p) for p in parts))[:64])
-
 
 def tier_of(tool_name: str) -> str:
     """``allow`` or ``ask``: which connection a Guardian tool's request goes to."""
     return _TIERS.get(tool_name, "ask")
 
-
-@dataclass(frozen=True)
-class GovernedCall:
-    tool_name: str
-    #: What the approver sees. Bounded; file contents and code beyond the limit are digested.
-    arguments: Dict[str, Any]
-    summary: str
-
-
-def _str(value: Any) -> str:
-    return value if isinstance(value, str) else ""
-
-
-def _digest(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
-
-
-def _bounded(text: str, limit: int = MAX_TEXT) -> str:
-    return text if len(text) <= limit else f"{text[:limit]}… [{len(text) - limit} more chars]"
-
-
-def _text_fields(key: str, text: str) -> Dict[str, Any]:
-    """The text itself when it fits; else its start plus a digest of all of it, so two
-    different long inputs can never look like the same proposal."""
-    if len(text) <= MAX_TEXT:
-        return {key: text}
-    return {key: _bounded(text), f"{key}Bytes": len(text.encode("utf-8", "surrogatepass")), f"{key}Digest": _digest(text)}
-
-
-def _input_fields(value: Any) -> Dict[str, Any]:
-    text = _json(value)
-    if len(text) <= MAX_TEXT:
-        return {"input": value}
-    return {"inputBytes": len(text.encode("utf-8", "surrogatepass")), "inputDigest": _digest(text)}
 
 
 def hermes_home(env: Optional[Mapping[str, str]] = None) -> str:
@@ -417,255 +332,6 @@ def governed_call(
     return GovernedCall("hermes_other", {"tool": tool_name, **_input_fields(a)}, f"Hermes tool {tool_name}")
 
 
-# --- the decision -------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class HermesVerdict:
-    allow: bool
-    #: Shown to the model (it becomes the tool result on a block). Plain words.
-    reason: str
-    request_id: Optional[str] = None
-    guardian_decision: Optional[str] = None
-    approved_by_human: bool = False
-
-
-_PLAIN = {
-    "NOT_AUTHORIZED": "this agent is not authorized for it",
-    "APPROVAL_DENIED": "the approver declined it",
-    "APPROVAL_NOT_SATISFIED": "the approver declined it",
-    "APPROVAL_EXPIRED": "the approval expired",
-    "UNAUTHENTICATED": "the Guardian agent credential was rejected",
-    "INVALID_REQUEST": "this tool is not allowed for the agent yet. In the Guardian console: Agents → this agent → "
-    "the connection's card → \"Allow a tool by name\"",
-    "SERVICE_UNAVAILABLE": "Guardian could not be reached",
-    "REQUEST_CONFLICT": "Guardian saw a conflicting request",
-    "EXECUTION_NOT_SENT": "Guardian did not complete the redemption",
-}
-
-_HELD = ("APPROVAL_REQUIRED", "APPROVAL_PENDING")
-
-
-def _denied(call: GovernedCall, code: str, **extra: Any) -> HermesVerdict:
-    return HermesVerdict(
-        allow=False,
-        reason=f"Guardian blocked {call.tool_name} ({code}): {_PLAIN.get(code, code)}. Nothing ran. "
-        "Do not retry or work around this; ask the developer to review it in the Guardian console.",
-        **extra,
-    )
-
-
-def _pending(r: RequestResult) -> bool:
-    return (not r.ok and r.reason_code in _HELD) or (r.ok and r.decision == "ASK")
-
-
-#: How long before the window closes the final approval check runs.
-FINAL_CHECK_LEAD_S = 1.5
-
-
-class PendingStore:
-    """Requests still waiting for a person, keyed by the exact proposal, in this
-    process's memory only.
-
-    A retry of the same call in the same Hermes process claims the open request
-    instead of filing a new one. It is deliberately never written to disk: any
-    file Hermes can read, its tools can rewrite, and a rewritten entry could
-    point an approval of one call at a different call. One ``hermes chat -q``
-    per message (as some hosts run it) therefore starts with an empty store.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._mem: Dict[str, Dict[str, Any]] = {}
-
-    def get(self, key: str, now: float) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            self._mem = {k: v for k, v in self._mem.items() if v["expires_at"] > now}
-            entry = self._mem.get(key)
-            return dict(entry) if entry is not None else None
-
-    def put(self, key: str, request_id: str, expires_at: float) -> None:
-        with self._lock:
-            self._mem[key] = {"request_id": request_id, "expires_at": float(expires_at)}
-
-    def delete(self, key: str) -> None:
-        with self._lock:
-            self._mem.pop(key, None)
-
-
-def _proposal_key(connection_id: str, call: GovernedCall) -> str:
-    return hashlib.sha256(_json([connection_id, call.tool_name, call.arguments]).encode("utf-8", "surrogatepass")).hexdigest()
-
-
-def _look_up(client: Any, request_id: str) -> str:
-    """After a lost redemption answer: ``verified``, ``not-sent`` or ``unknown``.
-
-    Guardian's recorded attempts for the request (``client.receipts``), read
-    with the same rules as the SDK's guard (:func:`.guard._lookup_answer`).
-    No lookup available, or a lookup that fails, settles nothing.
-    """
-    receipts = getattr(client, "receipts", None)
-    if not callable(receipts):
-        return "unknown"
-    try:
-        return _lookup_answer(request_id, receipts(request_id))[0]
-    except Exception:  # noqa: BLE001 — a failed lookup settles nothing
-        return "unknown"
-
-
-#: The Python SDK asks Guardian for a 120 s request window (``requestedTtlMs``).
-REQUEST_TTL_S = 120.0
-
-
-def decide(
-    call: GovernedCall,
-    *,
-    client: Any,
-    connection_id: str,
-    agent_name: str,
-    approval_timeout_s: float,
-    request_ttl_s: float = REQUEST_TTL_S,
-    poll_interval_s: float = 2.0,
-    max_poll_interval_s: float = 10.0,
-    deadline: Optional[float] = None,
-    call_timeout_s: float = 8.0,
-    store: Optional[PendingStore] = None,
-    wait: Callable[[float], None] = time.sleep,
-    now: Callable[[], float] = time.monotonic,
-    wall: Callable[[], float] = time.time,
-    log: Callable[[str], None] = lambda _line: None,
-) -> HermesVerdict:
-    """One governed call: the Python port of ``packages/hook/src/decide.ts``.
-
-    ``deadline`` (on the ``now`` clock) is when every Guardian call must have
-    *finished*: past it Hermes has already given up on the hook, so a redeem
-    landing then would record a receipt for a call that never ran. Each call
-    may take up to ``call_timeout_s``, so a call starts only if it, and the
-    redeem that may follow it, fit before the deadline.
-    """
-
-    def room(calls: int) -> bool:
-        return deadline is None or now() + calls * call_timeout_s <= deadline
-
-    key = _proposal_key(connection_id, call)
-    if not room(2):  # the request (or claim) plus the redeem
-        return _denied(call, "HOOK_DEADLINE_PASSED")
-    held = store.get(key, wall()) if store is not None else None
-    if held is not None:
-        request_id: Optional[str] = held["request_id"]
-        remaining_ttl = max(0.0, float(held["expires_at"]) - wall())
-        try:
-            result = client.claim(request_id)
-        except Exception:
-            result = RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
-    else:
-        remaining_ttl = request_ttl_s
-        try:
-            result = client.request({
-                "action": "tool.invoke",
-                "connection_id": connection_id,
-                "tool_name": call.tool_name,
-                "arguments": call.arguments,
-                "purpose": f"{agent_name}: {call.summary}",
-            })
-        except Exception:
-            return _denied(call, "SERVICE_UNAVAILABLE")
-        request_id = result.request_id
-    # Guardian's window started inside that call; timing from the reply errs late,
-    # and a check after the window is refused by Guardian, so nothing runs.
-    answered_at = now()
-    approved_by_human = False
-
-    if _pending(result):
-        if not request_id:
-            return _denied(call, "MISSING_REQUEST_ID")
-        if store is not None and held is None:
-            store.put(key, request_id, wall() + request_ttl_s)
-        log(f'Guardian: "{call.summary}" is held for approval (request {request_id}). '
-            "Approve it in the Guardian console.")
-        window = max(0.0, min(approval_timeout_s, remaining_ttl))
-        lead = min(FINAL_CHECK_LEAD_S, window / 4)
-        last_check_at = answered_at + window - lead
-        if deadline is not None:
-            # The last claim, and the redeem after it, must both finish in time.
-            last_check_at = min(last_check_at, deadline - 2 * call_timeout_s)
-        interval = poll_interval_s
-        max_interval = max(max_poll_interval_s, poll_interval_s)
-        while True:
-            wait(max(0.0, min(interval, last_check_at - now())))
-            interval = min(interval * 1.5, max_interval)
-            claimed = None
-            if room(2):
-                try:
-                    claimed = client.claim(request_id)
-                except Exception:
-                    claimed = None
-            if claimed is not None and not _pending(claimed):
-                result = claimed
-                approved_by_human = claimed.ok and claimed.decision == "ALLOW"
-                break
-            if claimed is None and not room(2) or now() >= last_check_at:
-                return HermesVerdict(
-                    allow=False,
-                    reason=f"Guardian is still waiting for a person to approve {call.tool_name} "
-                    f"(request {request_id}). Nothing ran. Tell the user it needs approval in the Guardian app. "
-                    "If it is approved while this Hermes session is still running, run exactly the same action "
-                    "again and it will go ahead; otherwise asking again files a new request.",
-                    request_id=request_id,
-                    guardian_decision="ASK",
-                )
-    if store is not None:
-        store.delete(key)  # decided one way or the other: never reuse it
-
-    if not result.ok or result.decision != "ALLOW" or not result.capability_token:
-        code = (result.reason_code or ("DENIED" if result.decision == "DENY" else "MISSING_CAPABILITY")) \
-            if result.ok else (result.reason_code or "DENIED")
-        return _denied(call, code, request_id=request_id, guardian_decision="DENY")
-
-    if not room(1):
-        return _denied(call, "HOOK_DEADLINE_PASSED", request_id=result.request_id,
-                       guardian_decision="ASK" if approved_by_human else "ALLOW")
-    decided = {
-        "request_id": result.request_id,
-        "guardian_decision": "ASK" if approved_by_human else "ALLOW",
-        "approved_by_human": approved_by_human,
-    }
-    try:
-        executed = client.execute(request_id=result.request_id, capability_token=result.capability_token)
-    except Exception:
-        # The redemption may have reached Guardian: settle it like a lost answer.
-        executed = ExecuteResult(ok=False, reason_code="SERVICE_UNAVAILABLE", outcome_unknown=True)
-    settled_by_lookup = False
-    if not executed.ok:
-        if not _outcome_unknown(executed):
-            return _denied(call, executed.reason_code or "EXECUTE_FAILED", **decided)
-        # The redemption was sent but its answer was lost: Guardian's record of
-        # the request settles it. Only a verified redemption lets the tool run.
-        # The lookup is one more call, so it is made only if it finishes before
-        # Hermes gives up on the hook; otherwise the outcome stays unknown.
-        found = _look_up(client, result.request_id) if result.request_id and room(1) else "unknown"
-        if found == "not-sent":
-            return _denied(call, "EXECUTION_NOT_SENT", **decided)
-        if found != "verified":
-            rid = result.request_id
-            return HermesVerdict(
-                allow=False,
-                reason=f"Guardian blocked {call.tool_name} ({EXECUTION_OUTCOME_UNKNOWN}): Guardian's answer was lost "
-                f"({executed.reason_code or 'EXECUTE_FAILED'}) and it could not be confirmed whether Guardian "
-                f"recorded the call as allowed. Request {rid}. Nothing ran. Do not retry; ask the developer to "
-                f"check request {rid} in the Guardian console.",
-                **decided,
-            )
-        settled_by_lookup = True
-    note = " Guardian's answer was lost; its record shows the call redeemed." if settled_by_lookup else ""
-    return HermesVerdict(
-        allow=True,
-        reason=(f"Approved by a person in Guardian (request {result.request_id}).{note}" if approved_by_human
-                else f"Allowed by Guardian policy (request {result.request_id}).{note}"),
-        request_id=result.request_id,
-        guardian_decision="ASK" if approved_by_human else "ALLOW",
-        approved_by_human=approved_by_human,
-    )
 
 
 # --- the Hermes plugin --------------------------------------------------------
@@ -679,7 +345,6 @@ HERMES_DEFAULT_HOOK_TIMEOUT_S = 30.0
 _HTTP_TIMEOUT_S = 8.0
 #: Kept back from Hermes' hook timeout for returning to Hermes.
 _RETURN_MARGIN_S = 1.0
-_CREDENTIAL = "GUARDIAN_AGENT_CREDENTIAL"
 
 
 def connection_for(tool_name: str, env: Env) -> Optional[str]:
@@ -721,22 +386,10 @@ def make_pre_tool_call(
     source: Env = os.environ if env is None else env
     shared: Dict[str, Any] = {}
     lock = threading.Lock()
-    secret: Dict[str, str] = {}
-
-    def _take_credential() -> str:
-        # Hermes passes its environment to terminal and other tool subprocesses
-        # and does not strip GUARDIAN_*: move the credential out of it so tools
-        # cannot read it (e.g. echo $GUARDIAN_AGENT_CREDENTIAL).
-        with lock:
-            if isinstance(source, MutableMapping) and _CREDENTIAL in source:
-                value = (source.pop(_CREDENTIAL, None) or "").strip()
-                if value:
-                    secret["credential"] = value
-            elif not isinstance(source, MutableMapping):
-                value = (source.get(_CREDENTIAL) or "").strip()
-                if value:
-                    secret["credential"] = value
-            return secret.get("credential", "")
+    # Hermes passes its environment to terminal and other tool subprocesses
+    # and does not strip GUARDIAN_*: move the credential out of it so tools
+    # cannot read it (e.g. echo $GUARDIAN_AGENT_CREDENTIAL).
+    _take_credential = CredentialHolder(source).take
 
     try:
         _take_credential()
