@@ -1425,20 +1425,30 @@ function routeCommand(command: string, sensitive: boolean): HookToolName {
 }
 
 /**
- * `path` with its symbolic links resolved: the file itself, or a folder on
- * the way. What does not exist yet is kept as written under the deepest
- * folder that does. Throws when a part cannot be resolved (a link loop, a
- * folder that cannot be read, a NUL byte).
+ * `path` with its symbolic links resolved as the operating system resolves
+ * them: the file itself, or a folder on the way. A link whose target does
+ * not exist yet is followed too; its relative target is taken from the
+ * link's real folder, and `..` applies after the link before it. What does
+ * not exist yet is kept as written under the deepest folder that does.
+ * Throws when a part cannot be resolved (a link loop, a folder that cannot
+ * be read, a NUL byte).
+ *
+ * Nothing here is normalized as text before it is resolved: `a/link/..` is
+ * the parent of the link's target, not `a`.
  */
 export function resolveLinks(path: string): string {
   const pending: string[] = [];
   let at = path;
   let followed = 0;
   for (;;) {
+    // `lstat("link/")` follows the link; the name without the separator is the link.
+    const trimmed = at.replace(/[/\\]+$/, "");
+    if (trimmed !== "") at = trimmed;
     try {
-      const real = realpathSync.native(at);
+      const real = realpathSync.native(at).replace(/\\/g, "/");
+      // Only names that do not exist are left, so no link is skipped here.
       return pending.length > 0
-        ? posix.join(real.replace(/\\/g, "/"), ...pending.reverse())
+        ? posix.join(real, ...pending.reverse())
         : real;
     } catch (err) {
       const code = (err as { code?: unknown })?.code;
@@ -1452,12 +1462,13 @@ export function resolveLinks(path: string): string {
       }
       if (link !== undefined) {
         if (++followed > 40) throw new Error("too many symbolic links");
-        const target = link.replace(/\\/g, "/");
-        at = posix.normalize(
-          target.startsWith("/") || isAbsolute(target)
-            ? target
-            : posix.join(dirname(at), target),
-        );
+        // The link exists, so its folder does: a relative target starts at
+        // that folder as it is on disk. The result is resolved again, not
+        // normalized, so a `..` in the target applies after any link in it.
+        at =
+          link.startsWith("/") || isAbsolute(link)
+            ? link
+            : `${realpathSync.native(dirname(at))}/${link}`;
         continue;
       }
       const parent = dirname(at);
@@ -1475,15 +1486,17 @@ export function resolveLinks(path: string): string {
  * agent does and `~` as the home folder.
  */
 function pathForms(path: string, cwd: string | undefined): string[] {
-  const slashes = path.replace(/\\/g, "/");
-  const expanded =
-    slashes === "~" || slashes.startsWith("~/")
-      ? homedir().replace(/\\/g, "/") + slashes.slice(1)
-      : slashes;
-  const absolute =
-    expanded.startsWith("/") || isAbsolute(expanded)
+  const home = homedir();
+  const from = cwd ?? process.cwd();
+  // Not `join`: it would remove `..` before any link is followed.
+  const absoluteOf = (p: string) => {
+    const expanded = p === "~" || p.startsWith("~/") ? home + p.slice(1) : p;
+    return expanded.startsWith("/") || isAbsolute(expanded)
       ? expanded
-      : posix.join((cwd ?? process.cwd()).replace(/\\/g, "/"), expanded);
+      : `${from}/${expanded}`;
+  };
+  const slashes = path.replace(/\\/g, "/");
+  const absolute = absoluteOf(slashes).replace(/\\/g, "/");
   return [
     ...new Set([
       path,
@@ -1493,6 +1506,9 @@ function pathForms(path: string, cwd: string | undefined): string[] {
       // As the operating system reads it: `..` applies after a link is
       // followed (`normalize` drops the link first).
       resolveLinks(absolute),
+      // And with the separators as written: where a backslash is an
+      // ordinary character, it can be part of a link's own name.
+      resolveLinks(absoluteOf(path)),
     ]),
   ];
 }

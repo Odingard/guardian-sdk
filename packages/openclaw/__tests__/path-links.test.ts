@@ -4,7 +4,13 @@
  * spellings of such a path (repeated separators, `.` and `..` segments,
  * backslashes, letter case) are too.
  */
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -78,6 +84,33 @@ describe("paths that lead into OpenClaw's control plane", () => {
       "shell_destructive",
       "shell_destructive",
     ]);
+  });
+
+  it("a relative link target is taken from the link's real folder", () => {
+    // workspace/d → <state>/extensions/x; workspace/d/f → ../../data.bin,
+    // which is <state>/data.bin, not a file in the workspace.
+    mkdirSync(join(state, "extensions", "x"), { recursive: true });
+    symlinkSync(join(state, "extensions", "x"), join(workspace, "d"), "dir");
+    symlinkSync("../../data.bin", join(workspace, "d", "f"));
+    symlinkSync("f", join(workspace, "d", "f0"));
+    const base2 = mkdtempSync(join(tmpdir(), "guardian-oc-"));
+    const plain = join(base2, "plain");
+    mkdirSync(join(plain, "a", "b"), { recursive: true });
+    symlinkSync(join(state, "workspace", "d"), join(plain, "in"), "dir");
+    for (const path of [
+      join(workspace, "d", "f"),
+      join(workspace, "d", "f0"),
+      join(plain, "in", "f"),
+    ]) {
+      expect(routes(path), path).toEqual([
+        "shell_destructive",
+        "shell_destructive",
+        "shell_destructive",
+      ]);
+    }
+    // On disk: the write goes to the state directory.
+    writeFileSync(join(plain, "in", "f"), "x");
+    expect(existsSync(join(state, "data.bin"))).toBe(true);
   });
 
   it("the path is proposed as the agent wrote it", () => {

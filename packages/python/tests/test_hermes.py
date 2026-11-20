@@ -942,3 +942,40 @@ def test_a_symbolic_link_into_hermes_home_needs_approval(tmp_path):
 def test_a_path_that_cannot_be_resolved_needs_approval():
     call = governed_call("write_file", {"path": "/workspace/a\x00b.py", "content": ""}, protected=HOSTED)
     assert call.tool_name == "hermes_config"
+
+
+def test_nested_links_into_hermes_home_resolve_as_the_operating_system_does(tmp_path):
+    home = tmp_path / "home"
+    (home / "plugins" / "x").mkdir(parents=True)
+    work = tmp_path / "work"
+    (work / "t").mkdir(parents=True)
+    roots = hermes.protected_paths({"HERMES_HOME": str(home)})
+    (work / "d").symlink_to(home / "plugins" / "x", target_is_directory=True)
+    (work / "t" / "sub").symlink_to(home / "plugins" / "x", target_is_directory=True)
+    # A relative target is taken from the link's real folder: work/d/f is home/config.yaml.
+    (work / "d" / "f").symlink_to("../../config.yaml")
+    # A chain of links whose targets do not exist yet.
+    (work / "d" / "f1").symlink_to("f2")
+    (work / "d" / "f2").symlink_to("../../.env")
+    # ".." in a target, and in the written path, applies after the link before it.
+    (work / "t" / "g").symlink_to("sub/../off.py")
+    cases = {
+        str(work / "d" / "f"): home / "config.yaml",
+        str(work / "d" / "f1"): home / ".env",
+        str(work / "t" / "g"): home / "plugins" / "off.py",
+        str(work / "d") + "/../late.py": home / "plugins" / "late.py",
+    }
+    for path, lands in cases.items():
+        for tool_name, args in (
+            ("write_file", {"path": path, "content": ""}),
+            ("patch", {"path": path, "old_string": "a", "new_string": "b"}),
+            ("patch", {"mode": "patch", "patch": f"*** Begin Patch\n*** Add File: {path}\n"}),
+        ):
+            call = governed_call(tool_name, args, protected=roots)
+            assert call is not None and call.tool_name == "hermes_config", (tool_name, path)
+        # On disk: the write goes into Hermes' home.
+        assert not lands.exists()
+        with open(path, "w") as handle:
+            handle.write("x")
+        assert lands.read_text() == "x"
+    assert governed_call("read_file", {"path": str(work / "d" / "f1")}, protected=roots).tool_name == "hermes_config"

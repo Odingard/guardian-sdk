@@ -4,7 +4,15 @@
  * `.` and `..` segments, backslashes, a relative path, `~`, letter case, or
  * a symbolic link that leads there.
  */
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +22,7 @@ import {
   classifyCommand,
   governedCall,
   isAgentConfigPath,
+  resolveLinks,
   tierOf,
 } from "../src/classify.js";
 
@@ -149,6 +158,121 @@ describe("a symbolic link that leads to agent configuration", () => {
       cwd: work,
     })!;
     expect(call.toolName).toBe("file_write");
+  });
+});
+
+describe("links are resolved as the operating system resolves them", () => {
+  // Each case: the route is checked first; then a write through the path
+  // shows which file it really changes.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "guardian-hook-")));
+  const proj = join(root, "proj");
+  const hooks = join(proj, ".claude", "hooks");
+  mkdirSync(join(hooks, "x"), { recursive: true });
+  mkdirSync(join(proj, "t"), { recursive: true });
+  // A folder link, used by the cases below.
+  symlinkSync(join(hooks, "x"), join(proj, "d"), "dir");
+  symlinkSync(join(hooks, "x"), join(proj, "t", "sub"), "dir");
+
+  const lands = (path: string, cwd: string, expected: string) => {
+    for (const [tool, input] of fileCalls(path)) {
+      const call = governedCall({ tool, input, cwd })!;
+      expect(call.toolName, `${tool} ${path}`).toBe("shell_destructive");
+      expect(call.arguments.touches).toBe("agent-config");
+    }
+    const patch = `*** Begin Patch\n*** Add File: ${path}\n+x\n*** End Patch`;
+    expect(
+      governedCall({ tool: "apply_patch", input: { command: patch }, cwd })!
+        .toolName,
+    ).toBe("shell_destructive");
+    // On disk: the write goes to the configuration file.
+    expect(existsSync(expected)).toBe(false);
+    const absolute = path.startsWith("/") ? path : `${cwd}/${path}`;
+    writeFileSync(absolute, "written through the path");
+    expect(readFileSync(expected, "utf8")).toBe("written through the path");
+  };
+
+  it("a relative link target is taken from the link's real folder", () => {
+    // proj/d → .claude/hooks/x; proj/d/f → ../../settings.json (no such file yet).
+    symlinkSync("../../settings.json", join(proj, "d", "f"));
+    lands(join(proj, "d", "f"), proj, join(proj, ".claude", "settings.json"));
+  });
+
+  it("a chain of links whose targets do not exist yet", () => {
+    symlinkSync("f2", join(proj, "d", "f1"));
+    symlinkSync("../../settings.local.json", join(proj, "d", "f2"));
+    lands(
+      join(proj, "d", "f1"),
+      proj,
+      join(proj, ".claude", "settings.local.json"),
+    );
+  });
+
+  it("`..` in a link target applies after the folder link before it", () => {
+    // proj/t/g → sub/../a.sh; proj/t/sub → .claude/hooks/x, so sub/.. is .claude/hooks.
+    symlinkSync("sub/../a.sh", join(proj, "t", "g"));
+    lands(join(proj, "t", "g"), proj, join(hooks, "a.sh"));
+  });
+
+  it("the same for an absolute link target", () => {
+    symlinkSync(join(proj, "t", "sub") + "/../b.sh", join(proj, "t", "h"));
+    lands(join(proj, "t", "h"), proj, join(hooks, "b.sh"));
+  });
+
+  it("`..` after a link in the written path, absolute and relative", () => {
+    lands(join(proj, "d") + "/../c.sh", proj, join(hooks, "c.sh"));
+    lands("d/../e.sh", proj, join(hooks, "e.sh"));
+    lands("./t/sub/../g.sh", proj, join(hooks, "g.sh"));
+  });
+
+  it("a link to a link, each relative to its own folder", () => {
+    // proj/k → d/k2 (so k2 lives in .claude/hooks/x); k2 → ../k.sh.
+    symlinkSync("../k.sh", join(proj, "d", "k2"));
+    symlinkSync("d/k2", join(proj, "k"));
+    lands(join(proj, "k"), proj, join(hooks, "k.sh"));
+  });
+
+  it("a trailing separator on a link whose target does not exist yet", () => {
+    const other = join(root, "other");
+    mkdirSync(other);
+    symlinkSync(join(other, ".claude"), join(other, "c"));
+    expect(resolveLinks(join(other, "c") + "/")).toBe(join(other, ".claude"));
+    expect(isAgentConfigPath(join(other, "c") + "/", other)).toBe(true);
+    expect(isAgentConfigPath(join(other, "c") + "//", other)).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "a link whose own name contains a backslash",
+    () => {
+      // On POSIX a backslash is an ordinary character in a file name.
+      symlinkSync(join(proj, ".mcp.json"), join(proj, "c\\d"));
+      lands(join(proj, "c\\d"), proj, join(proj, ".mcp.json"));
+    },
+  );
+
+  it("resolveLinks agrees with the operating system for paths that exist", () => {
+    for (const path of [
+      join(proj, "d"),
+      join(proj, "d") + "/..",
+      join(proj, "t", "sub") + "/../x",
+      join(proj, "d", "f"),
+      join(proj, "k"),
+    ]) {
+      expect(resolveLinks(path), path).toBe(realpathSync.native(path));
+    }
+  });
+
+  it("an ordinary file reached through links stays on file_write", () => {
+    mkdirSync(join(proj, "src"));
+    symlinkSync(join(proj, "src"), join(proj, "s"), "dir");
+    symlinkSync("../notes.txt", join(proj, "s", "n"));
+    for (const path of [join(proj, "s", "n"), "s/../src/a.ts", "s/new.ts"]) {
+      const call = governedCall({
+        tool: "Write",
+        input: { file_path: path, content: "x" },
+        cwd: proj,
+      })!;
+      expect(call.toolName, path).toBe("file_write");
+    }
   });
 });
 
