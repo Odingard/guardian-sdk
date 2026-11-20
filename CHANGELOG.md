@@ -1,5 +1,17 @@
 # Changelog
 
+## Python odingard-guardian, unreleased
+
+### Added: Strands Agents
+
+- **`odingard_guardian.strands`**: `GuardianHookProvider`, a Strands Agents hook provider (`Agent(hooks=[...])`) that sends each tool call to Guardian before the tool runs. ALLOW runs the tool once with the arguments Guardian decided on, then redeems the capability; ASK holds it, and the same call runs after a person approves; DENY and an unreachable Guardian do not run it.
+  - On `BeforeToolCallEvent` the provider selects a governed stand-in for the tool. The stand-in is the last step Strands takes for a call, after every hook and after the tool middleware. It copies the arguments it is handed, proposes that copy and runs the tool with it, so nothing changes the arguments between the decision and the tool. What a hook or middleware changed before that is what Guardian decides on.
+  - Streaming tools (async generators) stream as before: their events pass through while the tool runs, and the result follows once Guardian recorded the run.
+  - `on_ask="interrupt"` pauses the agent run with a Strands interrupt that carries the `request_id`. Resuming approves nothing by itself: the paused call claims the request from Guardian, and pauses again while it is still held.
+  - `mode="remote"` (or `modes={"tool": "remote"}` per tool): Guardian performs the call with the tool registered on the connection; the Strands tool body does not run and the model gets Guardian's answer.
+  - Takes a `GuardianClient` (called in worker threads; use it with the sync `agent(...)` call) or an `AsyncGuardianClient`.
+  - Extra: `odingard-guardian[strands]` (Python 3.10+; tested with `strands-agents` 1.65.0). Example: `examples/python/strands_agent.py`.
+
 ## guardian-mcp 0.6.0, unreleased
 
 ### Added: list and withdraw held requests

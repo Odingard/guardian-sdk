@@ -246,6 +246,8 @@ integrations:
   `@guard`.
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
+- **Strands Agents**: use the hook provider below, which decides every tool
+  call the agent makes.
 - **Claude Agent SDK** (example): guard the handler, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
 
@@ -349,6 +351,61 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
+
+## Strands Agents: `odingard_guardian.strands` (unreleased)
+
+[Strands Agents](https://strandsagents.com/) fires a `BeforeToolCallEvent`
+hook before every tool call and lets a hook select the tool that runs.
+`GuardianHookProvider` selects a governed stand-in for the tool, which asks
+Guardian about the call and only then runs the tool.
+
+```bash
+pip install "odingard-guardian[strands]"   # Python 3.10+
+```
+
+```python
+import os
+from strands import Agent, tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.strands import GuardianHookProvider
+
+@tool
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianHookProvider(
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(model=..., tools=[refund_order], hooks=[guardian])
+agent("Refund order 42")
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                                                    |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person (an error tool result). After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                                             |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                                   |
+
+- **The decision is made in the last step Strands takes for a tool call.** The stand-in tool runs after every `BeforeToolCallEvent` hook (Guardian's own hook is ordered last, `HookOrder.SDK_LAST`) and after the tool middleware (`ExecuteToolStage`). It takes a private copy of the arguments it is handed, proposes that copy and runs the tool with it, so nothing can change the arguments between the decision and the tool. Arguments that a hook or a middleware changed before that point are the ones Guardian decides on and the tool runs with. A hook that renames the call or selects another tool is decided under the name of the tool that runs.
+- Guardian decides on the arguments as the model sent them. Strands validates them inside the tool, so `"500"` for an `int` parameter is proposed as `"500"`. Arguments the tool rejects are not redeemed.
+- **Clients.** Pass a `GuardianClient` when you call the agent synchronously (`agent(...)`): Strands runs every sync call on an event loop of its own, and an `AsyncGuardianClient` keeps connections that belong to the loop that opened them (a call on a later loop can fail, and then the tool does not run). A `GuardianClient` is called in worker threads. With `invoke_async` / `stream_async` on one event loop, either client works.
+- **`on_ask="interrupt"`** pauses the agent run instead of telling the model: the result has `stop_reason == "interrupt"`, and `result.interrupts[0].reason["guardian"]` carries the `request_id`. After the person approved in the Guardian console, resume the run with `agent([{"interruptResponse": {"interruptId": interrupt.id, "response": "resume"}}])`. The response approves nothing: the paused call claims the request from Guardian and runs once it is approved, and the run pauses again (a new interrupt) while it is still held. Other calls of the same turn that already ran are not made again. `on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in either setting.
+- **Modes.** In the default `mode="in_process"` your Strands tool is the action: it runs after ALLOW, and the capability is redeemed after it. A revocation that lands in between is detected after the effect; the model is then told the tool ran and not to call it again, and `on_execution_error` gets the error. With `mode="remote"`, or `modes={"refund_order": "remote"}` for single tools (by Guardian tool name), Guardian performs the call itself with the tool registered on the connection: the Strands tool body never runs, the credential for the upstream stays with Guardian, and the tool result is Guardian's answer as JSON (`{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`). A receipt that is not `sent-verified` is reported as "may have run, do not call again".
+- **Streaming tools** (async generator tools) work in both `agent(...)` and `stream_async`: their events pass through while the tool runs, after the decision. The tool's result follows once Guardian recorded the run.
+- A tool that raises, or returns its own error, is reported as the tool reported it, and the capability is not redeemed. A call a hook retries (`AfterToolCallEvent.retry`) is decided again.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps Strands tool names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. Direct calls (`agent.tool.refund_order(...)`) are decided too.
+- Limits:
+  - A hook ordered after `HookOrder.SDK_LAST` that selects another tool takes Guardian's stand-in away, and that tool runs without a decision. Guardian's hook reports it after the fact (an error tool result and an error log); it cannot prevent it. Tool middleware that replaces the tool object does the same and is not detected. Hooks and middleware that only change arguments, rename the call or cancel it are covered.
+  - Every tool call is decided, including the tool Strands adds for `structured_output_model` (named after the output model). Register it like any other tool, or structured output is refused.
+  - A tool that pauses itself with a Strands interrupt after ALLOW has no result yet: its capability is not redeemed, and the call is decided again when the run is resumed.
+  - Strands closes an abandoned tool stream when it is garbage collected; until then a streaming tool is paused where it was, and nothing is redeemed for it.
+  - Not covered: tools the model provider runs itself. Not tested: `BidiAgent`, background tasks, multi-agent graphs and swarms (each agent needs its own `hooks=[guardian]`), and Strands' MCP client tools; put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `strands-agents` 1.65.0 in a real agent loop (`agent(...)`, `invoke_async`, `stream_async`, the concurrent and the sequential tool executor) with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 

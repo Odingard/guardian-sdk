@@ -111,6 +111,7 @@ document.
 | Codex CLI                                       | `@odingard/guardian-hook`                                         |
 | DeepSeek Harness                                | `@odingard/guardian-hook`                                         |
 | Hermes Agent                                    | `odingard-guardian`                                               |
+| Strands Agents (Python)                         | `odingard-guardian`                                               |
 | ZeroClaw                                        | `@odingard/guardian-mcp` ([recipe](examples/agents/zeroclaw))     |
 | Your own container (CrewAI, LangGraph, AutoGen) | `@odingard/guardian-mcp` ([recipe](examples/mcp/byo))             |
 | OpenClaw                                        | `@odingard/guardian-openclaw`                                     |
