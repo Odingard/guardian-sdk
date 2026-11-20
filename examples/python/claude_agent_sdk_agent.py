@@ -31,6 +31,7 @@ No account, no API key and no Claude Code CLI are needed, and labels say what is
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import re
@@ -167,6 +168,12 @@ class ScriptedCLI(Transport):
         await self.closed.wait()
 
 
+# The session a tool call belongs to. Your app sets it (here, before the client
+# connects); the model cannot write it. GuardianTools reads it through `scope`, so
+# a held refund is claimed only by the same call in the same session.
+SESSION = contextvars.ContextVar("session", default=None)
+
+
 @tool("refund_order", "Refund an order", {"order_id": str, "amount_cents": int})
 async def refund_order(args):
     # Your code. Guardian only lets it run after ALLOW or a person's approval.
@@ -186,13 +193,15 @@ async def main():
             AsyncGuardianClient(credential=credential, base_url=os.environ.get("GUARDIAN_BASE_URL", DEFAULT_BASE_URL)),
             connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
             agent_name="Claude agent",
+            scope=lambda _tool: SESSION.get(),
         )
         # Route 1 (the agent's own tools): the hook reads its settings from the
         # environment and moves the credential out of it.
         matcher = guardian_hook_matcher(skip_mcp_servers=["billing"], log=log)
     else:
         policy = DemoGuardian()
-        tools = GuardianTools(AsyncDemoGuardian(policy), connection_id="pcn_demo_tools", agent_name="Claude agent")
+        tools = GuardianTools(AsyncDemoGuardian(policy), connection_id="pcn_demo_tools", agent_name="Claude agent",
+                              scope=lambda _tool: SESSION.get())
         matcher = guardian_hook_matcher(
             {"GUARDIAN_CONNECTION_ID": "pcn_demo_everyday", "GUARDIAN_HOOK_ASK_CONNECTION_ID": "pcn_demo_approval"},
             client=policy,
@@ -218,6 +227,7 @@ async def main():
         ],
         sdk_servers={"billing"},
     )
+    SESSION.set("demo-session")  # in an app: the signed-in user or the conversation
     print(f"{G} deciding; [SCRIPTED cli] in place of the Claude Code CLI and the model")
     async with ClaudeSDKClient(options=options, transport=cli) as client:  # live agent: no transport=
         await client.query("Run the tests, deploy staging, clean up, then refund the two orders")

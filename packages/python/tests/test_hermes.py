@@ -1009,3 +1009,63 @@ def test_a_link_with_a_backslash_in_its_own_name_into_hermes_home_needs_approval
     assert governed_call("read_file", {"path": os.path.join(link + "dir", ".env")}, protected=roots).tool_name == "hermes_config"
     plain = governed_call("write_file", {"path": os.path.join(str(work), "plain" + name), "content": ""}, protected=roots)
     assert plain.tool_name == "file_write"
+
+
+# --- held requests are scoped per Hermes session --------------------------------------
+
+
+class _Sessions:
+    """Holds every request under its own id; a claim is approved once that id is in ``approved``."""
+
+    def __init__(self):
+        self.calls, self.approved = [], set()
+
+    def request(self, invocation):
+        request_id = f"req_{sum(c.startswith('request') for c in self.calls) + 1}"
+        self.calls.append(f"request:{request_id}")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        if request_id in self.approved:
+            return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
+
+    def execute(self, *, request_id, capability_token):
+        self.calls.append(f"execute:{request_id}")
+        return ExecuteResult(ok=True, receipt={"schemaVersion": 1, "requestId": request_id})
+
+    def of(self, kind):
+        return [c for c in self.calls if c.startswith(kind)]
+
+
+def _deploy(session_id, extra=None):
+    # A session id in the tool's own arguments is the model's; Hermes passes its own beside them.
+    return {"tool_name": "terminal", "args": {"command": "terraform apply", **(extra or {})}, "task_id": "t",
+            "session_id": session_id}
+
+
+def test_a_request_held_in_one_hermes_session_is_never_claimed_by_another():
+    g = _Sessions()
+    run = hook(g, hook_timeout_s=30)  # one plugin instance in one Hermes process
+    assert run(**_deploy("sess_A")) is not None  # held, not approved in time
+    g.approved.add("req_1")
+    assert run(**_deploy("sess_B")) is not None  # the same call in another session
+    assert g.of("request") == ["request:req_1", "request:req_2"] and g.of("execute") == []
+    assert "claim:req_1" not in g.calls[g.calls.index("request:req_2"):]
+    assert run(**_deploy("sess_A")) is None  # session A claims its own request and runs
+    assert g.of("execute") == ["execute:req_1"] and len(g.of("request")) == 2
+
+
+@pytest.mark.parametrize("session_id", [None, "", 7])
+def test_without_a_hermes_session_id_a_held_request_is_not_remembered(session_id):
+    g = _Sessions()
+    run = hook(g, hook_timeout_s=30)
+    payload = _deploy(session_id, {"session_id": "sess_A"})
+    if session_id is None:
+        del payload["session_id"]
+    first = run(**payload)
+    assert "asks for a new approval" in first["message"]
+    g.approved.add("req_1")
+    assert run(**payload) is not None
+    assert g.of("request") == ["request:req_1", "request:req_2"] and g.of("execute") == []

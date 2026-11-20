@@ -30,7 +30,8 @@ tool with a timeout longer than the approval window and
 * ASK: the hook waits for a person to approve in the Guardian console,
   within the request's window. Approved: redeemed, then ``"allow"``. Not
   approved in time: ``"deny"``. The exact same call retried in the same
-  process claims the open request (see :class:`PendingStore`). The hook
+  session (the CLI's ``session_id`` in the hook input) and process claims
+  the open request (see :class:`PendingStore`). The hook
   never answers ``"ask"``: Guardian holds the approval itself.
 * DENY, missing configuration, Guardian unreachable, a crash, the hook's own
   deadline: ``"deny"``.
@@ -77,7 +78,16 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Opti
 
 from claude_agent_sdk import HookMatcher, SdkMcpTool
 
-from ._framework import ToolNames, build_guard, decide_and_run, is_stream_function, json_record, resolve_tool_name
+from ._framework import (
+    ScopeOption,
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    is_stream_function,
+    json_record,
+    resolve_scope,
+    resolve_tool_name,
+)
 from ._hook import (
     REQUEST_TTL_S,
     CredentialHolder,
@@ -92,6 +102,7 @@ from ._hook import (
     _bounded,
     classify_command as _shell_tier,
     decide,
+    session_scope,
 )
 from .client import DEFAULT_BASE_URL, AsyncGuardianClient, GuardianClient
 from .content_pins import (
@@ -531,6 +542,7 @@ def guardian_pre_tool_use(
             return _block("Guardian hook: the tool call had no tool name. Nothing ran.")
         tool_input = data.get("tool_input")
         cwd = data.get("cwd")
+        session = session_scope(data.get("session_id"))
         secret = credential.take()
         classified = governed_call(
             tool_name,
@@ -602,7 +614,12 @@ def guardian_pre_tool_use(
             # that would record a receipt for a call that never ran.
             deadline=started + hook_timeout_s - _RETURN_MARGIN_S,
             call_timeout_s=_HTTP_TIMEOUT_S,
-            store=pending,
+            # The CLI names the session in every hook input (``session_id``);
+            # the model does not write it. A held request is claimed only in
+            # the session it was held for; with no session id, nothing is
+            # remembered.
+            store=pending if session is not None else None,
+            scope=session,
             wait=checked_wait,
             now=checked_now,
             wall=wall,
@@ -722,7 +739,9 @@ class GuardianTools:
       the model gets Guardian's result (the receipt) as JSON text.
     * ASK: the handler does not run. The model is told the call is held for
       a person, as an error result; after the person approves, the same call
-      (same tool, same arguments) claims the approved request and runs.
+      (same tool, same arguments) in the same ``scope`` claims the approved
+      request and runs. Without a ``scope`` each call asks for its own
+      approval.
     * DENY, or Guardian unreachable: the handler does not run and the model
       is told so, as an error result.
 
@@ -732,6 +751,16 @@ class GuardianTools:
     :param modes: the mode per Guardian tool name, where it differs.
     :param tool_names: the Guardian tool name for an SDK tool name, as a
         mapping or a function. Default: the same name.
+    :param scope: ``callback(sdk_tool_name)`` returning the session a call
+        belongs to (a user or conversation id, any hashable value), read from
+        something your app sets and the model cannot write, such as a
+        ``contextvars.ContextVar`` set before the client connects:
+        ``scope=lambda _tool: current_user.get(None)``. A held call is claimed
+        only by the same call in the same scope. Default: unknown, because a
+        handler receives nothing but the arguments the model wrote; a held
+        call is then never claimed by a later call, and each call asks for
+        its own approval. ``None``, an empty string or an error means unknown.
+        Never read it from the tool's arguments.
     :param on_approval_pending: ``callback(tool_name, request_id)`` when a
         call is held, so the app can show the request to a person.
     :param agent_name / purpose / adapter_id / amount_args / on_receipt /
@@ -750,10 +779,12 @@ class GuardianTools:
         adapter_id: Optional[str] = None,
         amount_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
         tool_names: ToolNames = None,
+        scope: ScopeOption = None,
         on_approval_pending: Optional[Callable[[str, str], Any]] = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
     ) -> None:
+        self._scope = scope
         self._guard = build_guard(
             client,
             connection_id=connection_id,
@@ -804,7 +835,11 @@ class GuardianTools:
                 result = await handler(copy.deepcopy(decided))
 
             # The handler's own error is raised from here: the SDK reports it to the model.
-            outcome = await decide_and_run(guard, tool_name, proposed, run_handler)
+            # The handler is given only the arguments the model wrote, so the
+            # session comes from the app's ``scope`` option or is unknown. The
+            # option is handed the SDK tool name, never the arguments.
+            scope = resolve_scope(self._scope, name)
+            outcome = await decide_and_run(guard, tool_name, proposed, run_handler, scope=scope)
             if outcome.message is None:
                 return result  # ALLOW: the handler ran and Guardian recorded it
             if outcome.decision == "ALLOW" and not outcome.ran and outcome.reason_code is None:

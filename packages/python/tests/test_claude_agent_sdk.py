@@ -8,6 +8,7 @@ requests and acts on the answers the way the CLI does. Guardian is a fake.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import re
@@ -65,10 +66,10 @@ UNREACHABLE = RequestResult(ok=False, reason_code="SERVICE_UNAVAILABLE")
 WATCHED = RequestResult(ok=True, request_id="req_w", decision="DENY", reason_code="WATCHED", watched="ASK")
 
 
-def hook_input(tool_name, tool_input, cwd="/work") -> PreToolUseHookInput:
+def hook_input(tool_name, tool_input, cwd="/work", session_id="sess_1") -> PreToolUseHookInput:
     """The SDK's PreToolUse input, as the CLI sends it."""
     return PreToolUseHookInput(
-        session_id="sess_1",
+        session_id=session_id,
         transcript_path="/tmp/transcript.jsonl",
         cwd=cwd,
         permission_mode="default",
@@ -764,7 +765,8 @@ class ScriptedCLI(Transport):
     """
 
     def __init__(self, calls, *, own_permission="allow", on_failure_supported=True, hook_timeout=None,
-                 sdk_servers=()):
+                 sdk_servers=(), session_id="sess_1"):
+        self.session_id = session_id
         self.script = list(calls)
         self.own_permission = own_permission
         self.on_failure_supported = on_failure_supported
@@ -836,7 +838,8 @@ class ScriptedCLI(Transport):
                     frame, answer = self._request({
                         "subtype": "hook_callback",
                         "callback_id": callback_id,
-                        "input": hook_input(name, json.loads(json.dumps(tool_input))),
+                        "input": hook_input(name, json.loads(json.dumps(tool_input)),
+                                            session_id=self.session_id),
                         "tool_use_id": f"toolu_{index}",
                     })
                     yield frame
@@ -1002,6 +1005,98 @@ async def test_a_hook_the_cli_gives_up_on_makes_no_further_guardian_call():
     assert not any(c.startswith("execute") for c in guardian.calls)
 
 
+# --- held requests are scoped per session -------------------------------------------
+
+
+class SessionsGuardian:
+    """Holds every request under its own id; a claim is approved once that id is in ``approved``."""
+
+    def __init__(self):
+        self.calls, self.invocations, self.approved, self.last_invocation = [], [], set(), None
+
+    def request(self, invocation):
+        self.invocations.append(invocation)
+        self.last_invocation = invocation
+        request_id = f"req_{len(self.invocations)}"
+        self.calls.append(f"request:{request_id}")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        if request_id in self.approved:
+            return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
+
+    def execute(self, *, request_id, capability_token):
+        self.calls.append(f"execute:{request_id}")
+        return ExecuteResult(ok=True, receipt={"schemaVersion": 1, "requestId": request_id, "status": "sent-verified"})
+
+    def of(self, kind):
+        return [c for c in self.calls if c.startswith(kind)]
+
+
+DEPLOY = ("Bash", {"command": "terraform apply"})
+
+
+async def test_through_the_sdk_a_request_held_in_one_session_is_never_claimed_by_another():
+    guardian, clock = SessionsGuardian(), Clock()
+    # ONE hook serves both sessions, as one application process does.
+    matcher = guardian_hook_matcher(dict(ENV), client=guardian, timeout_s=60,
+                                    wait=clock.wait, now=clock.now, wall=clock.wall, log=lambda _l: None)
+    options = ClaudeAgentOptions(hooks={"PreToolUse": [matcher]})
+
+    first = ScriptedCLI([DEPLOY], session_id="sess_A")
+    await run_agent(first, options)
+    assert first.ran == [] and guardian.of("request") == ["request:req_1"]
+    guardian.approved.add("req_1")  # a person approves session A's request
+
+    # Session B makes the same call: it proposes its own request and does not run.
+    other = ScriptedCLI([DEPLOY], session_id="sess_B")
+    await run_agent(other, options)
+    assert other.ran == []
+    assert guardian.of("request") == ["request:req_1", "request:req_2"]
+    assert "claim:req_1" not in guardian.calls[guardian.calls.index("request:req_2"):]
+    assert guardian.of("execute") == []
+
+    # Session A's repeat call claims its own approved request and runs once.
+    again = ScriptedCLI([DEPLOY], session_id="sess_A")
+    await run_agent(again, options)
+    assert again.ran == [DEPLOY]
+    assert guardian.of("execute") == ["execute:req_1"]
+    assert guardian.of("request") == ["request:req_1", "request:req_2"]
+
+
+async def test_the_session_is_the_clis_never_one_the_tool_input_names():
+    guardian, clock = SessionsGuardian(), Clock()
+    hook = make_hook(guardian, clock, hook_timeout_s=60)
+    # The model writes the tool input, here with a session id in it, in both sessions.
+    forged = {"command": "terraform apply", "session_id": "sess_A"}
+    assert decision_of(await hook(hook_input("Bash", forged, session_id="sess_A"), None, None)) == "deny"
+    guardian.approved.add("req_1")
+    out = await hook(hook_input("Bash", forged, session_id="sess_B"), None, None)
+    assert decision_of(out) == "deny"
+    assert guardian.of("request") == ["request:req_1", "request:req_2"] and guardian.of("execute") == []
+    # The proposal carries no session id of the hook's own making.
+    assert guardian.invocations[0]["arguments"] == {"command": "terraform apply", "cwd": "/work"}
+
+
+@pytest.mark.parametrize("session_id", [None, "", 7])
+async def test_without_a_session_id_a_held_request_is_not_remembered(session_id):
+    guardian, clock = SessionsGuardian(), Clock()
+    hook = make_hook(guardian, clock, hook_timeout_s=60)
+    data = dict(hook_input("Bash", {"command": "terraform apply", "session_id": "sess_A"}))
+    if session_id is None:
+        del data["session_id"]
+    else:
+        data["session_id"] = session_id
+    first = await hook(data, None, None)
+    assert decision_of(first) == "deny"
+    assert "asks for a new approval" in reason_of(first)
+    guardian.approved.add("req_1")
+    assert decision_of(await hook(data, None, None)) == "deny"
+    assert guardian.of("request") == ["request:req_1", "request:req_2"] and guardian.of("execute") == []
+
+
 # --- tools you write: @tool + create_sdk_mcp_server, through GuardianTools ---------
 
 ran = []
@@ -1051,7 +1146,7 @@ async def test_tool_allow_runs_the_handler_once_with_the_decided_arguments():
 async def test_tool_ask_is_held_then_the_same_call_runs_once_after_approval():
     guardian = FakeClient(TOOL_HELD, claims=[TOOL_APPROVED])
     pending = []
-    results = await call_tools(guardian, [REFUND, REFUND],
+    results = await call_tools(guardian, [REFUND, REFUND], scope=lambda _tool: "user-1",
                                on_approval_pending=lambda t, r: pending.append((t, r)))
     assert results[0].startswith("ERROR: ") and "req_ask" in results[0]
     assert results[1] == "refunded A1"
@@ -1063,7 +1158,7 @@ async def test_tool_ask_is_held_then_the_same_call_runs_once_after_approval():
 
 async def test_tool_ask_still_pending_does_not_run_and_does_not_ask_twice():
     guardian = FakeClient(TOOL_HELD)
-    results = await call_tools(guardian, [REFUND, REFUND])
+    results = await call_tools(guardian, [REFUND, REFUND], scope=lambda _tool: "user-1")
     assert all(text.startswith("ERROR: ") and "req_ask" in text for text in results)
     assert ran == []
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
@@ -1076,6 +1171,83 @@ async def test_tool_deny_or_unreachable_never_runs_the_handler(answer, code):
     assert result.startswith("ERROR: ") and code in result
     assert ran == []
     assert guardian.calls == ["request:tool.invoke"]
+
+
+CURRENT_USER = contextvars.ContextVar("current_user", default=None)
+
+
+async def test_tools_without_a_scope_never_reuse_a_held_request():
+    # An SDK MCP tool handler receives only the arguments the model wrote: nothing names a session.
+    guardian = SessionsGuardian()
+    results = await call_tools(guardian, [REFUND])
+    guardian.approved.add("req_1")
+    results += await call_tools(guardian, [REFUND])
+    assert all(text.startswith("ERROR: ") for text in results) and ran == []
+    assert "new approval" in results[0]
+    assert guardian.calls == ["request:req_1", "request:req_2"]
+
+
+async def test_tools_held_in_one_session_are_never_claimed_by_another():
+    guardian = SessionsGuardian()
+    # ONE GuardianTools and one server; the app sets the session before it connects each client.
+    options = billing(guardian, scope=lambda _tool: CURRENT_USER.get())
+
+    async def session(user, calls):
+        CURRENT_USER.set(user)
+        cli = ScriptedCLI(calls, sdk_servers=["billing"])
+        await run_agent(cli, options)
+        return [text for _name, text in cli.results]
+
+    async def as_user(user, calls):
+        return await asyncio.create_task(session(user, calls))  # its own context, as a request handler has
+
+    first = await as_user("alice", [REFUND])
+    assert first[0].startswith("ERROR: ") and "req_1" in first[0]
+    guardian.approved.add("req_1")  # a person approves alice's refund
+
+    other = await as_user("bob", [REFUND])
+    assert other[0].startswith("ERROR: ") and "req_2" in other[0]
+    assert ran == [] and guardian.of("claim") == [] and guardian.of("execute") == []
+
+    again = await as_user("alice", [REFUND])
+    assert again == ["refunded A1"] and len(ran) == 1
+    assert guardian.calls == ["request:req_1", "request:req_2", "claim:req_1", "execute:req_1"]
+
+
+async def test_the_tool_scope_is_never_read_from_the_arguments_the_model_wrote():
+    seen = []
+
+    def scope(context):
+        seen.append(context)
+        return CURRENT_USER.get()
+
+    guardian = SessionsGuardian()
+    options = billing(guardian, scope=scope)
+
+    async def session(user, calls):
+        CURRENT_USER.set(user)
+        cli = ScriptedCLI(calls, sdk_servers=["billing"])
+        await run_agent(cli, options)
+        return [text for _name, text in cli.results]
+
+    # The scope option is handed the SDK tool name, never the arguments.
+    await asyncio.create_task(session("alice", [REFUND]))
+    assert seen == ["refund_order"]
+    guardian.approved.add("req_1")
+    # With no session set, nothing is claimed, whatever the arguments say.
+    await asyncio.create_task(session(None, [REFUND]))
+    await asyncio.create_task(session("", [REFUND]))
+    assert guardian.of("claim") == [] and ran == []
+    assert guardian.of("request") == ["request:req_1", "request:req_2", "request:req_3"]
+
+
+async def test_a_tool_scope_option_that_raises_is_the_strict_side():
+    guardian = SessionsGuardian()
+    results = await call_tools(guardian, [REFUND], scope=lambda _tool: 1 / 0)
+    guardian.approved.add("req_1")
+    results += await call_tools(guardian, [REFUND], scope=lambda _tool: 1 / 0)
+    assert all(text.startswith("ERROR: ") for text in results) and ran == []
+    assert guardian.calls == ["request:req_1", "request:req_2"]
 
 
 async def test_tool_guardian_raising_fails_closed():

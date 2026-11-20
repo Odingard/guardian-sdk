@@ -272,8 +272,19 @@ class PendingStore:
             self._mem.pop(key, None)
 
 
-def _proposal_key(connection_id: str, call: GovernedCall) -> str:
-    return hashlib.sha256(_json([connection_id, call.tool_name, call.arguments]).encode("utf-8", "surrogatepass")).hexdigest()
+def _proposal_key(connection_id: str, call: GovernedCall, scope: Optional[str] = None) -> str:
+    """The key a held request is remembered under: the exact proposal, and the session it was held for."""
+    parts: list = [connection_id, call.tool_name, call.arguments]
+    if scope is not None:
+        parts.append({"scope": scope})
+    return hashlib.sha256(_json(parts).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def session_scope(value: Any) -> Optional[str]:
+    """The session a hook call belongs to, as the agent names it: a non-empty
+    string, else ``None`` (not known). It must come from the agent's runtime,
+    never from the tool call's arguments, which the model writes."""
+    return value if isinstance(value, str) and value else None
 
 
 def _look_up(client: Any, request_id: str) -> str:
@@ -315,6 +326,7 @@ def decide(
     log: Callable[[str], None] = lambda _line: None,
     host: str = "Hermes",
     watch_aware: bool = False,
+    scope: Optional[str] = None,
 ) -> HookVerdict:
     """One governed call: the Python port of ``packages/hook/src/decide.ts``.
 
@@ -330,12 +342,17 @@ def decide(
     is watched, the verdict carries ``would_decision`` and nothing is
     redeemed. Set it only when the caller then leaves the call to the agent's
     own permissions.
+
+    ``scope`` is the session the call belongs to (:func:`session_scope`): a
+    request held in ``store`` is claimed only by the same call in the same
+    session. A caller that does not know the session passes no ``store``, so
+    nothing is remembered and every call proposes its own request.
     """
 
     def room(calls: int) -> bool:
         return deadline is None or now() + calls * call_timeout_s <= deadline
 
-    key = _proposal_key(connection_id, call)
+    key = _proposal_key(connection_id, call, scope)
     if not room(2):  # the request (or claim) plus the redeem
         return _denied(call, "HOOK_DEADLINE_PASSED")
     held = store.get(key, wall()) if store is not None else None
@@ -418,8 +435,11 @@ def decide(
                     allow=False,
                     reason=f"Guardian is still waiting for a person to approve {call.tool_name} "
                     f"(request {request_id}). Nothing ran. Tell the user it needs approval in the Guardian app. "
-                    f"If it is approved while this {host} session is still running, run exactly the same action "
-                    "again and it will go ahead; otherwise asking again files a new request.",
+                    + (f"If it is approved while this {host} session is still running, run exactly the same "
+                       "action again and it will go ahead; otherwise asking again files a new request."
+                       if store is not None
+                       else "The session of this call is not known, so running the same action again asks for a "
+                       "new approval instead of using this one."),
                     request_id=request_id,
                     guardian_decision="ASK",
                 )

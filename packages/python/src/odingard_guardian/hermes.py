@@ -19,9 +19,10 @@ and in the environment Hermes runs in: ``GUARDIAN_AGENT_CREDENTIAL``,
   Hermes runs the tool. Decision-gated, like ``@odingard/guardian-hook``.
 * ASK: the hook waits for a person to approve in the Guardian
   console. Approved: redeemed, then the tool runs. Not approved in time:
-  blocked. Within the same Hermes process, the exact same call retried picks
-  up the open request; it is never carried across processes (see
-  :class:`PendingStore`).
+  blocked. Within the same Hermes session and process, the exact same call
+  retried picks up the open request; it is never carried across sessions or
+  processes (see :class:`PendingStore`). The session is the ``session_id``
+  Hermes passes to the hook; with none, nothing is remembered.
 * DENY, missing config, Guardian unreachable, a crash, a timeout: blocked.
 * Guardian's answer to the redemption lost (no answer, a 5xx, an unreadable
   answer): the request is looked up in Guardian. A verified redemption lets
@@ -68,6 +69,7 @@ from ._hook import (  # noqa: F401 - shared with the Claude Agent SDK hook; the 
     _text_fields,
     classify_command,
     decide,
+    session_scope,
 )
 from .client import DEFAULT_BASE_URL, GuardianClient
 
@@ -437,7 +439,8 @@ def make_pre_tool_call(
     def _say(line: str) -> None:
         (log or _logger.warning)(line)
 
-    def pre_tool_call(tool_name: Any = None, args: Any = None, **_: Any) -> Optional[Dict[str, str]]:
+    def pre_tool_call(tool_name: Any = None, args: Any = None, session_id: Any = None,
+                      **_: Any) -> Optional[Dict[str, str]]:
         try:
             started = now()
             if not isinstance(tool_name, str) or not tool_name:
@@ -492,7 +495,11 @@ def make_pre_tool_call(
                 approval_timeout_s=approval_timeout,
                 deadline=deadline,
                 call_timeout_s=_HTTP_TIMEOUT_S,
-                store=pending,
+                # Hermes names the session of each tool call (``session_id``).
+                # A held request is claimed only in the session it was held
+                # for; with no session named, nothing is remembered.
+                store=pending if session_scope(session_id) is not None else None,
+                scope=session_scope(session_id),
                 wait=wait,
                 now=now,
                 wall=wall,
