@@ -282,8 +282,8 @@ integrations:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI**: `@tool("Pay invoice")` on top of `@guard`. A recipe only: this
-  repository has no CrewAI example or test yet.
+- **crewAI**: wrap the agent's tools with `guardian_tools` (see
+  [crewAI](#crewai-odingard_guardiancrewai-unreleased) below).
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
 - **Claude Agent SDK**: guard the handler of a tool you define, or put
@@ -395,6 +395,63 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
 - `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
+
+## crewAI: `odingard_guardian.crewai` (unreleased)
+
+[crewAI](https://docs.crewai.com/) runs a tool either through native function
+calling or through its text (ReAct) loop. Both end in the tool's `_run`.
+`guardian_tools` wraps each tool in a `GuardianTool`, a crewAI `BaseTool`
+whose `_run` asks Guardian and then calls the tool it wraps.
+
+```bash
+pip install "odingard-guardian[crewai]"   # Python 3.10 to 3.13
+```
+
+```python
+import os
+from crewai import Agent
+from crewai.tools import tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.crewai import guardian_tools
+
+@tool("refund_order")
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+tools = guardian_tools(
+    [refund_order],
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(role="Billing", goal="...", backstory="...", tools=tools)  # the wrapped tools only
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                             |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person. After the person approves in the Guardian console, the same call (same tool, same arguments) runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                      |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                            |
+
+- **Two modes.** `mode="in_process"` (default): the wrapped tool is the action. It runs after ALLOW and before the capability is redeemed, so this mode is decision-gated (see [Honest limits](#honest-limits)); register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. `mode="remote"`: the tool name is a tool registered on your Guardian connection that Guardian calls itself. The wrapped tool's code never runs, Guardian holds the credential for the call, and the tool result is Guardian's answer as JSON: `{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`. Set it for every tool with `mode="remote"` or per tool with `modes={"send_wire": "remote"}` (Guardian tool names).
+- **Give the agent the wrapped tools only.** A tool passed to an agent unwrapped is not governed. `guardian_tool(tool, client, ...)` wraps one tool.
+- Guardian decides on the arguments as crewAI validated them against the tool's schema (for example `"500"` for an `int` parameter is proposed as `500`). The wrapper then calls the wrapped tool's own `_run` with those arguments, so nothing validates or changes them again between the decision and the tool.
+- **A refusal is a crewAI `ToolFailure`**, not a string: ASK (`code="APPROVAL_REQUIRED"`, `retryable=True`), DENY (the reason code), Guardian unreachable (`SERVICE_UNAVAILABLE`), and a call that ran but could not be recorded. The model sees the message. The failure, with `details["guardian"]["request_id"]`, is on `TaskOutput.tool_failures`, a `result_as_answer` tool never returns a refusal as the final answer, and crewAI's `tool_failure_policy="raise"` (on the tool, agent, task or crew) stops the run with `ToolExecutionFailedError` at the first held or refused call. `on_approval_pending=callback(tool_name, request_id)` lets your app show a held call to a person.
+- **Use a `GuardianClient` (sync).** crewAI calls tools synchronously, also under `akickoff()` and `kickoff_async()`; an `AsyncGuardianClient` is refused when the tools are wrapped. Async tool functions are supported: the wrapper runs the coroutine to its end before the capability is redeemed.
+- **Retrying a held call.** Held requests are kept in memory by the wrapped tools, so claim the approval with the same wrapped tools in the same process (a later task or `kickoff()` is fine).
+  - Native function calling: the model can call the tool again in the same run. After the same call with the same result five times in a row, crewAI stops the agent's tool use.
+  - Text (ReAct) path: crewAI answers a call identical to the previous one itself ("I tried reusing the same input…") before it reaches the tool. The same call claims the approval after another tool call, or in the next task or kickoff.
+- **crewAI's tool cache** (`Crew(cache=True)`, off by default) answers a repeated call before the tool is reached: nothing runs and nothing is proposed for the repeat. A held, refused or unrecorded call is never cached, so the retry reaches Guardian. For a call that ran, the wrapped tool's own `cache_function` decides.
+- `max_usage_count` on the wrapped tool counts the calls that ran (or that Guardian performed). A held or refused call does not spend it, and nothing is proposed for a tool whose limit is spent.
+- If the tool raises after ALLOW, the capability is not redeemed and crewAI reports the error to the model. On the text path crewAI then calls the tool again by itself (up to six times in 1.15.44); each of those calls is decided by Guardian again.
+- **Why not crewAI's tool-call hooks.** `before_tool_call` can block a call, but in crewAI 1.15.44 a hook that raises is ignored and the tool runs, the hook sees the arguments before the tool's schema validated them, hooks registered later can change them, and the text path retries a tool that raised without running the before hook again. Hooks still run around a governed tool: a `before_tool_call` hook runs before Guardian's decision, so what it changes is what Guardian decides on, and an `after_tool_call` hook can rewrite the text the model sees.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps crewAI tool names to Guardian tool names. The default is the sanitized name the model calls (`"Refund order"` is `refund_order`).
+- A `GuardianTool` restored from a crewAI checkpoint has no Guardian client: it refuses every call. Wrap the tools again after a restore.
+- Not covered: content pins (`file_args`) and watch mode (use `@guard` for those), tools given to an agent unwrapped (including the delegation tools crewAI adds itself), tools the model provider runs itself, and MCP servers that crewAI connects for the agent (`mcps=`); put those behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `crewai` 1.15.44 on Python 3.13, in a real `Agent` + `Task` + `Crew.kickoff()` on both tool-calling paths, with a scripted model and a stand-in Guardian. Example: [`examples/python/crewai_agent.py`](../../examples/python/crewai_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 

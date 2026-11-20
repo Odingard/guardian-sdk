@@ -1,5 +1,11 @@
 # Changelog
 
+## Python odingard-guardian, unreleased
+
+### Added: crewAI
+
+- **`odingard_guardian.crewai`**: `guardian_tools(tools, client, connection_id=...)` (and `guardian_tool` for one tool) wraps crewAI tools in a `GuardianTool`, a crewAI `BaseTool` that sends each call to Guardian before the wrapped tool runs, on crewAI's native function-calling path and on its text (ReAct) path. ALLOW runs the tool once with the validated arguments Guardian decided on, then redeems the capability; ASK holds it, and the same call runs after a person approves; DENY and an unreachable Guardian do not run it. A held or refused call is a crewAI `ToolFailure` with the request id, so it is never cached, never a `result_as_answer` final answer, and `tool_failure_policy="raise"` stops the run. `mode="remote"` (or `modes` per tool) has Guardian perform the call: the wrapped tool's code never runs and the result is Guardian's answer with the receipt. Takes a sync `GuardianClient`; crewAI calls tools synchronously, also under `akickoff()`. On the text path crewAI answers a call identical to the previous one itself, so a held call is claimed after another tool call or in the next task or kickoff. Extra: `odingard-guardian[crewai]` (Python 3.10 to 3.13; tested with `crewai` 1.15.44). Example: `examples/python/crewai_agent.py`.
+
 ## guardian-mcp 0.6.0, unreleased
 
 ### Added: list and withdraw held requests

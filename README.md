@@ -108,6 +108,7 @@ document.
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian` ([recipe](packages/python#framework-recipes)) |
 | Microsoft Agent Framework (Python)              | `odingard-guardian`                                               |
 | Semantic Kernel (Python)                        | `odingard-guardian`                                               |
+| crewAI (Python)                                 | `odingard-guardian`                                               |
 | Codex CLI                                       | `@odingard/guardian-hook`                                         |
 | DeepSeek Harness                                | `@odingard/guardian-hook`                                         |
 | Hermes Agent                                    | `odingard-guardian`                                               |
