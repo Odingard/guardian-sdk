@@ -118,6 +118,7 @@ Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as i
 | crewAI (Python, unreleased)                                    | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | LangChain / LangGraph (Python, unreleased)                     | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | OpenAI Agents SDK (Python, `guardian_tool`, unreleased)        | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| Google ADK (Python, unreleased)                                | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | `guardian-mcp proxy`                                           | in-process   | none: the proxy always forwards an allowed call to the upstream server. Use `guardian-mcp` (see below). |
 
 `modes` is keyed by the tool name Guardian sees.
@@ -304,6 +305,18 @@ def send_wire(amount_cents: int, payee_id: str) -> str:
     raise RuntimeError("never runs: Guardian makes this call")
 
 agent = Agent(name="Treasury", tools=[send_wire])
+```
+
+**Google ADK** (unreleased). The plugin does not call the ADK tool. The tool response the model sees is Guardian's result, as a dict.
+
+```python
+guardian = GuardianPlugin(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"send_wire": "remote"},  # or mode="remote" for every tool
+)
+agent = LlmAgent(name="billing", model=..., tools=[send_wire, lookup_order])
+runner = Runner(app=App(name="billing_app", root_agent=agent, plugins=[guardian]), session_service=...)
 ```
 
 In these Python integrations a `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the integration is built.

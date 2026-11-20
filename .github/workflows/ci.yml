@@ -57,6 +57,9 @@ jobs:
       - name: OpenAI Agents SDK (Python 3.10+)
         if: matrix.python-version == '3.13'
         run: pip install "openai-agents==0.25.0"
+      - name: Google ADK (Python 3.11+)
+        if: matrix.python-version == '3.13'
+        run: pip install "google-adk==2.15.0"
       - run: python -m pytest -q
       - name: Build and check Python distributions
         if: matrix.python-version == '3.13'
@@ -73,6 +76,9 @@ jobs:
       - name: OpenAI Agents SDK example runs (scripted model, local demo policy)
         if: matrix.python-version == '3.13'
         run: python ../../examples/python/openai_agents_agent.py > /dev/null
+      - name: Google ADK example runs (local demo policy)
+        if: matrix.python-version == '3.13'
+        run: python ../../examples/python/google_adk_agent.py > /dev/null
       # crewAI 1.15.44 requires openai<3 and the OpenAI Agents SDK pin requires a newer openai, so crewAI is installed and tested in its own environment.
       - name: crewAI in its own environment (Python 3.10 to 3.13)
         if: matrix.python-version == '3.13'
