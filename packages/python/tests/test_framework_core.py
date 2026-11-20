@@ -10,7 +10,7 @@ import json
 import pytest
 
 from odingard_guardian import RequestResult
-from odingard_guardian._framework import build_guard, decide_and_run
+from odingard_guardian._framework import build_guard, decide_and_run, decide_and_run_sync, performed_remotely
 
 from test_guard import ALLOW, CONNECTION, HELD, AsyncFake, FakeClient
 
@@ -101,3 +101,108 @@ def test_an_in_process_check_that_raises_before_the_tool_still_says_it_did_not_r
     outcome, ran = decide(Raising(ALLOW))
     assert ran == [] and outcome.reason_code == "SERVICE_UNAVAILABLE"
     assert "did not run" in outcome.message
+
+
+def test_a_remote_call_that_could_not_be_confirmed_is_allow_and_not_ran_but_not_performed():
+    performed, _ = decide(FakeClient(ALLOW), mode="remote")
+    assert performed_remotely(performed)
+    assert "outcome" not in performed.result["guardian"] and "message" not in performed.result["guardian"]
+
+    for run in (decide, lambda fake, **options: decide_sync(fake, **options)):
+        outcome, ran = run(FakeClient(ALLOW, receipt_status="outcome-pending"), mode="remote")
+        assert ran == []
+        # The same decision and ran as a performed call...
+        assert (outcome.decision, outcome.ran) == ("ALLOW", False)
+        # ...told apart by the record: an outcome and a message that says it may have run.
+        info = outcome.result["guardian"]
+        assert info["outcome"] == "unknown" and info["reason_code"] == "EXECUTION_OUTCOME_PENDING"
+        assert outcome.message == info["message"] and "It may have run. Do not call it again" in outcome.message
+        assert not performed_remotely(outcome)
+
+
+def test_only_a_performed_remote_call_counts_as_performed():
+    for fake, options in (
+        (FakeClient(ALLOW), {}),  # ran in process
+        (FakeClient(HELD), {"mode": "remote"}),
+        (FakeClient(DENIED), {"mode": "remote"}),
+        (FakeClient(UNREACHABLE), {"mode": "remote"}),
+        (FakeClient(ALLOW, execute_ok=False), {"mode": "remote"}),
+    ):
+        outcome, _ = decide(fake, **options)
+        assert not performed_remotely(outcome)
+
+
+# --- the sync variant: the same outcomes for a sync Guard ---------------------
+
+
+def decide_sync(fake, run_tool=None, **options):
+    guard = build_guard(
+        fake,
+        connection_id=CONNECTION,
+        agent_name="agent",
+        adapter_id=None,
+        purpose=None,
+        amount_args=None,
+        on_execution_error=None,
+        require_async=False,
+        **{"on_receipt": None, **options},
+    )
+    ran = []
+    outcome = decide_and_run_sync(guard, "refund_order", {"order_id": "A1"}, run_tool or (lambda: ran.append(True)))
+    return outcome, ran
+
+
+def test_a_sync_client_is_refused_unless_the_integration_asks_for_it():
+    with pytest.raises(TypeError, match="AsyncGuardianClient"):
+        build_guard(
+            FakeClient(ALLOW),
+            connection_id=CONNECTION,
+            agent_name="agent",
+            adapter_id=None,
+            purpose=None,
+            amount_args=None,
+            on_receipt=None,
+            on_execution_error=None,
+        )
+
+
+def test_sync_outcomes_match_the_async_ones():
+    for fake, options in (
+        (lambda: FakeClient(ALLOW), {}),
+        (lambda: FakeClient(ALLOW), {"mode": "remote"}),
+        (lambda: FakeClient(HELD), {}),
+        (lambda: FakeClient(DENIED), {}),
+        (lambda: FakeClient(UNREACHABLE), {}),
+        (lambda: FakeClient(ALLOW, execute_ok=False), {}),
+    ):
+        expected, ran_async = decide(fake(), **options)
+        got, ran_sync = decide_sync(fake(), **options)
+        assert got == expected and ran_sync == ran_async
+
+
+def test_sync_remote_exception_after_guardian_was_asked_is_outcome_unknown():
+    def broken_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store down")
+
+    fake = FakeClient(ALLOW)
+    outcome, ran = decide_sync(fake, mode="remote", on_receipt=broken_receipt)
+    assert ran == [] and fake.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert (outcome.decision, outcome.reason_code) == ("DENY", "EXECUTION_OUTCOME_UNKNOWN")
+    assert "may have performed it" in outcome.message and "did not run" not in outcome.message
+
+
+def test_sync_in_process_exception_before_the_tool_starts_did_not_run():
+    class Broken(FakeClient):
+        def request(self, invocation):
+            raise ConnectionError("network down")
+
+    outcome, ran = decide_sync(Broken(ALLOW))
+    assert ran == [] and outcome.reason_code == "SERVICE_UNAVAILABLE" and "did not run" in outcome.message
+
+
+def test_sync_tool_errors_are_the_tools_own():
+    def fail():
+        raise ValueError("no such order")
+
+    with pytest.raises(ValueError, match="no such order"):
+        decide_sync(FakeClient(ALLOW), run_tool=fail)

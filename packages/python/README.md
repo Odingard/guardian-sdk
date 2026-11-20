@@ -272,7 +272,7 @@ guard.run("refund_order", {"order_id": "o42"}, do_refund, scope=authenticated_us
 - A `scope` function that returns `None` (a `ContextVar` your app has not set yet) means the session is not known: the call is treated as `SCOPE_UNKNOWN`, not as unscoped. An empty string as a scope, from the function or given with the call, is a missing id and is treated the same; other falsy values such as `0` are scopes. `guard.run(..., scope=None)` means "use the Guard's `scope` function"; only a `Guard` without a `scope` function is unscoped.
 - With `on_ask="raise"` nothing is remembered: `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
 
-The Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.
+The LangChain / LangGraph integration, the Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.
 
 ### Framework recipes
 
@@ -280,8 +280,9 @@ The Agent Framework middleware and the Semantic Kernel filter below scope held r
 wherever your framework expects a tool. These are recipes, not separate
 integrations:
 
-- **LangChain / LangGraph**: `StructuredTool.from_function(pay_invoice)`, or `@tool` on top of
-  `@guard`. Map `GuardianApprovalPending` to a LangGraph `interrupt`.
+- **LangChain / LangGraph**: use the integration below
+  ([`odingard_guardian.langchain`](#langchain-and-langgraph-odingard_guardianlangchain-unreleased)):
+  governed tools, agent middleware, and ASK as a LangGraph `interrupt`.
 - **OpenAI Agents SDK**: use `guardian_tool` / `create_guardian_tool`
   ([below](#openai-agents-sdk-odingard_guardianopenai_agents-unreleased)),
   which make each tool a governed `FunctionTool`. To keep `@guard` on the
@@ -346,6 +347,262 @@ integrations:
   or a new `Guard` is refused that way even for an entry the SDK created
   itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
+
+## LangChain and LangGraph: `odingard_guardian.langchain` (unreleased)
+
+[LangChain](https://docs.langchain.com/oss/python/langchain/overview) agents
+(`langchain.agents.create_agent`) and [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
+graphs run the tools a model asks for. `odingard_guardian.langchain` sends each
+of those calls to Guardian before the tool runs.
+
+```bash
+pip install "odingard-guardian[langchain]"   # Python 3.11+
+```
+
+```python
+import os
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.langchain import GuardianMiddleware
+
+@tool
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianMiddleware(
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = create_agent(model, [refund_order], middleware=[guardian])  # list Guardian's middleware last
+```
+
+There are three ways to put it in place. They take the same options and can
+share one `GuardianGate`:
+
+| Where                                 | How                                                                                                                                                              |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any tool (`bind_tools`, any graph)    | `guardian_tool(tool, client, connection_id=...)`, or `guardian_tools([...], client, connection_id=...)`: a `BaseTool` with the same name, description and schema |
+| `create_agent(..., middleware=[...])` | `GuardianMiddleware(client, connection_id=...)`: every tool call of the agent (`wrap_tool_call` / `awrap_tool_call`)                                             |
+| LangGraph `ToolNode`                  | `gate = GuardianGate(client, connection_id=...)`, then `ToolNode(tools, wrap_tool_call=gate.wrap_tool_call, awrap_tool_call=gate.awrap_tool_call)`               |
+
+| Decision                 | What happens                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded. The model gets the tool's own result.                                                                                            |
+| **ASK**                  | The tool does not run. `on_ask="result"` (default): the model is told the call is held for a person; after the person approves, the same call (same tool, same arguments) in the same thread runs the approved request. `on_ask="interrupt"`: the graph pauses, see below. |
+| **DENY**                 | The tool does not run. The model gets `Guardian denied refund_order (POLICY_DENY). Do not retry the same call.` in a `ToolMessage` with `status="error"`.                                                                                               |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                                 |
+
+**Held requests are scoped per session.** A held call is remembered for the
+LangGraph thread it was made in, `config["configurable"]["thread_id"]`: the
+same call (same tool, same arguments) in the same thread claims the approved
+request, and an identical call in another thread is proposed as its own
+request and needs its own approval. One `GuardianGate`, middleware or
+governed tool can therefore serve many conversations.
+
+- The thread id is what your application passes when it invokes the graph
+  (`agent.invoke(..., {"configurable": {"thread_id": "order-42"}})`). It
+  reaches the tool in its run config, not in the tool call, so the model
+  cannot write it. A string is used as it is, a number as its string form.
+- `scope=callback(config)` names the session yourself, from the tool's run
+  config: for example `scope=lambda config: config["metadata"]["user_id"]`.
+  It replaces the thread id. **Take the scope from data your application
+  sets** (the authenticated user, the request's session), never from the
+  tool call's arguments or anything else the model writes.
+- **With no thread id and no `scope`** (a graph invoked without a thread id,
+  a bare `tool.invoke(args)`), the session is not known: the held request is
+  not remembered, the same call again is proposed as a new request, and the
+  message says so. The same holds when `scope` returns `None` or an empty
+  string, raises, or returns something that cannot be a key. `0` is a scope.
+  With `on_ask="interrupt"` such a call does not pause the graph (a resume
+  could never claim its request); the model is told it is held.
+- The scope is part of an in-memory key and is not sent to Guardian. See
+  [Held requests are scoped per session](#held-requests-are-scoped-per-session-unreleased).
+
+When the model gets Guardian's message in place of the tool's result, the
+`ToolMessage` carries the decision in `message.artifact["guardian"]`
+(`decision`, `tool_name`, `reason_code`, `request_id`), so your app can read
+the request id without parsing text.
+
+### Pause the graph on ASK: `on_ask="interrupt"`
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+
+agent = create_agent(
+    model,
+    [refund_order],
+    middleware=[GuardianMiddleware(client, connection_id=..., on_ask="interrupt")],
+    checkpointer=InMemorySaver(),  # interrupts need a checkpointer
+)
+thread = {"configurable": {"thread_id": "order-42"}}
+
+state = agent.invoke({"messages": [("user", "Refund order 42")]}, thread)
+held = state["__interrupt__"][0].value
+# {"type": "guardian_approval", "decision": "ASK", "request_id": "req_…", "tool_name": "refund_order",
+#  "tool": "refund_order", "tool_call_id": "…", "arguments": {...}, "message": "…"}
+
+# Show held["request_id"] to the person; they approve it in Guardian. Then:
+state = agent.invoke(Command(resume=True), thread)
+```
+
+- A held call pauses the graph with LangGraph's `interrupt`. The Guardian
+  `request_id` and the proposed arguments are in the interrupt payload.
+- **Resuming is not approving.** On resume the call claims its request from
+  Guardian. If a person approved it, the tool runs once. If it is still
+  pending, nothing runs and the graph pauses again with the same
+  `request_id`. If the person declined, the model is told the call was
+  denied. The resume value is not read: nothing in it can stand in for
+  Guardian's approval. Pass any value other than `None`.
+- The graph needs a checkpointer. Without one the run still stops at the
+  held call and nothing runs, but LangGraph cannot resume it.
+- When several calls of one model turn are held, LangGraph asks for a resume
+  value per interrupt: `Command(resume={interrupt.id: True for interrupt in state["__interrupt__"]})`.
+  Each call still needs its own approval.
+- **Several tool calls in one node.** LangGraph runs an interrupted node
+  again from its start when the graph resumes, so everything the node did
+  before the pause happens again. `create_agent` is not affected: it runs
+  each tool call as its own task, and a pause belongs to the held call
+  alone. A hand-built graph whose `ToolNode` gets all of a model turn's tool
+  calls at once is affected, so there a governed call pauses the graph only
+  while no governed call of that node has started to act:
+  - If another governed call of the node already ran (or is running), the
+    held call does not pause. The model is told it is held, as with
+    `on_ask="result"`, and the same call after approval runs the approved
+    request. Nothing runs twice.
+  - If the held call pauses first, governed calls of the node that have not
+    started yet do not run in that pass. They are proposed again when the
+    graph resumes and run then, once.
+  - This covers tools behind Guardian (any `GuardianGate` in the process).
+    A tool in the same `ToolNode` that is **not** behind Guardian is run
+    again by LangGraph on resume, as with any interrupt. Use
+    `gate.wrap_tool_call` on the `ToolNode` so every call of the node is
+    governed, or send each tool call to the node on its own (`Send`), as
+    `create_agent` does.
+- Which request a paused call waits for is kept in the process's memory. If
+  another process resumes the thread (a restart, another worker), the call
+  is proposed again and pauses with a new `request_id` that needs its own
+  approval. It never runs on the earlier resume.
+- **A tool that calls `interrupt()` itself and a call that needs approval
+  do not go together.** LangGraph runs such a tool again from the start
+  when the graph resumes, and Guardian decides on that run again. A person's
+  approval is used once, so it cannot wait for the tool's own pause: the
+  next run would need a new approval, then stop at the tool's question
+  again, without end. So when a tool that started under an approved request
+  (after ASK, with `on_ask="interrupt"` or `"result"`) calls `interrupt()`,
+  the pause is not passed on. The call ends there, the model gets an error
+  `ToolMessage` saying it was approved, started and did not complete
+  (`reason_code` `INTERRUPT_AFTER_APPROVAL`), and a warning is logged.
+  Whatever the tool did before its `interrupt()` has happened; nothing after
+  it runs. Ask the person before the tool call instead, or pass the answer
+  as an argument, so it is part of what is approved.
+- A tool that calls `interrupt()` and is allowed without a person (ALLOW by
+  rule) works: on resume the call is decided again and the tool gets its
+  answer. A value sent to resume Guardian's pause is not handed to a
+  tool's `interrupt()` (which pauses were Guardian's is kept in the process's
+  memory). Other calls of the same node that already ran are
+  run again by LangGraph when a tool interrupts itself.
+- Outside a LangGraph run (a plain `tool.invoke`) there is nothing to pause;
+  a held call answers as with `on_ask="result"`.
+
+### Enforced mode: `mode="remote"`
+
+```python
+gate = GuardianGate(client, connection_id=..., modes={"send_wire": "remote"})
+tools = gate.tools([send_wire, lookup_order])
+```
+
+| Mode                     | What runs after ALLOW                                                                                                                                                                | What it guarantees                                                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"in_process"` (default) | Your tool, in your process, then Guardian records it. Register the tool once in the console as "My own code (record-only)".                                                          | Decision-gated: the integration does not start the tool without ALLOW. Your process holds the credentials, so code that calls the upstream without going through the governed tool is not stopped. A revocation between ALLOW and the record is reported after the effect. |
+| `"remote"`               | Guardian makes the call to a tool registered in the connection. The local tool body never runs; the model gets `{"guardian": {"decision": "ALLOW", "request_id": …, "receipt": …}}`. | Enforced: Guardian holds the credential and performs the call, so the action cannot happen without its decision. A receipt status other than `sent-verified` is reported to the model as "may have run, do not call it again", never as done.                              |
+
+In remote mode the LangChain tool supplies the name, description and schema
+the model sees; its function is not called, and the model gets Guardian's
+result as JSON text. If something fails after Guardian was asked to make the
+call, the model is told Guardian may have performed it and not to call it
+again, never that it did not run. A `mode` other than `"in_process"` or
+`"remote"` raises a `ValueError`. What remote mode needs and does not
+support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+
+### Arguments
+
+- Guardian decides on the arguments as the tool's own schema validated them
+  (`"500"` for an `int` parameter is proposed as `500`), and the tool runs
+  with exactly those: the wrapped tool's `_run` / `_arun` is called directly,
+  so a schema that transforms its input is applied once. Arguments that fail
+  validation are never proposed.
+- The decision is taken inside the tool invocation. With the middleware or
+  the `ToolNode` hook, a middleware that changes the call's arguments, before
+  or after Guardian's, changes what Guardian decides on, not what runs after
+  the decision.
+- Arguments LangChain and LangGraph fill in (`InjectedState`, `InjectedStore`,
+  `ToolRuntime`, `InjectedToolCallId`) are not proposed and reach the tool
+  unchanged. `ToolNode` and `create_agent` overwrite anything a model puts
+  in them. An argument your app injects (`Annotated[str, InjectedToolArg]`)
+  is proposed like any other, so it must be JSON.
+- Arguments that cannot be written as JSON are refused before anything is
+  proposed.
+
+### Options and limits
+
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps
+  LangChain tool names to Guardian tool names. `amount_args`, `purpose`,
+  `agent_name`, `adapter_id`, `on_receipt` and `on_execution_error` are
+  `Guard`'s. `on_approval_pending=callback(tool_name, request_id)` is called
+  once per held request. `on_approval_pending`, `on_receipt` and
+  `on_execution_error` may be coroutine functions for async calls. On a sync
+  call (`invoke`, a sync graph) a coroutine callback cannot be awaited, so
+  the call raises `TypeError` before anything is proposed.
+- **Sync and async.** A `GuardianClient` serves `invoke` and `ainvoke` (async
+  calls make each Guardian call in a worker thread). An `AsyncGuardianClient`
+  serves `ainvoke` only: a sync call raises `TypeError` before anything runs.
+- **List `GuardianMiddleware` last.** It puts the call's tool behind Guardian
+  and hands the call on. A middleware listed after it runs closer to the
+  tool and could answer the call itself or replace the tool; Guardian's
+  middleware cannot see that. `guardian_tools` does not have this limit: the
+  governed tool is the only tool the agent has.
+- A call to a tool the hook was not given (a name the model made up, or a
+  tool another middleware adds later in the chain) is refused, and the model
+  is told it did not run.
+- A tool whose function is a generator function is refused at wrap time: a
+  LangChain tool returns its result, and a generator's body would run after
+  the call was recorded, or not at all.
+- A single-string `Tool` without an `args_schema` is refused at wrap time;
+  build it with `@tool` or `StructuredTool`. A single-input call (a `Tool`
+  with a one-field `args_schema`, or a string passed to a one-argument tool)
+  is proposed under that argument's name, for example `{"q": "abc"}`, so
+  `amount_args` and console rules see the name the model sees.
+- A tool that is already behind another `GuardianGate` is refused
+  (`TypeError` from `gate.tool`, a refusal message from the middleware and
+  the `ToolNode` hook): neither gate's decision is skipped. Give each gate
+  the original tool, or share one gate.
+- Tools with a JSON-schema `args_schema` (as MCP adapters build them) work;
+  a sync call of an async-only tool is refused before anything is proposed.
+- If Guardian allowed the call and the tool ran but redeeming the capability
+  failed, the model is told the tool ran and not to call it again.
+- The tool's own errors are the tool's: `ToolException`, `handle_tool_error`
+  and `ToolNode(handle_tool_errors=...)` work as without Guardian. The
+  governed tool copies the wrapped tool's `return_direct`, `response_format`,
+  callbacks, tags and metadata.
+- `file_args` (content pins) and watch mode are not available here; use
+  `Guard` directly for those.
+- Unlike `@odingard/guardian-langchain` (LangChain.js), which raises
+  `GuardianDenied` / `GuardianApprovalPending` by default and defaults to
+  `remote`, this integration answers the model with a message and defaults
+  to `in_process`, like the other Python integrations.
+- Not covered: tools the model provider runs itself (server-side tools), and
+  code that calls your function without going through the governed tool.
+- Tested with `langchain` 1.5.2, `langchain-core` 1.8.4 and `langgraph`
+  1.2.24: `create_agent`, hand-built graphs with `ToolNode`, `InMemorySaver`
+  and real interrupts, sync, async and streaming, with a scripted model and
+  a stand-in Guardian. Before relying on it, run one governed tool with your
+  model against your Guardian and check that an Ask waits for approval.
+  Example: [`examples/python/langchain_agent.py`](../../examples/python/langchain_agent.py).
 
 ## Microsoft Agent Framework: `odingard_guardian.agent_framework` (0.5.0)
 

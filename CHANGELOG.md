@@ -2,6 +2,18 @@
 
 ## Python odingard-guardian, unreleased
 
+### Added: LangChain and LangGraph
+
+- **`odingard_guardian.langchain`**: Guardian for Python LangChain 1.x and LangGraph, in three forms that share one `GuardianGate`.
+  - `guardian_tool(tool, client, connection_id=...)` / `guardian_tools(...)` put an existing `BaseTool` behind Guardian. The model sees the same name, description and argument schema. `invoke` and `ainvoke` decide on the arguments as the tool's schema validated them, and the wrapped tool then runs with exactly those (its `_run` / `_arun` is called directly, so they are not parsed twice). Arguments the framework fills in (graph state, store, tool runtime, tool call id) are not proposed; an argument the app injects (`InjectedToolArg`) is.
+  - `GuardianMiddleware` for `langchain.agents.create_agent(..., middleware=[...])` (`wrap_tool_call` / `awrap_tool_call`), and `GuardianGate.wrap_tool_call` / `awrap_tool_call` for LangGraph's `ToolNode(wrap_tool_call=...)`. They put each call's tool behind Guardian, so the decision is taken inside the tool invocation, after every other middleware. A call to a tool the hook was not given is refused.
+  - ALLOW runs the tool once and records it. DENY and an unreachable Guardian do not run it; the model gets Guardian's message in a `ToolMessage` with `status="error"` and the decision in `artifact["guardian"]`.
+  - ASK: with `on_ask="result"` (default) the model is told the call is held, and the same call after approval claims the approved request. With `on_ask="interrupt"` the graph pauses with LangGraph's `interrupt`, the Guardian `request_id` in the payload (the graph needs a checkpointer). Resuming claims the request: the tool runs once if a person approved it, and the graph pauses again if not. The resume value is never read as an approval. In a hand-built graph whose `ToolNode` runs several tool calls in one node, a held call pauses only while no governed call of that node has started to act (otherwise it answers as a held result), so resuming never runs a governed call a second time.
+  - Held requests are scoped per session: a held call is claimed only by the same call in the same LangGraph thread (`config["configurable"]["thread_id"]`, set by the application, not writable by the model), or in the scope `scope=callback(config)` returns. With no thread id and no `scope` nothing is remembered: the same call again is proposed as a new request, and with `on_ask="interrupt"` such a call does not pause the graph.
+  - `mode="remote"` (or `modes={...}` per tool): Guardian performs the call, the local tool body never runs, and the model gets Guardian's result with its receipt as JSON text. An error after Guardian was asked to make the call is reported as "may have performed it, do not call it again".
+  - A `GuardianClient` serves sync and async calls; an `AsyncGuardianClient` serves async calls and refuses a sync call before anything runs.
+  - Extra: `odingard-guardian[langchain]` (Python 3.11+; tested with `langchain` 1.5.2, `langchain-core` 1.8.4 and `langgraph` 1.2.24). Example: `examples/python/langchain_agent.py`.
+
 ### Added: governed tools for the OpenAI Agents SDK
 
 - **`odingard_guardian.openai_agents`**: `guardian_tool` and `create_guardian_tool` turn a function or an Agents SDK `FunctionTool` into a `FunctionTool` with the same name, description, parameter schema and settings whose every call is sent to Guardian before it runs, as `guardianTool` does in `@odingard/guardian-openai-agents`. ALLOW runs the tool once with the arguments Guardian decided on, then redeems the capability; DENY and an unreachable Guardian do not run it, and the model is told so; a tool that raises is not redeemed and keeps its own `failure_error_function`.
