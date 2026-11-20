@@ -431,7 +431,12 @@ tools = gate.tools([send_wire, lookup_order])
 | `"remote"`               | Guardian makes the call to a tool registered in the connection. The local tool body never runs; the model gets `{"guardian": {"decision": "ALLOW", "request_id": …, "receipt": …}}`. | Enforced: Guardian holds the credential and performs the call, so the action cannot happen without its decision. A receipt status other than `sent-verified` is reported to the model as "may have run, do not call it again", never as done.                              |
 
 In remote mode the LangChain tool supplies the name, description and schema
-the model sees; its function is not called.
+the model sees; its function is not called, and the model gets Guardian's
+result as JSON text. If something fails after Guardian was asked to make the
+call, the model is told Guardian may have performed it and not to call it
+again, never that it did not run. A `mode` other than `"in_process"` or
+`"remote"` raises a `ValueError`. What remote mode needs and does not
+support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 
 ### Arguments
 
@@ -470,6 +475,9 @@ the model sees; its function is not called.
 - A call to a tool the hook was not given (a name the model made up, or a
   tool another middleware adds later in the chain) is refused, and the model
   is told it did not run.
+- A tool whose function is a generator function is refused at wrap time: a
+  LangChain tool returns its result, and a generator's body would run after
+  the call was recorded, or not at all.
 - A single-string `Tool` without an `args_schema` is refused at wrap time;
   build it with `@tool` or `StructuredTool`. With an `args_schema`, its one
   argument is proposed as `{"input": value}`.
