@@ -127,6 +127,10 @@ export function withGuardian<T extends ToolSet>(
                     return execute(approved as never, callOptions as never);
                   },
                 ),
+                // So a setup step held by an earlier call is not taken for
+                // the tool. The scoped context shares the wrapper's held
+                // setup steps (only held tool calls are scoped).
+                scoped,
               );
             },
           }

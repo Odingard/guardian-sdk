@@ -242,6 +242,10 @@ function wrapWithContext(
             );
           },
         ),
+        // So a setup step held by an earlier call is not taken for the tool.
+        // The scoped context shares the wrapper's held setup steps (only
+        // held tool calls are scoped).
+        scoped,
       );
     },
   });

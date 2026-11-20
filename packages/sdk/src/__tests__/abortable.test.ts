@@ -319,6 +319,77 @@ describe("abortable", () => {
     expect(client.calls).toEqual(["request:mcp.install", "execute"]);
   });
 
+  it("a setup step held by an earlier call is not the tool starting either", async () => {
+    // Call 1 leaves mcp.install held (ASK). Call 2 claims and executes it,
+    // then is aborted while Guardian decides the tool call itself.
+    const controller = new AbortController();
+    const decision = deferred<GuardianRequestResult>();
+    let approved = false;
+    const client = stubClient({
+      request: async (input) => {
+        if (input.action === "mcp.install") {
+          return { ok: true, requestId: "req_setup", decision: "ASK" };
+        }
+        if (input.action === "mcp.enable") {
+          return { ok: false, reasonCode: "TOOL_ALREADY_ENABLED" } as never;
+        }
+        return decision.promise;
+      },
+      claim: async (requestId) =>
+        approved
+          ? { ok: true, requestId, decision: "ALLOW", capabilityToken: TOKEN }
+          : ({ ok: false, requestId, reasonCode: "APPROVAL_PENDING" } as never),
+    });
+    const ctx = createGuardianContext({
+      client,
+      connectionId: CONNECTION,
+      mode: "inProcess",
+      installRecordTransport: true,
+    });
+    let ran = 0;
+    const call = (signal: AbortSignal | undefined) =>
+      abortable(
+        client,
+        signal,
+        (gated, startTool) =>
+          runThroughGuardian(
+            gated === client
+              ? ctx
+              : { ...ctx, options: { ...ctx.options, client: gated } },
+            "send_email",
+            { to: "a@example.test" },
+            () => {
+              startTool();
+              ran += 1;
+            },
+          ),
+        ctx,
+      );
+    await expect(call(undefined)).rejects.toBeInstanceOf(
+      GuardianApprovalPending,
+    );
+    approved = true;
+    const second = call(controller.signal);
+    const settled = second.then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    while (!client.calls.includes("request:tool.invoke")) await tick();
+    controller.abort(new Error("cancelled while deciding"));
+    expect(await settled).toBe("cancelled while deciding");
+    decision.resolve({
+      ok: true,
+      requestId: "req_tool",
+      decision: "ALLOW",
+      capabilityToken: TOKEN,
+    });
+    await tick();
+    await tick();
+    expect(ran).toBe(0);
+    // Only the setup step was executed; the tool call was never redeemed.
+    expect(client.calls.filter((c) => c === "execute")).toHaveLength(1);
+  });
+
   it("after the call settled, a later resume() is not refused by the old abort", async () => {
     const controller = new AbortController();
     const client = stubClient({
