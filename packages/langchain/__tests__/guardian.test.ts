@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { GuardianClient } from "@odingard/guardian-sdk";
+import { SCOPE_UNKNOWN, type GuardianClient } from "@odingard/guardian-sdk";
 import {
   GuardianApprovalPending,
   GuardianDenied,
@@ -721,4 +721,62 @@ describe("guardianTool abort after a setup step held by an earlier call", () => 
     expect(run).not.toHaveBeenCalled();
     expect(guardian.execute).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("guardianTool abort after a held setup step, with scoped held requests", () => {
+  // Held setup steps are not scoped (they register the tool and run no
+  // call), so the gate must still tell them from the tool call in a scope.
+  const cases: [string, object, string, string][] = [
+    ["the same LangGraph thread", {}, "alice", "alice"],
+    ["another LangGraph thread", {}, "alice", "bob"],
+    ["an unknown scope", { scope: () => SCOPE_UNKNOWN }, "alice", "alice"],
+  ];
+  for (const [name, extra, first, second] of cases) {
+    it(`${name}: an abort while Guardian decides the tool call rejects, and a late ALLOW runs nothing`, async () => {
+      const guardian = heldSetupGuardian();
+      const run = vi.fn();
+      const wrapped = guardianTool(
+        tool(async () => run() as never, {
+          name: "send_email",
+          description: "Send an email",
+          schema: z.object({}),
+        }),
+        {
+          client: guardian.client,
+          connectionId: "con_1",
+          mode: "inProcess",
+          installRecordTransport: true,
+          ...extra,
+        },
+      );
+      const thread = (id: string) => ({ configurable: { thread_id: id } });
+      await expect(wrapped.invoke({}, thread(first))).rejects.toBeInstanceOf(
+        GuardianApprovalPending,
+      );
+      guardian.approve();
+      const controller = new AbortController();
+      const call = wrapped
+        .invoke({}, { ...thread(second), signal: controller.signal })
+        .then(
+          () => "resolved",
+          (error: Error) => error.message,
+        );
+      await vi.waitFor(() =>
+        expect(guardian.request).toHaveBeenCalledWith(
+          expect.objectContaining({ action: "tool.invoke" }),
+        ),
+      );
+      controller.abort(new Error("cancelled by caller"));
+      expect(await call).toBe("cancelled by caller");
+      guardian.decide({
+        ok: true,
+        requestId: "req_tool",
+        decision: "ALLOW",
+        capabilityToken: "cap_2",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(run).not.toHaveBeenCalled();
+      expect(guardian.execute).toHaveBeenCalledTimes(1); // the setup step only
+    });
+  }
 });

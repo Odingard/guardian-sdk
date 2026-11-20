@@ -55,8 +55,10 @@ from ._framework import (
     ToolNames,
     build_guard,
     decide_and_run,
+    ScopeOption,
     is_stream_function,
     json_record,
+    resolve_scope,
     resolve_tool_name,
 )
 from .client import AsyncGuardianClient
@@ -83,6 +85,14 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         process after ALLOW. ``"remote"``: Guardian performs the call itself
         and the tool's own function never runs; the model gets Guardian's
         result. ``modes`` sets it per Guardian tool name.
+    :param scope: ``callback(context)`` returning the scope of a call: the
+        session it belongs to, any hashable value. Read it from something
+        your app sets (the session, a ``contextvars.ContextVar``), never
+        from ``context.arguments``, which the model writes. A held call is
+        claimed only by the same call in the same scope. Default: the id of the
+        ``AgentSession`` the agent runs with (``agent.run(..., session=...)``).
+        Without a session and without this option, a held call is never
+        claimed by a later call: each call asks for its own approval.
     :param on_ask: ``"result"`` (default) tells the model the call is held;
         ``"stop"`` also stops the agent run.
     :param on_deny: ``"result"`` (default) tells the model the call was
@@ -109,6 +119,7 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
         mode: Mode = "in_process",
         modes: Optional[Mapping[str, Mode]] = None,
+        scope: ScopeOption = None,
     ) -> None:
         if on_ask not in ("result", "stop") or on_deny not in ("result", "stop"):
             raise ValueError('on_ask and on_deny take "result" or "stop"')
@@ -125,6 +136,7 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
             modes=modes,
         )
         self._tool_names = tool_names
+        self._scope = scope
         self._on_ask = on_ask
         self._on_deny = on_deny
         self._on_approval_pending = on_approval_pending
@@ -165,7 +177,10 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
                 tool_call_id=context.metadata.get("call_id"),
             )
 
-        outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool)
+        # A held call is claimed only by the same call in the same session.
+        session_id = getattr(getattr(context, "session", None), "session_id", None)
+        scope = resolve_scope(self._scope, context, session_id)
+        outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool, scope=scope)
         if outcome.message is None:
             return  # ALLOW: the tool ran and Guardian recorded it
         # A refusal, a call that could not be confirmed, or (remote mode)
