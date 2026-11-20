@@ -58,6 +58,7 @@ Commands below run from `examples/`.
 | Example                                              | What it shows                                               | Run                              |
 | ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------- |
 | [`python/invoice_agent.py`](python/invoice_agent.py) | the invoice agent in Python (pip install odingard-guardian) | `python python/invoice_agent.py` |
+| [`python/openai_agents_agent.py`](python/openai_agents_agent.py) | an OpenAI Agents SDK agent with governed tools: ALLOW, ASK as a paused run, DENY (scripted model, no API key; `pip install "odingard-guardian[openai-agents]"`) | `python python/openai_agents_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).
