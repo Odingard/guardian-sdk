@@ -58,6 +58,7 @@ Commands below run from `examples/`.
 | Example                                              | What it shows                                               | Run                              |
 | ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------- |
 | [`python/invoice_agent.py`](python/invoice_agent.py) | the invoice agent in Python (pip install odingard-guardian) | `python python/invoice_agent.py` |
+| [`python/crewai_agent.py`](python/crewai_agent.py) | a crewAI agent with governed tools: ALLOW, ASK then approved, DENY (scripted model; pip install "odingard-guardian[crewai]") | `python python/crewai_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).
