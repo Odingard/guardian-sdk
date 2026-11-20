@@ -89,6 +89,9 @@ export function withGuardian<T extends ToolSet>(
                     return execute(approved as never, callOptions as never);
                   },
                 ),
+                // So a setup step held by an earlier call is not taken for
+                // the tool.
+                ctx,
               ),
           }
         : definition;
