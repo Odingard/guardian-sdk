@@ -42,6 +42,11 @@ plugins that should see or repair the call before Guardian's in the list.
 ``after_tool_callback`` and ``on_tool_error_callback`` of every plugin and
 agent still run.
 
+A generator function tool runs to its end inside ``tool.run_async`` in a run
+that is not live, so it is recorded after it ended. In a live run
+(``Runner.run_live``), or with an ``input_stream`` parameter, ADK starts the
+stream in the background; such a call is refused before anything is proposed.
+
 To govern one agent only, pass :meth:`GuardianPlugin.agent_before_tool_callback`
 as that agent's ``before_tool_callback`` instead of registering the plugin.
 """
@@ -57,7 +62,14 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
-from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
+from ._framework import (
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    is_stream_function,
+    json_record,
+    resolve_tool_name,
+)
 from .client import AsyncGuardianClient
 from .guard import GuardianExecutionFailed, Mode
 
@@ -188,6 +200,14 @@ class GuardianPlugin(BasePlugin):
             )
         if held_locally is not None:
             return held_locally
+        in_process = self._guard._opts.mode_for(tool_name) != "remote"
+        if in_process and _unconsumed_stream_tool(tool, tool_context):
+            return _refusal(
+                tool_name,
+                f"{tool_name} did not run: it is a streaming tool that ADK starts and consumes outside "
+                "the tool step in a live run, so Guardian cannot record it after it ran. Nothing was proposed.",
+                "STREAMING_NOT_GOVERNED",
+            )
         try:
             proposed = json_record(tool_args)
             decided = copy.deepcopy(tool_args)
@@ -206,16 +226,33 @@ class GuardianPlugin(BasePlugin):
             # Run the tool here, not by returning None: callbacks after this
             # one could otherwise change the arguments after the decision.
             try:
-                ran["result"] = await tool.run_async(args=copy.deepcopy(decided), tool_context=tool_context)
+                result = await tool.run_async(args=copy.deepcopy(decided), tool_context=tool_context)
             except Exception as error:
                 ran["error"] = error
                 raise
+            if inspect.isgenerator(result) or inspect.isasyncgen(result):
+                if is_stream_function(getattr(tool, "func", None)):
+                    # A generator tool handed back its stream unconsumed: none
+                    # of its body ran. Raising here keeps the capability unredeemed.
+                    closing = result.aclose() if inspect.isasyncgen(result) else result.close()
+                    if inspect.isawaitable(closing):
+                        await closing
+                    ran["error"] = _StreamNotConsumed(tool_name)
+                    raise ran["error"]
+            ran["result"] = result
 
         try:
             outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool)
         except Exception as error:
             if ran.get("error") is not error:
                 raise
+            if isinstance(error, _StreamNotConsumed):
+                return _refusal(
+                    tool_name,
+                    f"{tool_name} did not run: it returned a stream that ADK did not consume in the tool "
+                    "step. Guardian allowed the call, but nothing ran and nothing was recorded.",
+                    "STREAMING_NOT_GOVERNED",
+                )
             # The tool raised: nothing is redeemed. ADK's error callbacks see
             # the error as they would for a tool ADK ran itself.
             answer = await _on_tool_error(tool, tool_args, tool_context, error)
@@ -224,12 +261,11 @@ class GuardianPlugin(BasePlugin):
             return answer
 
         if outcome.message is None:
-            if outcome.ran:
-                return _tool_answer(tool, ran.get("result"))
-            # Remote mode: Guardian performed the call. The model gets its record.
-            return outcome.result if outcome.result is not None else {"guardian": {"decision": "ALLOW"}}
-
+            return _tool_answer(tool, ran.get("result"))  # ALLOW: the tool ran and Guardian recorded it
         info = dict((outcome.result or {}).get("guardian") or {})
+        if outcome.decision == "ALLOW" and not outcome.ran and outcome.result is not None and "message" not in info:
+            # Remote mode: Guardian performed the call. The model gets its record.
+            return outcome.result
         info.setdefault("decision", outcome.decision)
         info.setdefault("tool_name", tool_name)
         if outcome.reason_code:
@@ -290,6 +326,32 @@ class GuardianPlugin(BasePlugin):
             tool_context.actions.skip_summarization = True
             return {"error": _CONFIRMATION_REQUIRED}
         return None
+
+
+class _StreamNotConsumed(Exception):
+    """A generator tool's ``run_async`` returned its stream instead of running it."""
+
+
+def _unconsumed_stream_tool(tool: BaseTool, tool_context: ToolContext) -> bool:
+    """Whether ``tool`` is a generator function tool that ADK would not consume inside ``run_async``.
+
+    In a run that is not live, ADK runs a generator function tool to its
+    end inside ``run_async``. In a live run (``Runner.run_live``), and for a
+    tool with an ``input_stream`` parameter, ADK starts the stream as a
+    background task instead.
+    """
+    func = getattr(tool, "func", None)
+    if not (is_stream_function(func) or is_stream_function(getattr(func, "__call__", None))):
+        return False
+    try:
+        if "input_stream" in inspect.signature(func).parameters:
+            return True
+    except (TypeError, ValueError):
+        return True  # a signature that cannot be read: refuse rather than guess
+    try:
+        return tool_context.get_invocation_context().live_request_queue is not None
+    except Exception:  # noqa: BLE001 - a run that cannot be told from a live one: refuse
+        return True
 
 
 def _tool_answer(tool: BaseTool, result: Any) -> Any:

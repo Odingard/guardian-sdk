@@ -488,6 +488,11 @@ async def test_a_long_running_tool_is_decided_before_it_starts():
     assert ran == []
 
 
+# ADK's AgentTool itself hands the plugins on through Runner's deprecated argument.
+_agent_tool_warning = pytest.mark.filterwarnings("ignore:The `plugins` argument is deprecated:DeprecationWarning")
+
+
+@_agent_tool_warning
 async def test_a_sub_agents_tools_are_governed_through_an_agent_tool():
     guardian = FakeClient(ALLOW)
     inner = LlmAgent(name="refunder", model=scripted(CALL), tools=[refund_order])
@@ -500,6 +505,7 @@ async def test_a_sub_agents_tools_are_governed_through_an_agent_tool():
     assert model.results() == [{"result": "done"}]
 
 
+@_agent_tool_warning
 async def test_a_sub_agents_denied_tool_does_not_run():
     class ByTool(FakeClient):
         def request(self, invocation):
@@ -791,3 +797,127 @@ async def test_remote_mode_a_refused_execution_is_not_reported_as_done():
     model = await run([CALL], plugin(Refusing(ALLOW), mode="remote"))
     assert ran == []
     assert model.results()[0]["guardian"]["reason_code"] == "CAPABILITY_REVOKED"
+
+
+async def test_remote_mode_an_error_after_guardian_performed_the_call_is_not_reported_as_not_run():
+    def on_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store down")
+
+    guardian = FakeClient(ALLOW)
+    model = await run([CALL], plugin(guardian, mode="remote", on_receipt=on_receipt))
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]  # Guardian performed it
+    result = model.results()[0]
+    assert result["guardian"]["reason_code"] == "EXECUTION_OUTCOME_UNKNOWN"
+    assert "may have performed it" in text_of(result) and "Do not call it again" in text_of(result)
+    assert "did not run" not in text_of(result)
+
+
+def test_a_mistyped_mode_is_refused():
+    with pytest.raises(ValueError, match="mode"):
+        plugin(FakeClient(ALLOW), mode="Remote")
+    with pytest.raises(ValueError, match="mode"):
+        plugin(FakeClient(ALLOW), modes={"refund_order": "enforced"})
+
+
+# --- generator (streaming) function tools ---------------------------------------
+
+
+class Ordered(FakeClient):
+    """Notes in ``ran`` when the capability is redeemed."""
+
+    def execute(self, *, request_id, capability_token):
+        ran.append("redeemed")
+        return super().execute(request_id=request_id, capability_token=capability_token)
+
+
+async def export_rows(table: str):
+    """Export a table."""
+    ran.append(("exported", table))
+    yield {"rows": 3}
+
+
+def export_rows_sync(table: str):
+    """Export a table."""
+    ran.append(("exported", table))
+    yield {"rows": 3}
+
+
+@pytest.mark.parametrize("tool", [export_rows, export_rows_sync])
+async def test_a_generator_tool_is_consumed_before_the_capability_is_redeemed(tool):
+    guardian = Ordered(ALLOW)
+    model = await run([(tool.__name__, {"table": "invoices"})], plugin(guardian), tools=(tool,))
+    # ADK runs the generator to its end inside the tool step of a run that is not live.
+    assert ran == [("exported", "invoices"), "redeemed"]
+    assert model.results() == [{"rows": 3}]
+
+
+async def test_a_denied_generator_tool_never_starts():
+    guardian = FakeClient(DENIED)
+    await run([("export_rows", {"table": "invoices"})], plugin(guardian), tools=(export_rows,))
+    assert ran == []
+
+
+class Live(BasePlugin):
+    """Marks the invocation as a live one, as ``Runner.run_live`` does."""
+
+    def __init__(self):
+        super().__init__(name="live")
+
+    async def before_tool_callback(self, *, tool, tool_args, tool_context):
+        from google.adk.agents.live_request_queue import LiveRequestQueue
+
+        tool_context._invocation_context.live_request_queue = LiveRequestQueue()
+
+
+async def test_a_generator_tool_in_a_live_run_is_refused_before_anything_is_proposed():
+    guardian = FakeClient(ALLOW)
+    model = await run([("export_rows", {"table": "invoices"})], Live(), plugin(guardian), tools=(export_rows,))
+    assert ran == [] and guardian.calls == []
+    result = model.results()[0]
+    assert result["guardian"]["reason_code"] == "STREAMING_NOT_GOVERNED"
+    assert "did not run" in text_of(result)
+
+
+async def test_a_plain_tool_in_a_live_marked_run_is_still_governed():
+    guardian = FakeClient(ALLOW)
+    await run([CALL], Live(), plugin(guardian))
+    assert ran == [("o42", 500)]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+
+
+async def test_an_input_streaming_tool_is_refused():
+    async def watch(order_id: str, input_stream=None):
+        """Watch an order."""
+        ran.append(("watch", order_id))
+        yield {"seen": order_id}
+
+    guardian = FakeClient(ALLOW)
+    model = await run([("watch", {"order_id": "o42"})], plugin(guardian), tools=(watch,))
+    assert ran == [] and guardian.calls == []
+    assert model.results()[0]["guardian"]["reason_code"] == "STREAMING_NOT_GOVERNED"
+
+
+async def test_a_generator_tool_in_remote_mode_is_performed_by_guardian():
+    guardian = FakeClient(ALLOW)
+    model = await run(
+        [("export_rows", {"table": "invoices"})], Live(), plugin(guardian, mode="remote"), tools=(export_rows,)
+    )
+    assert ran == []
+    assert model.results()[0]["guardian"]["receipt"]["requestId"] == "req_allow"
+
+
+async def test_a_generator_tool_whose_stream_comes_back_unconsumed_is_not_recorded():
+    class Lazy(FunctionTool):
+        """Hands its stream back instead of running it, as ADK does in a live run."""
+
+        async def run_async(self, *, args, tool_context):
+            return self.func(**args)
+
+    guardian = FakeClient(ALLOW)
+    model = await run([("export_rows", {"table": "invoices"})], plugin(guardian), tools=(Lazy(export_rows),))
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke"]  # allowed, never redeemed
+    result = model.results()[0]
+    assert result["guardian"]["reason_code"] == "STREAMING_NOT_GOVERNED"
+    assert "nothing ran and nothing was recorded" in text_of(result)
