@@ -734,6 +734,62 @@ describe('guardianTool onAsk: "suspend"', () => {
     }
   });
 
+  it("the arguments kept for a suspended call are not used by a resume in another thread", async () => {
+    let generated = 0;
+    let seq = 0;
+    const request = vi.fn(async () => ({
+      ok: true,
+      decision: "ASK",
+      requestId: `req_${++seq}`,
+    }));
+    const claim = vi.fn();
+    const wrapped = guardianTool(
+      createTool({
+        id: "refund_order",
+        description: "Refund an order",
+        inputSchema: z.object({
+          orderId: z.string(),
+          reference: z.string().default(() => `ref_${++generated}`),
+        }),
+        execute: async () => ({ refunded: "o" }),
+      }),
+      {
+        client: stubClient({ request: request as never, claim }),
+        connectionId: "con_1",
+        mode: "inProcess",
+        onAsk: "suspend",
+      },
+    );
+    const suspend = vi.fn().mockResolvedValue(undefined);
+    // Thread A's call is suspended: req_1.
+    await call(
+      wrapped,
+      { orderId: "o", reference: "first" },
+      { runId: "run_1", agent: { toolCallId: "call_1", threadId: "a", suspend } },
+    );
+    // A resume that names the same run, tool call and request, in thread B.
+    await call(
+      wrapped,
+      { orderId: "o" },
+      {
+        runId: "run_1",
+        agent: {
+          toolCallId: "call_1",
+          threadId: "b",
+          suspend,
+          resumeData: {},
+          suspendPayload: { guardian: { requestId: "req_1" } },
+        },
+      },
+    );
+    expect(claim).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(
+      (request.mock.calls[1] as unknown as [{ arguments: unknown }])[0]
+        .arguments,
+    ).toEqual({ orderId: "o", reference: "ref_1" });
+  });
+
   it("refuses a tool that declares its own suspend or resume schema", () => {
     const inner = createTool({
       id: "ask_user",

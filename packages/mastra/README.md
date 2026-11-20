@@ -20,7 +20,8 @@ npm install @odingard/guardian-mastra @odingard/guardian-sdk @mastra/core
 
 `@mastra/core` (`>=1.83.0 <2.0.0`) and `@odingard/guardian-sdk` are peer
 dependencies. The package needs the `@odingard/guardian-sdk` release that
-adds `abortable`; with an earlier SDK it fails to load. Tested with `@mastra/core` 1.83.0, 1.84.0 and 1.85.0; the
+adds `abortable` and `scopeHeldRequests`; with an earlier SDK it fails to
+load. Tested with `@mastra/core` 1.83.0, 1.84.0 and 1.85.0; the
 repository's tests run against 1.85.0.
 
 ## Usage
@@ -194,6 +195,39 @@ the wrapped tool and runs before `execute`, as it does without Guardian. It
 does not stand in for Guardian's decision: after a local approval the wrapper
 still asks Guardian, and the tool does not run on `ASK` or `DENY`.
 
+### Held requests are scoped per session
+
+The wrapped tools remember each call held for approval, by connection, tool
+id and arguments, so that the same call made again claims the held request.
+One agent usually serves many conversations, so a held call is claimed only
+in its own scope:
+
+- **Default: the run's Mastra thread and resource.** When the run has them
+  (`agent.generate(prompt, { memory: { thread, resource } })`, which the
+  tool sees as `context.agent.threadId` and `context.agent.resourceId`),
+  both together are the scope. The same call in another thread, or in the
+  same thread id under another resource, proposes its own request and never
+  claims this one. An id that is present but is not a non-empty string is an
+  unknown session (see below).
+- `scope: (context) => string` names the scope yourself, for example a
+  tenant from the request context:
+  `scope: (context) => context?.requestContext?.get("tenantId")`. It
+  replaces the default: with `scope` set, thread and resource are not used.
+- `scope` returns a non-empty string. Anything else means the session is not
+  known, and a held call is then never claimed by a later call:
+  `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`), `undefined`, `null`, an
+  empty string, any other value, or the function throwing.
+- **Without a thread or resource and without `scope`, held calls are
+  shared** by every call of the wrapped tools: they must then serve one
+  principal (one user, one conversation).
+- The scope comes from the context Mastra builds for the tool from what your
+  application passes to the run. **It is never read from the tool call's
+  arguments**, which the model writes; don't read it from them in a `scope`
+  function either.
+- The scope stays in this process; it is not sent to Guardian. The arguments
+  kept for a call suspended with `onAsk: "suspend"` are kept under the same
+  scope, and nothing is kept for a call whose session is not known.
+
 ### Arguments
 
 - In an agent or workflow run, Mastra parses the model's arguments with the
@@ -278,7 +312,7 @@ The wrapper passes it to the SDK unchanged. See the
 Options: `client`, `connectionId`, `adapterId?`, `agentName?`, `mode?`,
 `modes?`, `installRecordTransport?`, `purpose?` (string or
 `(toolName, input) => string`), `onAsk?` (`"throw"`, `"result"` or
-`"suspend"`), `onDeny?`, `onReceipt?` (called with
+`"suspend"`), `onDeny?`, `scope?`, `onReceipt?` (called with
 `{ toolName, requestId, receipt }` after each `ALLOW`), `fileArgs?`,
 `amountArgs?`.
 

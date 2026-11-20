@@ -4,7 +4,13 @@ import {
   validateToolInput,
   type Tool,
 } from "@mastra/core/tools";
-import { abortable } from "@odingard/guardian-sdk";
+import {
+  abortable,
+  resolveHeldScope,
+  scopeHeldRequests,
+  SCOPE_UNKNOWN,
+  type HeldScope,
+} from "@odingard/guardian-sdk";
 
 import {
   createGuardianContext,
@@ -33,6 +39,31 @@ export {
  */
 export type GuardianMastraOptions = Omit<GuardianAdapterOptions, "onAsk"> & {
   onAsk?: GuardianMode | "suspend";
+  /**
+   * Held requests are scoped per session. The scope of one call: the
+   * conversation or user it belongs to, from the context Mastra passes the
+   * tool's `execute`. That context is the caller's (your agent run), not
+   * part of the model's tool call; never read the scope from the tool's
+   * input. A held call is claimed only by the same call in the same scope;
+   * an identical call in another scope is its own request.
+   *
+   * Without this option the scope is the run's Mastra thread and resource
+   * (`memory: { thread, resource }` on `generate` / `stream`, which the
+   * tool sees as `context.agent.threadId` and `context.agent.resourceId`).
+   * Only when the run has neither are held calls shared by every call of
+   * the wrapped tools, which must then serve one principal. An id that is
+   * present but is not a non-empty string is an unknown session, as below.
+   *
+   * With this option, it alone names the scope (thread and resource are
+   * not used). Return a non-empty string. Anything else means the session
+   * is not known, and a held call is then never claimed by a later call:
+   * `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`), `undefined`, `null`,
+   * an empty string, any other value, or the function throwing. The scope
+   * stays in this process.
+   */
+  scope?: (
+    context: unknown,
+  ) => string | typeof SCOPE_UNKNOWN | null | undefined;
 };
 
 /** What a run suspended by `onAsk: "suspend"` carries as its suspend payload. */
@@ -52,6 +83,8 @@ export type MastraTool = Tool<any, any, any, any, any, any, any>;
 type ToolContext = {
   abortSignal?: AbortSignal;
   runId?: unknown;
+  threadId?: unknown;
+  resourceId?: unknown;
   suspend?: Suspend;
   resumeData?: unknown;
   suspendPayload?: unknown;
@@ -60,6 +93,8 @@ type ToolContext = {
     resumeData?: unknown;
     suspendPayload?: unknown;
     toolCallId?: unknown;
+    threadId?: unknown;
+    resourceId?: unknown;
   };
   workflow?: { suspend?: Suspend; resumeData?: unknown };
 };
@@ -87,6 +122,32 @@ function isResuming(context: ToolContext | undefined): boolean {
 }
 
 /**
+ * The default scope of a call: the Mastra thread and resource of its run.
+ * The application sets them (`memory: { thread, resource }`); Mastra puts
+ * them in the context it builds for the tool (`context.agent` in an agent
+ * run, the top level otherwise), which the model's tool call cannot write.
+ * A thread belongs to a resource, so both are part of the scope. Without
+ * either, held calls are shared. An id that is present but names nothing
+ * (an empty string, a non-string) is an unknown session.
+ */
+function threadScope(context: ToolContext | undefined): HeldScope {
+  const threadId = context?.agent?.threadId ?? context?.threadId;
+  const resourceId = context?.agent?.resourceId ?? context?.resourceId;
+  const absent = (id: unknown) => id === undefined || id === null;
+  if (absent(threadId) && absent(resourceId)) {
+    return undefined;
+  }
+  const named = (id: unknown) => typeof id === "string" && id.length > 0;
+  if (
+    (!absent(threadId) && !named(threadId)) ||
+    (!absent(resourceId) && !named(resourceId))
+  ) {
+    return SCOPE_UNKNOWN;
+  }
+  return JSON.stringify([resourceId ?? null, threadId ?? null]);
+}
+
+/**
  * How long the arguments of a suspended call are kept for its resume. A
  * request Guardian holds stays open for at most 5 minutes
  * (`GUARDIAN_MAX_REQUEST_TTL_MS`), so a run resumed a day later has no held
@@ -95,17 +156,24 @@ function isResuming(context: ToolContext | undefined): boolean {
 const SUSPENDED_KEPT_MS = 24 * 60 * 60 * 1000;
 
 /**
- * One suspended tool call of one agent run. Mastra gives both ids to the
- * first call and to the resumed one; without them nothing is remembered.
+ * One suspended tool call of one agent run, in its scope. Mastra gives both
+ * ids to the first call and to the resumed one; without them, and for a
+ * call whose session is not known, nothing is remembered.
  */
-function suspensionKey(context: ToolContext | undefined): string | undefined {
+function suspensionKey(
+  context: ToolContext | undefined,
+  scope: HeldScope,
+): string | undefined {
+  if (scope === SCOPE_UNKNOWN) {
+    return undefined;
+  }
   const runId = context?.runId;
   const toolCallId = context?.agent?.toolCallId;
   return typeof runId === "string" &&
     runId.length > 0 &&
     typeof toolCallId === "string" &&
     toolCallId.length > 0
-    ? JSON.stringify([runId, toolCallId])
+    ? JSON.stringify([scope ?? null, runId, toolCallId])
     : undefined;
 }
 
@@ -140,8 +208,10 @@ function isGuardianResult(value: unknown, toolName: string): boolean {
 function wrapWithContext<T extends MastraTool>(
   inner: T,
   ctx: GuardianContext,
-  onAsk: GuardianMastraOptions["onAsk"],
+  options: GuardianMastraOptions,
 ): T {
+  const onAsk = options.onAsk;
+  const readScope = options.scope;
   const source = inner as unknown as {
     id?: unknown;
     execute?: Execute;
@@ -236,8 +306,18 @@ function wrapWithContext<T extends MastraTool>(
     if (refusedContext !== undefined) {
       return refusedContext;
     }
+    // Held requests are scoped per session: this call sees only the held
+    // calls of its own scope. The app's `scope` option replaces the
+    // thread-and-resource default, and whatever it gives that is not a
+    // session is an unknown one; only without the option, and without a
+    // thread or resource, are held calls shared as before.
+    const scope: HeldScope =
+      readScope === undefined
+        ? threadScope(toolContext)
+        : resolveHeldScope(() => readScope(context));
+    const scoped = scopeHeldRequests(ctx, scope);
     let input = received;
-    const key = suspensionKey(toolContext);
+    const key = suspensionKey(toolContext, scope);
     if (isResuming(toolContext)) {
       const kept = key === undefined ? undefined : suspended.get(key);
       if (
@@ -281,8 +361,8 @@ function wrapWithContext<T extends MastraTool>(
         (client, startTool) =>
           runThroughGuardian(
             client === ctx.options.client
-              ? ctx
-              : { ...ctx, options: { ...ctx.options, client } },
+              ? scoped
+              : { ...scoped, options: { ...scoped.options, client } },
             toolName,
             input,
             async (approved) => {
@@ -316,7 +396,9 @@ function wrapWithContext<T extends MastraTool>(
             },
           ),
         // So a setup step held by an earlier call is not taken for the tool.
-        ctx,
+        // The scoped context shares the wrapper's held setup steps (only
+        // held tool calls are scoped).
+        scoped,
       );
     } catch (err) {
       if (err instanceof InputRefusedByTool) {
@@ -368,7 +450,7 @@ function wrapWithContext<T extends MastraTool>(
 }
 
 function contextFor(options: GuardianMastraOptions): GuardianContext {
-  const { onAsk, ...rest } = options;
+  const { onAsk, scope: _scope, ...rest } = options;
   return createGuardianContext({
     ...rest,
     ...(onAsk === undefined
@@ -415,7 +497,7 @@ export function guardianTool<T extends MastraTool>(
   tool: T,
   options: GuardianMastraOptions,
 ): T {
-  return wrapWithContext(tool, contextFor(options), options.onAsk);
+  return wrapWithContext(tool, contextFor(options), options);
 }
 
 /**
@@ -432,7 +514,7 @@ export function guardianTools<T extends Record<string, MastraTool>>(
   const ctx = contextFor(options);
   const wrapped: Record<string, MastraTool> = {};
   for (const [key, tool] of Object.entries(tools)) {
-    wrapped[key] = wrapWithContext(tool, ctx, options.onAsk);
+    wrapped[key] = wrapWithContext(tool, ctx, options);
   }
   return wrapped as T;
 }
