@@ -13,6 +13,7 @@ af = pytest.importorskip("agent_framework")
 
 from agent_framework import (  # noqa: E402
     Agent,
+    AgentSession,
     BaseChatClient,
     ChatMiddlewareLayer,
     ChatResponse,
@@ -83,7 +84,8 @@ def middleware(guardian, **options):
 async def run(calls, guardian_middleware, *extra, tools=(refund_order,)):
     model = ScriptedModel(calls)
     agent = Agent(client=model, tools=list(tools), middleware=[*extra, guardian_middleware])
-    response = await agent.run("refund order 42")
+    # One session per run, as an app has: held calls are scoped to it.
+    response = await agent.run("refund order 42", session=AgentSession())
     return model, response
 
 
@@ -383,3 +385,89 @@ def test_a_mistyped_mode_is_refused():
         middleware(FakeClient(ALLOW), mode="Remote")
     with pytest.raises(ValueError, match="in_process"):
         middleware(FakeClient(ALLOW), modes={"refund_order": "inProcess"})
+
+
+# --- held requests are scoped per session -----------------------------------------
+
+
+class TwoRequests(FakeClient):
+    """Holds every request under its own id and approves each one on claim."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.count = 0
+
+    def request(self, invocation):
+        self.count += 1
+        self.calls.append(f"request:{invocation['action']}")
+        return RequestResult(ok=False, request_id=f"req_{self.count}", reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+
+
+async def run_in(agent_model, guardian_middleware, session):
+    model = ScriptedModel([CALL])
+    agent = Agent(client=model, tools=[refund_order], middleware=[guardian_middleware])
+    await agent.run("refund order 42", session=session)
+    return model.results()[-1], agent  # a session carries earlier results too
+
+
+async def test_a_held_request_is_claimed_only_by_the_same_session():
+    guardian = TwoRequests()
+    shared = middleware(guardian)  # one middleware instance for every user
+    alice, bob = AgentSession(), AgentSession()
+
+    held, _ = await run_in(None, shared, alice)
+    assert "request_id req_1" in held
+    # Another session makes the identical call: it is its own request.
+    other, _ = await run_in(None, shared, bob)
+    assert "request_id req_2" in other
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+    # The first session's repeat call claims its own approved request, once.
+    again, _ = await run_in(None, shared, alice)
+    assert again == "refunded o42"
+    assert guardian.calls[2:] == ["claim:req_1", "execute:req_1"]
+    assert ran == [("o42", 500)]
+
+
+async def test_without_a_session_a_held_request_is_never_claimed_by_a_later_call():
+    guardian = TwoRequests()
+    shared = middleware(guardian)
+    first, _ = await run_in(None, shared, None)
+    second, _ = await run_in(None, shared, None)
+    assert "request_id req_1" in first and "request_id req_2" in second
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_scope_option_overrides_the_session():
+    guardian = TwoRequests()
+    users = iter(["alice", "bob", "alice"])
+    shared = middleware(guardian, scope=lambda context: next(users))
+    await run_in(None, shared, None)
+    other, _ = await run_in(None, shared, None)
+    assert "request_id req_2" in other
+    again, _ = await run_in(None, shared, None)
+    assert again == "refunded o42"
+    assert guardian.calls == [
+        "request:tool.invoke",
+        "request:tool.invoke",
+        "claim:req_1",
+        "execute:req_1",
+    ]
+
+
+async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
+    def broken(context):
+        raise RuntimeError("no user")
+
+    for scope in (broken, lambda context: None):
+        guardian = TwoRequests()
+        shared = middleware(guardian, scope=scope)
+        await run_in(None, shared, AgentSession())
+        await run_in(None, shared, AgentSession())
+        assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]

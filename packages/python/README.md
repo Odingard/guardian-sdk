@@ -249,6 +249,29 @@ from `on_deny`, and pass `on_execution_error=callback(error)` to see every
 such `GuardianExecutionFailed` in your app (for example to open an incident),
 in either mode.
 
+### Held requests are scoped per session (unreleased)
+
+With `on_ask="result"` the `Guard` remembers a held request, so that the same call made again after approval claims it. It is remembered by connection, tool name and arguments. When one `Guard` serves several users or conversations, say which session each call belongs to, so that a held request is claimed only by the same call in the same session:
+
+```python
+import contextvars
+
+session = contextvars.ContextVar("session")   # your app sets it per request
+guard = Guard(client, connection_id=..., on_ask="result", on_deny="result", scope=session.get)
+
+# or for one call:
+guard.run("refund_order", {"order_id": "o42"}, do_refund, scope=user_id)
+```
+
+- A scope is any hashable value (a user id, a conversation id, a tuple). It is part of an in-memory key only and is not sent to Guardian.
+- A request held under one scope is claimed only by the same call under the same scope. An identical call under another scope is proposed as its own request and needs its own approval.
+- **Without a scope, one `Guard` must serve one principal** (one user, one conversation): an identical call from anywhere claims the held request. This is the behaviour of earlier versions.
+- `SCOPE_UNKNOWN` (from `odingard_guardian`) is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. The result then says that calling again asks for a new approval.
+- A `scope` function that raises, or a scope that cannot be hashed, raises before anything is proposed.
+- With `on_ask="raise"` nothing is remembered: `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
+
+The Agent Framework middleware and the Semantic Kernel filter below scope held requests themselves.
+
 ### Framework recipes
 
 `@guard(...)` returns an ordinary function, so register the guarded function
@@ -362,6 +385,7 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 - If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
 - Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
+- **Held calls are scoped per session.** A held call is claimed only by the same call in the same `AgentSession` (`agent.run(..., session=session)`); the scope is the session's `session_id`. An identical call in another session is its own request. Without a session a held call is never claimed by a later call, so each call asks for its own approval: run the agent with a session, or pass `scope=callback(context)` returning a hashable value for the user or conversation (it overrides the session; `None` or an error means unknown).
 - `mode="remote"`, or `modes={"refund_order": "remote"}` by Guardian tool name, is for a tool registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the tool's own function does not run, and the model gets Guardian's result (`{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …, "receipt": …}}`) as JSON text. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError`. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - A tool that is a generator function is refused before anything is proposed: Agent Framework does not iterate a tool's generator, so it would not run.
 - Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
@@ -389,10 +413,11 @@ guardian = GuardianFunctionInvocationFilter(
 kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 ```
 
-- The decisions work as in the Agent Framework table above: ALLOW runs the native function once with the arguments Guardian decided on; ASK, DENY and an unreachable Guardian do not run it, and the function result tells the model why. After approval, the same call runs the approved request.
+- The decisions work as in the Agent Framework table above: ALLOW runs the native function once with the arguments Guardian decided on; ASK, DENY and an unreachable Guardian do not run it, and the function result tells the model why. After approval, the same call in the same scope runs the approved request (see `scope` below).
 - The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
+- **Held calls are scoped per session, and Semantic Kernel does not name one.** Its filter context carries the function, the kernel and the arguments, nothing that identifies a conversation. So by default a held call is never claimed by a later call: each call asks for its own approval, and the result says so. Pass `scope=callback(context)` returning a hashable value for the user or conversation, for example `scope=lambda context: context.arguments.get("user_id")` with `user_id` set in the `KernelArguments` of each invocation; then the same call in the same scope runs the approved request. `None` or an error means unknown.
 - `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 

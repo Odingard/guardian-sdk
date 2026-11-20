@@ -38,6 +38,11 @@ class Billing:
         return f"refunded {order_id}"
 
 
+def ONE_CONVERSATION(context):
+    """The app says which conversation a call belongs to; Semantic Kernel does not."""
+    return "conversation-1"
+
+
 def kernel_with(guardian, *before, **options):
     kernel = Kernel()
     billing = Billing()
@@ -71,7 +76,7 @@ async def test_allow_runs_the_function_once_then_records_it():
 
 async def test_held_then_approved_runs_on_the_same_call():
     guardian = FakeClient(HELD, claims=[APPROVED])
-    kernel, billing = kernel_with(guardian)
+    kernel, billing = kernel_with(guardian, scope=ONE_CONVERSATION)
     assert "held for human approval (request_id req_ask)" in await model_calls(kernel)
     assert billing.ran == []
     assert await model_calls(kernel) == "refunded o42"
@@ -81,7 +86,7 @@ async def test_held_then_approved_runs_on_the_same_call():
 
 async def test_held_then_declined_never_runs():
     guardian = FakeClient(HELD, claims=[DECLINED])
-    kernel, billing = kernel_with(guardian)
+    kernel, billing = kernel_with(guardian, scope=ONE_CONVERSATION)
     await model_calls(kernel)
     assert "Guardian denied billing-refund_order (APPROVAL_DENIED)" in await model_calls(kernel)
     assert billing.ran == []
@@ -275,7 +280,7 @@ async def test_remote_allow_never_runs_the_function_and_the_result_is_guardians(
 
 async def test_remote_held_then_approved_is_performed_by_guardian_on_the_same_call():
     guardian = FakeClient(HELD, claims=[APPROVED])
-    kernel, billing = kernel_with(guardian, mode="remote")
+    kernel, billing = kernel_with(guardian, mode="remote", scope=ONE_CONVERSATION)
     assert "held for human approval (request_id req_ask)" in await model_calls(kernel)
     assert guardian_result(await model_calls(kernel))["request_id"] == "req_ask"
     assert billing.ran == []
@@ -319,3 +324,77 @@ def test_a_mistyped_mode_is_refused():
         kernel_with(FakeClient(ALLOW), mode="Remote")
     with pytest.raises(ValueError, match="in_process"):
         kernel_with(FakeClient(ALLOW), modes={"billing-refund_order": "inProcess"})
+
+
+# --- held requests are scoped per session -----------------------------------------
+
+
+class TwoRequests(FakeClient):
+    """Holds every request under its own id and approves each one on claim."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.count = 0
+
+    def request(self, invocation):
+        self.count += 1
+        self.last_invocation = invocation
+        self.calls.append(f"request:{invocation['action']}")
+        return RequestResult(ok=False, request_id=f"req_{self.count}", reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+
+
+async def call_as(kernel, user=None):
+    """The same tool call, in the conversation of ``user`` (a kernel argument the function does not take)."""
+    history = ChatHistory()
+    call = FunctionCallContent(
+        id="call_1",
+        function_name="refund_order",
+        plugin_name="billing",
+        arguments='{"order_id": "o42", "amount_cents": 500}',
+    )
+    arguments = KernelArguments(**({"user_id": user} if user else {}))
+    await kernel.invoke_function_call(call, history, arguments=arguments)
+    return str(history.messages[-1].items[0].result)
+
+
+async def test_without_a_scope_a_held_request_is_never_claimed_by_a_later_call():
+    """Semantic Kernel's filter context names no conversation, so by default
+    a held request is not reused: an identical call from another
+    conversation on the same kernel can never claim it."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian)
+    assert "request_id req_1" in await call_as(kernel, "alice")
+    assert "request_id req_2" in await call_as(kernel, "bob")
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_a_held_request_is_claimed_only_by_the_same_scope():
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=lambda context: context.arguments.get("user_id"))
+    assert "request_id req_1" in await call_as(kernel, "alice")
+    # Another conversation makes the identical call: it is its own request.
+    assert "request_id req_2" in await call_as(kernel, "bob")
+    assert billing.ran == []
+    # The first conversation's repeat call claims its own approved request, once.
+    assert await call_as(kernel, "alice") == "refunded o42"
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke", "claim:req_1", "execute:req_1"]
+    assert billing.ran == [("o42", 500)]
+    # The scope is not proposed to Guardian.
+    assert guardian.last_invocation["arguments"] == {"order_id": "o42", "amount_cents": 500}
+
+
+async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
+    def broken(context):
+        raise RuntimeError("no user")
+
+    for scope in (broken, lambda context: None):
+        guardian = TwoRequests()
+        kernel, billing = kernel_with(guardian, scope=scope)
+        await call_as(kernel, "alice")
+        await call_as(kernel, "alice")
+        assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
