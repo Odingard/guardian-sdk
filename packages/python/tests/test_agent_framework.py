@@ -248,6 +248,30 @@ async def test_run_level_middleware_cannot_change_what_runs():
     assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
 
 
+async def test_a_generator_tool_is_refused_before_anything_is_proposed():
+    """Agent Framework never iterates a tool's generator, so its body would not run."""
+
+    @tool(approval_mode="never_require")
+    async def export_rows(n: int):
+        """Export rows."""
+        ran.append("started")
+        for i in range(n):
+            yield f"row {i}"
+
+    @tool(approval_mode="never_require")
+    def export_rows_sync(n: int):
+        """Export rows."""
+        ran.append("started")
+        yield from range(n)
+
+    for generator_tool in (export_rows, export_rows_sync):
+        guardian = FakeClient(ALLOW)
+        model, _ = await run([(generator_tool.name, {"n": 2})], middleware(guardian), tools=(generator_tool,))
+        assert "is a generator function" in model.results()[0]
+        assert "Nothing was proposed or run" in model.results()[0]
+        assert ran == [] and guardian.calls == []
+
+
 async def test_a_tool_that_changes_its_own_inputs_is_still_recorded():
     @tool(approval_mode="never_require")
     def submit(payload: dict) -> str:

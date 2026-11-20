@@ -24,6 +24,19 @@
 - **`@odingard/guardian-sdk`**: `abortable(client, signal, run)`, the helper the LangChain and Vercel AI adapters each carried a copy of. It honours a caller's `AbortSignal` around one guarded call: an abort before the tool starts rejects at once and refuses every later step (a late ALLOW runs nothing and redeems nothing); once the tool has started (the local function runs, or Guardian was asked to perform a `remote` call) the call waits for its real outcome; a record-transport setup step is not the tool starting; a later `GuardianApprovalPending.resume()` is unaffected.
 - **`@odingard/guardian-langchain`**, **`@odingard/guardian-vercel-ai`**: both import `abortable` from the SDK in place of their own copy. No change in behaviour: LangChain's `config.signal` and the AI SDK's `abortSignal` are honoured as before. Both need the `@odingard/guardian-sdk` release that adds `abortable`; with an earlier SDK they fail to load. Their SDK version ranges are not changed here and must name that release when the adapters are released.
 
+### Fixed: Python generator tools are recorded after they ran
+
+- **Python** (`odingard-guardian`): a guarded generator function, async generator function, or function returning a generator was treated as an ordinary call: the capability was redeemed and the receipt recorded when the generator object was created, before any of its body ran, a stream that then failed stayed recorded as a success, and under an async guard an `async def` generator became a coroutine function. Now:
+  - `@guard` on a generator function gives a generator function (an async generator function under an async guard, also for a sync generator). Guardian is asked when the first item is requested, and the body starts only after ALLOW.
+  - The capability is redeemed and the receipt recorded when the stream ends, and when its consumer closes it early (`close()`, `aclose()`, or dropping the stream), since the body ran in part. A body that raises is not redeemed, as for any function that raises. A stream that is never started asks and redeems nothing.
+  - ASK and DENY raise when the first item is requested; with `on_ask="result"` / `on_deny="result"` the decision is the stream's only item. `GuardianApprovalPending.resume()` returns the stream as `output` with `receipt=None`; it runs, and `on_receipt` gets the receipt, when it is consumed.
+  - A redemption that fails after the stream raises `GuardianExecutionFailed` after the last item (from `close()` for a closed stream); in result mode it is the stream's last item.
+  - `mode="remote"`: the body never runs and the stream's only item is Guardian's result.
+  - A function that returns a generator is decided at the call and redeemed when the returned stream ends. A sync guard refuses a returned async generator, and `@guard` on an `async def` generator, with a `TypeError`. Other iterables and iterators are data and are returned as they are.
+  - Functions that are not generators behave as before.
+- **Python, Microsoft Agent Framework** (`odingard_guardian.agent_framework`): a tool that is a generator function is refused before anything is proposed. Agent Framework does not iterate a tool's generator, so its body never ran, and Guardian recorded the call as run.
+- **Python, Semantic Kernel** (`odingard_guardian.semantic_kernel`): no change. `invoke()` consumes a generator function before the filter's step returns, so it was already recorded after it ran; a test now covers it.
+
 ## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions

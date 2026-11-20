@@ -202,6 +202,41 @@ async def test_a_function_that_changes_its_own_inputs_is_still_recorded():
     assert receipts == ["req_allow"]
 
 
+async def test_a_generator_function_runs_to_its_end_before_it_is_recorded():
+    """Semantic Kernel's invoke() consumes a generator function inside the
+    filter's next step, so the capability is redeemed after the body ran."""
+    guardian = FakeClient(ALLOW)
+    kernel = Kernel()
+
+    class Exports:
+        @kernel_function(name="export_rows")
+        async def export_rows(self, n: int):
+            guardian.calls.append("body:start")
+            for i in range(n):
+                yield f"row {i}"
+            guardian.calls.append("body:end")
+
+        @kernel_function(name="export_rows_sync")
+        def export_rows_sync(self, n: int):
+            guardian.calls.append("body:start")
+            yield from (f"row {i}" for i in range(n))
+            guardian.calls.append("body:end")
+
+    kernel.add_plugin(Exports(), plugin_name="exports")
+    kernel.add_filter(
+        FilterTypes.FUNCTION_INVOCATION,
+        GuardianFunctionInvocationFilter(AsyncFake(guardian), connection_id=CONNECTION),
+    )
+    for name in ("export_rows", "export_rows_sync"):
+        guardian.calls.clear()
+        history = ChatHistory()
+        call = FunctionCallContent(id="call_1", function_name=name, plugin_name="exports", arguments='{"n": 2}')
+        await kernel.invoke_function_call(call, history)
+        assert "row 0" in str(history.messages[-1].items[0].result)
+        assert "row 1" in str(history.messages[-1].items[0].result)
+        assert guardian.calls == ["request:tool.invoke", "body:start", "body:end", "execute:req_allow"]
+
+
 async def test_streaming_invocation_is_refused():
     guardian = FakeClient(ALLOW)
     kernel, billing = kernel_with(guardian)

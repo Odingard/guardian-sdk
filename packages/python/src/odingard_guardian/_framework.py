@@ -10,6 +10,7 @@ before the tool starts means the tool does not run.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import logging
 from dataclasses import dataclass
@@ -72,6 +73,17 @@ def build_guard(
     return guard
 
 
+def is_stream_function(fn: Any) -> bool:
+    """Whether ``fn`` is a generator or async generator function.
+
+    Calling one runs none of its body. :func:`decide_and_run` redeems the
+    capability when the tool step returns, so an integration must only take
+    that step for such a tool if the framework consumes the stream inside
+    it; otherwise Guardian would record a call that never ran.
+    """
+    return inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
+
+
 def resolve_tool_name(tool_names: ToolNames, name: str) -> str:
     if tool_names is None:
         return name
@@ -118,7 +130,12 @@ async def decide_and_run(
     proposed: Dict[str, Any],
     run_tool: Callable[[], Awaitable[None]],
 ) -> Outcome:
-    """Ask Guardian about ``tool_name(proposed)``; await ``run_tool`` after ALLOW, never before."""
+    """Ask Guardian about ``tool_name(proposed)``; await ``run_tool`` after ALLOW, never before.
+
+    The capability is redeemed when ``run_tool`` returns, so the tool must
+    have run by then: a stream the tool produces has to be consumed inside
+    ``run_tool`` (see :func:`is_stream_function`).
+    """
     started = False
 
     async def body() -> Any:

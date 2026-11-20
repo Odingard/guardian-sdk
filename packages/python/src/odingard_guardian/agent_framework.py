@@ -31,6 +31,10 @@ nothing can change the arguments between the decision and the tool. Function
 middleware listed after it, and middleware passed to ``agent.run``, does not
 run for the call. Put middleware that should see the call (argument repair,
 logging) before Guardian's in the agent's list.
+
+A tool that is a generator function (``def`` or ``async def`` with
+``yield``) is refused before anything is proposed: Agent Framework does not
+iterate a tool's generator, so its body would never run.
 """
 
 from __future__ import annotations
@@ -41,7 +45,14 @@ from typing import Any, Awaitable, Callable, Dict, Literal, Mapping, Optional, U
 
 from agent_framework import FunctionInvocationContext, FunctionMiddleware, MiddlewareTermination
 
-from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
+from ._framework import (
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    is_stream_function,
+    json_record,
+    resolve_tool_name,
+)
 from .client import AsyncGuardianClient
 from .guard import GuardianExecutionFailed
 
@@ -110,6 +121,15 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         call_next: Callable[[], Awaitable[None]],
     ) -> None:
         tool_name = resolve_tool_name(self._tool_names, context.function.name)
+        if is_stream_function(getattr(context.function, "func", None)):
+            # Agent Framework hands a generator tool's generator to the model
+            # as text and never iterates it: the body would not run, and
+            # Guardian would record a call that did not happen.
+            context.result = (
+                f"{tool_name} is a generator function. Agent Framework does not iterate a tool's "
+                "generator, so it would not run. Nothing was proposed or run."
+            )
+            return
         try:
             proposed = json_record(context.arguments)
             decided = copy.deepcopy(context.arguments)
