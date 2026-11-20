@@ -409,12 +409,37 @@ state = agent.invoke(Command(resume=True), thread)
 - When several calls of one model turn are held, LangGraph asks for a resume
   value per interrupt: `Command(resume={interrupt.id: True for interrupt in state["__interrupt__"]})`.
   Each call still needs its own approval.
+- **Several tool calls in one node.** LangGraph runs an interrupted node
+  again from its start when the graph resumes, so everything the node did
+  before the pause happens again. `create_agent` is not affected: it runs
+  each tool call as its own task, and a pause belongs to the held call
+  alone. A hand-built graph whose `ToolNode` gets all of a model turn's tool
+  calls at once is affected, so there a governed call pauses the graph only
+  while no governed call of that node has started to act:
+  - If another governed call of the node already ran (or is running), the
+    held call does not pause. The model is told it is held, as with
+    `on_ask="result"`, and the same call after approval runs the approved
+    request. Nothing runs twice.
+  - If the held call pauses first, governed calls of the node that have not
+    started yet do not run in that pass. They are proposed again when the
+    graph resumes and run then, once.
+  - This covers tools behind Guardian (any `GuardianGate` in the process).
+    A tool in the same `ToolNode` that is **not** behind Guardian is run
+    again by LangGraph on resume, as with any interrupt. Use
+    `gate.wrap_tool_call` on the `ToolNode` so every call of the node is
+    governed, or send each tool call to the node on its own (`Send`), as
+    `create_agent` does.
 - Which request a paused call waits for is kept in the process's memory. If
   another process resumes the thread (a restart, another worker), the call
   is proposed again and pauses with a new `request_id` that needs its own
   approval. It never runs on the earlier resume.
 - A tool that itself calls `interrupt()` is run again from the start when
-  LangGraph resumes it, so Guardian decides on that call again.
+  LangGraph resumes it, so Guardian decides on that call again. Its
+  `interrupt()` gets its own answer: a value sent to resume Guardian's pause
+  is not handed to the tool. Which interrupts were Guardian's is kept in the
+  process's memory; after a restart in the middle of such a sequence the
+  tool may be handed an earlier resume value. Other calls of the same node
+  that already ran are run again by LangGraph when a tool interrupts itself.
 - Outside a LangGraph run (a plain `tool.invoke`) there is nothing to pause;
   a held call answers as with `on_ask="result"`.
 
@@ -463,7 +488,9 @@ support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-c
   LangChain tool names to Guardian tool names. `amount_args`, `purpose`,
   `agent_name`, `adapter_id`, `on_receipt` and `on_execution_error` are
   `Guard`'s. `on_approval_pending=callback(tool_name, request_id)` is called
-  once per held request.
+  once per held request. It may be a coroutine function for async calls. On
+  a sync call (`invoke`, a sync graph) a coroutine callback cannot be
+  awaited, so the call raises `TypeError` before anything is proposed.
 - **Sync and async.** A `GuardianClient` serves `invoke` and `ainvoke` (async
   calls make each Guardian call in a worker thread). An `AsyncGuardianClient`
   serves `ainvoke` only: a sync call raises `TypeError` before anything runs.
@@ -479,8 +506,14 @@ support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-c
   LangChain tool returns its result, and a generator's body would run after
   the call was recorded, or not at all.
 - A single-string `Tool` without an `args_schema` is refused at wrap time;
-  build it with `@tool` or `StructuredTool`. With an `args_schema`, its one
-  argument is proposed as `{"input": value}`.
+  build it with `@tool` or `StructuredTool`. A single-input call (a `Tool`
+  with a one-field `args_schema`, or a string passed to a one-argument tool)
+  is proposed under that argument's name, for example `{"q": "abc"}`, so
+  `amount_args` and console rules see the name the model sees.
+- A tool that is already behind another `GuardianGate` is refused
+  (`TypeError` from `gate.tool`, a refusal message from the middleware and
+  the `ToolNode` hook): neither gate's decision is skipped. Give each gate
+  the original tool, or share one gate.
 - Tools with a JSON-schema `args_schema` (as MCP adapters build them) work;
   a sync call of an async-only tool is refused before anything is proposed.
 - If Guardian allowed the call and the tool ran but redeeming the capability
