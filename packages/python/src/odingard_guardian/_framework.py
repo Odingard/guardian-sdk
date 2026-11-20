@@ -39,6 +39,13 @@ class Outcome:
     Guardian's result as JSON text:
     ``{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …,
     "receipt": …}}``.
+
+    ``result`` is Guardian's result record (``{"guardian": {...}}``) whenever
+    the tool step did not answer the call: a refusal, a held call, a call
+    that ran but could not be recorded, or a ``remote`` tool Guardian
+    performed (the only case with ``decision == "ALLOW"`` and ``ran`` False).
+    It is ``None`` when the tool ran and Guardian recorded it, and when
+    Guardian could not be asked.
     """
 
     ran: bool
@@ -46,6 +53,7 @@ class Outcome:
     message: Optional[str] = None
     request_id: Optional[str] = None
     reason_code: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
 
 
 def build_guard(
@@ -179,4 +187,5 @@ async def decide_and_run(
         message=message,
         request_id=info.get("request_id"),
         reason_code=info.get("reason_code"),
+        result=out,
     )
