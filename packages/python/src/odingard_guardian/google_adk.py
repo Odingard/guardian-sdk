@@ -49,7 +49,8 @@ stream in the background; such a call is refused before anything is proposed.
 
 A held request belongs to the ADK session that made the call (app, user,
 session id): the same tool and arguments from another user or session never
-claims it.
+claims it. ``scope=`` sets another scope from the tool context; it is never
+read from the tool call's arguments, which the model writes.
 
 To govern one agent only, pass :meth:`GuardianPlugin.agent_before_tool_callback`
 as that agent's ``before_tool_callback`` instead of registering the plugin.
@@ -58,12 +59,11 @@ as that agent's ``before_tool_callback`` instead of registering the plugin.
 from __future__ import annotations
 
 import asyncio
-import collections
 import contextvars
 import copy
 import inspect
 import logging
-from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Union
 
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.base_tool import BaseTool
@@ -73,12 +73,14 @@ from ._framework import (
     ToolNames,
     build_guard,
     decide_and_run,
+    ScopeOption,
     is_stream_function,
     json_record,
+    resolve_scope,
     resolve_tool_name,
 )
 from .client import AsyncGuardianClient
-from .guard import Guard, GuardianExecutionFailed, Mode
+from .guard import GuardianExecutionFailed, Mode
 
 __all__ = ["GuardianPlugin"]
 
@@ -86,16 +88,13 @@ _logger = logging.getLogger("odingard_guardian")
 
 OnAsk = Literal["result", "confirmation"]
 
-Scope = Tuple[str, str, str]
+#: Nothing inherited: the call's own session decides its scope.
+_NO_SCOPE: Any = object()
 
-#: The session a tool call belongs to while this plugin runs a tool, so that
-#: calls made inside it (an ``AgentTool`` runs its agent in a new session for
-#: every call) keep the scope of the session that started them.
-_SCOPE: "contextvars.ContextVar[Optional[Scope]]" = contextvars.ContextVar("odingard_guardian_adk_scope", default=None)
-
-#: Sessions with held requests kept at once. Past it the oldest session's
-#: held requests are forgotten, and its next same call asks again.
-_MAX_SCOPES = 10_000
+#: The scope of the call this plugin is running a tool for, so that calls made
+#: inside it (an ``AgentTool`` runs its agent in a new session for every call)
+#: keep the scope of the session that started them.
+_SCOPE: "contextvars.ContextVar[Any]" = contextvars.ContextVar("odingard_guardian_adk_scope", default=_NO_SCOPE)
 
 #: ADK's own answers for a tool that requires confirmation (``require_confirmation``).
 _CONFIRMATION_REQUIRED = "This tool call requires confirmation, please approve or reject."
@@ -130,6 +129,15 @@ class GuardianPlugin(BasePlugin):
         as set in the Guardian console (see :class:`Guard`).
     :param tool_names: the Guardian tool name for an ADK tool name, as a
         mapping or a function. Default: the same name.
+    :param scope: ``callback(tool_context)`` returning the scope of a call:
+        the session it belongs to, any hashable value. Read it from something
+        your app sets (the session, its state set by your app, a
+        ``contextvars.ContextVar``), never from the tool call's arguments,
+        which the model writes. A held call is claimed only by the same call
+        in the same scope. Default: the ADK session the call runs in, as
+        ``(app_name, user_id, session id)``. An option that returns ``None``
+        or an empty string, or raises, means the session is unknown: a held
+        call is then never claimed by a later call.
     :param on_ask: ``"result"`` (default) tells the model the call is held;
         ``"confirmation"`` also asks for ADK's tool confirmation, which
         pauses the run until the app answers it.
@@ -151,6 +159,7 @@ class GuardianPlugin(BasePlugin):
         adapter_id: Optional[str] = None,
         amount_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
         tool_names: ToolNames = None,
+        scope: ScopeOption = None,
         on_ask: OnAsk = "result",
         on_approval_pending: Optional[Callable[[str, str], Any]] = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
@@ -161,26 +170,21 @@ class GuardianPlugin(BasePlugin):
             raise ValueError('on_ask takes "result" or "confirmation"')
         super().__init__(name=name)
 
-        def new_guard() -> Guard:
-            return build_guard(
-                client,
-                connection_id=connection_id,
-                agent_name=agent_name,
-                adapter_id=adapter_id,
-                purpose=purpose,
-                amount_args=amount_args,
-                on_receipt=on_receipt,
-                on_execution_error=on_execution_error,
-                mode=mode,
-                modes=modes,
-            )
-
-        self._new_guard = new_guard
-        self._guard = new_guard()  # checks the options once; also answers mode_for
-        # One Guard per session with held requests. A Guard matches a held
-        # request by tool and arguments, so sharing one across sessions would
-        # let a call in one session claim a request approved for another.
-        self._guards: "collections.OrderedDict[Scope, Guard]" = collections.OrderedDict()
+        if scope is not None and not callable(scope):
+            raise TypeError("scope takes a function of the ADK tool context")
+        self._guard = build_guard(
+            client,
+            connection_id=connection_id,
+            agent_name=agent_name,
+            adapter_id=adapter_id,
+            purpose=purpose,
+            amount_args=amount_args,
+            on_receipt=on_receipt,
+            on_execution_error=on_execution_error,
+            mode=mode,
+            modes=modes,
+        )
+        self._scope = scope
         self._tool_names = tool_names
         self._on_ask = on_ask
         self._on_approval_pending = on_approval_pending
@@ -206,28 +210,6 @@ class GuardianPlugin(BasePlugin):
         """
         return await self._govern(tool, args, tool_context)
 
-    def _guard_for(self, scope: Scope) -> Guard:
-        guard = self._guards.get(scope)
-        if guard is None:
-            guard = self._guards[scope] = self._new_guard()
-            while len(self._guards) > _MAX_SCOPES:
-                self._guards.popitem(last=False)
-        else:
-            self._guards.move_to_end(scope)
-        return guard
-
-    def _release(self, scope: Scope, guard: Guard) -> None:
-        """Keep ``guard`` only while it holds a request for ``scope``."""
-        held = guard._opts.held
-        current = self._guards.get(scope)
-        if not held:
-            if current is guard:
-                del self._guards[scope]
-        elif current is None:
-            self._guards[scope] = guard  # a parallel call of the session released it meanwhile
-        elif current is not guard:
-            current._opts.held.update(held)
-
     async def _govern(
         self, tool: BaseTool, tool_args: Dict[str, Any], tool_context: ToolContext
     ) -> Optional[Dict[str, Any]]:
@@ -237,15 +219,21 @@ class GuardianPlugin(BasePlugin):
             # request and runs on the model's side.
             return None
         tool_name = resolve_tool_name(self._tool_names, tool.name)
-        try:
-            scope = _SCOPE.get() or _session_scope(tool_context)
-        except Exception:  # noqa: BLE001 - a call that belongs to no known session never runs
-            _logger.warning("ADK gave no session for %s; the call did not run", tool_name, exc_info=True)
-            return _refusal(
-                tool_name,
-                f"{tool_name} did not run: its ADK session could not be read. Nothing was proposed.",
-                "SESSION_UNKNOWN",
-            )
+        scope = _SCOPE.get()
+        if scope is _NO_SCOPE:
+            if self._scope is None:
+                try:
+                    default = _session_scope(tool_context)
+                except Exception:  # noqa: BLE001 - a call that belongs to no known session never runs
+                    _logger.warning("ADK gave no session for %s; the call did not run", tool_name, exc_info=True)
+                    return _refusal(
+                        tool_name,
+                        f"{tool_name} did not run: its ADK session could not be read. Nothing was proposed.",
+                        "SESSION_UNKNOWN",
+                    )
+                scope = resolve_scope(None, tool_context, default)
+            else:
+                scope = resolve_scope(self._scope, tool_context)
         try:
             held_locally = await self._confirmation_gate(tool, tool_args, tool_context)
         except Exception:  # noqa: BLE001 - a call that cannot be checked never runs
@@ -307,12 +295,8 @@ class GuardianPlugin(BasePlugin):
                     raise ran["error"]
             ran["result"] = result
 
-        guard = self._guard_for(scope)
         try:
-            try:
-                outcome = await decide_and_run(guard, tool_name, proposed, run_tool)
-            finally:
-                self._release(scope, guard)
+            outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool, scope=scope)
         except Exception as error:
             if ran.get("error") is not error:
                 raise
@@ -437,7 +421,7 @@ def _tool_answer(tool: BaseTool, result: Any) -> Any:
     return {"result": None}  # what ADK itself tells the model for None
 
 
-def _session_scope(tool_context: ToolContext) -> Scope:
+def _session_scope(tool_context: ToolContext) -> Any:
     """The ADK session a call belongs to: app, user and session id."""
     session = tool_context.session
     scope = (session.app_name, session.user_id, session.id)

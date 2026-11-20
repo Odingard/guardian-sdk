@@ -1077,17 +1077,97 @@ async def test_a_held_call_inside_an_agent_tool_is_claimed_by_the_same_sessions_
     assert ran == [("o42", 500)]
 
 
-async def test_sessions_without_held_requests_are_not_kept():
-    guardian = FakeClient(ALLOW)
+async def test_a_claimed_request_is_no_longer_remembered():
+    guardian = FakeClient(HELD, claims=[APPROVED])
     governed = plugin(guardian)
-    harness = Harness(scripted(CALL), [governed])
-    await harness.send()
+    await Harness(scripted(CALL, CALL), [governed]).send()
     assert ran == [("o42", 500)]
-    assert len(governed._guards) == 0
+    assert governed._guard._opts.held == {}
 
-    held = plugin(FakeClient(HELD))
-    await Harness(scripted(CALL), [held]).send()
-    assert len(held._guards) == 1  # kept until the held request is claimed
+
+async def _two_sessions(governed, turns=()):
+    harness = Harness(scripted(*turns), [governed], tools=(refund_order, lookup_order, tagged_refund))
+    service = harness.runner.session_service
+    alice = await service.create_session(app_name="billing_app", user_id="alice")
+    bob = await service.create_session(app_name="billing_app", user_id="bob")
+
+    async def send(session, call=CALL, state=None):
+        harness.model.turns.append([call])  # one call per run
+        async for _ in harness.runner.run_async(
+            user_id=session.user_id, session_id=session.id, new_message=user(), state_delta=state
+        ):
+            pass
+
+    return alice, bob, send
+
+
+def tagged_refund(order_id: str, session_id: str) -> dict:
+    """Refund an order (the model also names a session)."""
+    ran.append((order_id, session_id))
+    return {"status": "refunded"}
+
+
+async def test_a_session_id_in_the_models_arguments_is_not_the_scope():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    alice, bob, send = await _two_sessions(plugin(guardian))
+    call = ("tagged_refund", {"order_id": "o42", "session_id": alice.id})
+    await send(alice, call)  # held for alice
+    await send(bob, call)  # bob's model names alice's session in its arguments
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+
+
+async def test_the_scope_option_overrides_the_adk_session():
+    # The app says which tenant a call belongs to, here from session state it set itself.
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    governed = plugin(guardian, scope=lambda tool_context: tool_context.state.get("tenant"))
+    alice, bob, send = await _two_sessions(governed)
+    await send(alice, state={"tenant": "acme"})
+    await send(bob, state={"tenant": "globex"})
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+    await send(alice)  # the same tenant again: claims the request held for it
+    assert guardian.calls[2:] == ["claim:req_ask", "execute:req_ask"]
+    assert ran == [("o42", 500)]
+
+
+@pytest.mark.parametrize("answer", [None, "", "raise"])
+async def test_a_scope_option_that_gives_no_session_never_reuses_a_held_request(answer):
+    def scope(tool_context):
+        if answer == "raise":
+            raise RuntimeError("no tenant")
+        return answer
+
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    governed = plugin(guardian, scope=scope)
+    alice, _, send = await _two_sessions(governed)
+    await send(alice)
+    await send(alice)
+    # Not tied to a session: the same call asks again and never claims.
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert ran == []
+    assert governed._guard._opts.held == {}
+
+
+def test_the_scope_option_must_be_a_function():
+    with pytest.raises(TypeError, match="scope"):
+        plugin(FakeClient(ALLOW), scope="tenant-1")
+
+
+async def test_a_call_whose_adk_session_cannot_be_read_is_refused():
+    class NoSession:
+        tool_confirmation = None
+
+        @property
+        def session(self):
+            raise RuntimeError("no session")
+
+    guardian = FakeClient(ALLOW)
+    result = await plugin(guardian).before_tool_callback(
+        tool=FunctionTool(refund_order), tool_args=dict(CALL[1]), tool_context=NoSession()
+    )
+    assert ran == [] and guardian.calls == []
+    assert result["guardian"]["reason_code"] == "SESSION_UNKNOWN"
 
 
 @_agent_tool_warning
