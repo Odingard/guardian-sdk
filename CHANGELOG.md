@@ -1,5 +1,19 @@
 # Changelog
 
+## guardian-hook / guardian-openclaw / Python odingard-guardian, unreleased
+
+### Changed: paths to the agent's own configuration files are normalized and links resolved before the check
+
+Writes to the agent's own configuration files go to the Ask tier. Until now the check compared the path as written, so a path spelled another way (a repeated separator, a `.` or `..` segment, a symbolic link) was routed as an ordinary file write.
+
+- Affected versions: `@odingard/guardian-hook` 0.3.1 to 0.4.4; `@odingard/guardian-openclaw` 0.1.0 to 0.1.3 (symbolic links only); Python `odingard-guardian` 0.1.5 to 0.5.0 (Hermes plugin only: files named in a patch, and command words).
+- Until you upgrade: mount the configuration read-only (owned by another user), or deliver the hook as a managed hook (Claude Code managed settings, Codex `requirements.toml` with `allow_managed_hooks_only`), as the package READMEs describe.
+
+- **`@odingard/guardian-hook`**: a file tool's path is checked against the agent's own configuration files (`.mcp.json`, `.claude/settings.json`, `.codex`, `.cursor`, `.gemini`, `.dsh`, `guardian-hooks.json` and the others) as written and also with repeated separators, backslashes and `.` / `..` segments removed, relative to the call's working directory, with `~` as the home folder, and with symbolic links resolved (the file itself, or a folder on the way; a link whose target does not exist yet too). This applies to Write, Edit, MultiEdit, NotebookEdit, DeepSeek Harness `write` / `edit` / `str_replace_editor`, and every file a Codex or DeepSeek Harness `apply_patch` names. A match goes to `shell_destructive` (Ask tier) with `touches: "agent-config"`; a path that cannot be resolved (a link loop, a NUL byte) does too. The proposal still carries the path as the agent wrote it. In shell commands, each word is also checked with `//`, `.` and `..` removed (`echo x > .claude//settings.json`, `cp a .claude/tmp/../settings.json`). `isAgentConfigPath(path, cwd?)` takes the working directory; new export `resolveLinks(path)`.
+- **`@odingard/guardian-openclaw`**: for `write`, `edit`, `read` and `apply_patch`, an absolute path is also checked with its symbolic links resolved, against the control plane and against the control roots with their own links resolved. A write through a link that leads into OpenClaw's config, state or plugins goes to `shell_destructive`; so does a path whose links cannot be resolved. Repeated separators, `.` / `..` segments, backslashes and letter case were already handled. `exec` commands use guardian-hook's command check above.
+- **Python Hermes plugin (`odingard_guardian.hermes`)**: every file a V4A `patch` names is checked like a `path` argument (symbolic links resolved); a command word that spells a protected directory with `//`, `.` or `..` segments is `hermes_config`; a `.env` file in Hermes' home read through a symbolic link is `hermes_config`; a path that cannot be resolved is `hermes_config`. `write_file` and `patch` with a `path` already resolved these spellings.
+- Not recognised: a hard link to such a file, a link created after the hook answered, and in shell commands a link, a variable or a glob that leads to the file. guardian-openclaw resolves links for absolute paths only (it does not know the working directory).
+
 ## guardian-mcp 0.6.0, unreleased
 
 ### Added: list and withdraw held requests

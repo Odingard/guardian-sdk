@@ -420,7 +420,9 @@ environment. `python -m odingard_guardian.hermes` prints the console setup.
   in the same Hermes process claims the open request; nothing is carried
   across processes.
 - Edits to Hermes' own settings (`$HERMES_HOME`) or to this package are
-  routed as `hermes_config` (needs approval), and the credential is moved out
+  routed as `hermes_config` (needs approval), however the path is spelled
+  (repeated separators, `.` and `..` segments, a symbolic link that leads
+  there; also for each file a V4A patch names), and the credential is moved out
   of `os.environ` so tool subprocesses do not inherit it. Both are best
   effort; the example README says what they do not catch.
 - DENY, missing settings, Guardian unreachable, a crash or a timeout: blocked

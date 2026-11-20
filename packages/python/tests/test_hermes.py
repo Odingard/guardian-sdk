@@ -873,3 +873,72 @@ def test_setup_text_uses_the_console_mode_labels():
     text = hermes.setup_text()
     assert "Allow on (a), Ask me on (b)" in text
     assert "Ask me first" not in text
+
+
+# --- other spellings of a path into Hermes' home ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tool_name,args",
+    [
+        ("write_file", {"path": "/opt/data//config.yaml", "content": ""}),
+        ("write_file", {"path": "/opt/data/./config.yaml", "content": ""}),
+        ("write_file", {"path": "/opt/data/logs/../config.yaml", "content": ""}),
+        ("write_file", {"path": "/opt//data///plugins/off/__init__.py", "content": ""}),
+        ("write_file", {"path": "/opt/x/../data/.env", "content": ""}),
+        ("patch", {"path": "/opt/data//config.yaml", "old_string": "- guardian", "new_string": ""}),
+        ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: /opt/data//config.yaml\n"}),
+        ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: /opt/data/./config.yaml\n"}),
+        ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Add File: /opt/x/../data/plugins/p.py\n"}),
+        ("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: a.py\n*** Move to: /opt//data/a.py\n"}),
+        ("terminal", {"command": "sed -i 's/- guardian//' /opt/data//config.yaml"}),
+        ("terminal", {"command": "sed -i 's/- guardian//' /opt/data/./config.yaml"}),
+        ("terminal", {"command": "cp x /opt/x/../data/config.yaml"}),
+        ("terminal", {"command": "echo x > '/opt//data/config.yaml'"}),
+        ("terminal", {"command": "make", "workdir": "/opt/data//plugins/.."}),
+        ("process_manage", {"action": "write", "session_id": "p1", "data": "cat /opt//data/.env\n"}),
+        ("read_file", {"path": "/opt/data//.env"}),
+        ("read_file", {"path": "/opt/x/../data/.env"}),
+    ],
+)
+def test_another_spelling_of_a_path_into_hermes_home_needs_approval(tool_name, args):
+    call = governed_call(tool_name, args, protected=HOSTED)
+    assert call is not None and call.tool_name == "hermes_config"
+    # The path is proposed as the agent wrote it.
+    if "path" in args:
+        assert call.arguments["path"] == args["path"]
+
+
+def test_a_symbolic_link_into_hermes_home_needs_approval(tmp_path):
+    home = tmp_path / "home"
+    (home / "plugins").mkdir(parents=True)
+    (home / "config.yaml").write_text("plugins: {}\n")
+    (home / ".env").write_text("X=1\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "innocent.yaml").symlink_to(home / "config.yaml")  # the file is a link
+    (work / "notes").symlink_to(home, target_is_directory=True)  # a folder on the way is a link
+    (work / "later.py").symlink_to(home / "plugins" / "new.py")  # its target does not exist yet
+    (work / "env").symlink_to(home / ".env")
+    roots = hermes.protected_paths({"HERMES_HOME": str(home)})
+    for path in (work / "innocent.yaml", work / "notes" / "config.yaml", work / "notes" / "plugins" / "x.py",
+                 work / "later.py"):
+        for tool_name, args in (
+            ("write_file", {"path": str(path), "content": ""}),
+            ("patch", {"path": str(path), "old_string": "a", "new_string": "b"}),
+            ("patch", {"mode": "patch", "patch": f"*** Begin Patch\n*** Update File: {path}\n"}),
+        ):
+            call = governed_call(tool_name, args, protected=roots)
+            assert call is not None and call.tool_name == "hermes_config", (tool_name, path)
+    assert governed_call("read_file", {"path": str(work / "notes" / ".env")}, protected=roots).tool_name == "hermes_config"
+    assert governed_call("read_file", {"path": str(work / "env")}, protected=roots).tool_name == "hermes_config"
+    plain = governed_call("write_file", {"path": str(work / "a.py"), "content": ""}, protected=roots)
+    assert plain.tool_name == "file_write"
+    patch = governed_call("patch", {"mode": "patch", "patch": f"*** Begin Patch\n*** Update File: {work / 'a.py'}\n"},
+                          protected=roots)
+    assert patch.tool_name == "file_write"
+
+
+def test_a_path_that_cannot_be_resolved_needs_approval():
+    call = governed_call("write_file", {"path": "/workspace/a\x00b.py", "content": ""}, protected=HOSTED)
+    assert call.tool_name == "hermes_config"

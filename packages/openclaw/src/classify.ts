@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   classifyCommand,
   governedCall,
+  resolveLinks,
   mcpToolName,
   tierOf,
   type GovernedCall,
@@ -338,9 +339,44 @@ function normalizedPathTouches(
 }
 
 /**
+ * An absolute path with its symbolic links resolved (the file itself, or a
+ * folder on the way), checked against the control plane and against the
+ * control roots with their own links resolved. `undefined` for a relative
+ * path (the hook does not know the cwd); `null` when a link cannot be
+ * resolved.
+ */
+function linkTarget(
+  norm: string,
+  roots: readonly string[],
+): { control: boolean } | undefined | null {
+  if (!norm.startsWith("/")) return undefined;
+  let real: string;
+  try {
+    real = resolveLinks(norm).replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+  const realRoots = roots.map((root) => {
+    try {
+      return root.startsWith("/")
+        ? resolveLinks(root).replace(/\\/g, "/")
+        : root;
+    } catch {
+      return root;
+    }
+  });
+  return {
+    control: normalizedPathTouches(real, [
+      ...new Set([...roots, ...realRoots]),
+    ]),
+  };
+}
+
+/**
  * Where a tool's path argument lands, for governing it. `control` is true
- * when the raw string or its OpenClaw-normalised form reaches the control
- * plane, or when it cannot be normalised at all (fail closed).
+ * when the raw string, its OpenClaw-normalised form or (for an absolute
+ * path) the file its symbolic links lead to reaches the control plane, or
+ * when it cannot be normalised or resolved at all (fail closed).
  */
 function classifyPath(
   raw: string,
@@ -348,10 +384,13 @@ function classifyPath(
 ): { control: boolean; unresolved: boolean; resolved?: string } {
   const norm = normalizeOpenClawPath(raw);
   if (norm === null) return { control: true, unresolved: true };
+  const linked = linkTarget(norm, roots);
+  if (linked === null) return { control: true, unresolved: true };
   return {
     control:
       touchesControlPlane(raw, roots, true) ||
-      normalizedPathTouches(norm, roots),
+      normalizedPathTouches(norm, roots) ||
+      linked?.control === true,
     unresolved: false,
     ...(norm !== raw ? { resolved: norm } : {}),
   };
