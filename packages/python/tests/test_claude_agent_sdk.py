@@ -9,6 +9,7 @@ requests and acts on the answers the way the CLI does. Guardian is a fake.
 
 import asyncio
 import json
+import os
 import re
 import time
 import typing
@@ -248,6 +249,101 @@ def test_a_symbolic_link_to_agent_configuration_still_needs_approval(tmp_path):
         assert call.tool_name == "shell_destructive", path
     plain = governed_call("Write", {"file_path": str(work / "a.json"), "content": "{}"}, cwd=str(work))
     assert plain.tool_name == "file_write"
+
+
+def _file_calls(path):
+    return (
+        ("Write", {"file_path": path, "content": "{}"}),
+        ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"}),
+        ("MultiEdit", {"file_path": path, "edits": []}),
+        ("NotebookEdit", {"notebook_path": path, "new_source": "x"}),
+    )
+
+
+@pytest.fixture
+def linked(tmp_path):
+    """A project with folder links into ``.claude/hooks/x``."""
+    proj = tmp_path / "proj"
+    hooks = proj / ".claude" / "hooks"
+    (hooks / "x").mkdir(parents=True)
+    (proj / "t").mkdir()
+    (proj / "d").symlink_to(hooks / "x", target_is_directory=True)
+    (proj / "t" / "sub").symlink_to(hooks / "x", target_is_directory=True)
+
+    def lands(path, expected):
+        """The route first; then a write through the path shows which file it changes."""
+        for name, tool_input in _file_calls(path):
+            call = governed_call(name, tool_input, cwd=str(proj))
+            assert call.tool_name == "shell_destructive", (name, path)
+            assert call.arguments["touches"] == "agent-config"
+            assert call.arguments["path"] == path
+        assert not expected.exists()
+        with open(path if os.path.isabs(path) else os.path.join(str(proj), path), "w") as handle:
+            handle.write("written through the path")
+        assert expected.read_text() == "written through the path"
+
+    return proj, hooks, lands
+
+
+def test_a_relative_link_target_is_taken_from_the_links_real_folder(linked):
+    proj, _hooks, lands = linked
+    # proj/d → .claude/hooks/x; proj/d/f → ../../settings.json (no such file yet).
+    (proj / "d" / "f").symlink_to("../../settings.json")
+    lands(str(proj / "d" / "f"), proj / ".claude" / "settings.json")
+
+
+def test_a_chain_of_links_whose_targets_do_not_exist_yet(linked):
+    proj, _hooks, lands = linked
+    (proj / "d" / "f1").symlink_to("f2")
+    (proj / "d" / "f2").symlink_to("../../settings.local.json")
+    lands(str(proj / "d" / "f1"), proj / ".claude" / "settings.local.json")
+
+
+def test_dot_dot_in_a_link_target_applies_after_the_folder_link_before_it(linked):
+    proj, hooks, lands = linked
+    # proj/t/sub → .claude/hooks/x, so sub/.. is .claude/hooks.
+    (proj / "t" / "g").symlink_to("sub/../a.sh")
+    lands(str(proj / "t" / "g"), hooks / "a.sh")
+    (proj / "t" / "h").symlink_to(str(proj / "t" / "sub") + "/../b.sh")  # an absolute target
+    lands(str(proj / "t" / "h"), hooks / "b.sh")
+
+
+def test_dot_dot_after_a_link_in_the_written_path_absolute_and_relative(linked):
+    proj, hooks, lands = linked
+    lands(str(proj / "d") + "/../c.sh", hooks / "c.sh")
+    lands("d/../e.sh", hooks / "e.sh")
+    lands("./t/sub/../g.sh", hooks / "g.sh")
+
+
+def test_a_link_to_a_link_each_relative_to_its_own_folder(linked):
+    proj, hooks, lands = linked
+    (proj / "d" / "k2").symlink_to("../k.sh")
+    (proj / "k").symlink_to("d/k2")
+    lands(str(proj / "k"), hooks / "k.sh")
+
+
+def test_a_trailing_separator_on_a_link_whose_target_does_not_exist_yet(tmp_path):
+    (tmp_path / "c").symlink_to(tmp_path / ".claude")
+    for path in (str(tmp_path / "c") + "/", str(tmp_path / "c") + "//", "c/"):
+        assert cas.is_agent_config_path(path, str(tmp_path)), path
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a backslash is a separator on Windows")
+def test_a_link_whose_own_name_contains_a_backslash(linked):
+    proj, _hooks, lands = linked
+    # On POSIX a backslash is an ordinary character in a file name.
+    (proj / "c\\d").symlink_to(proj / ".mcp.json")
+    lands(str(proj / "c\\d"), proj / ".mcp.json")
+
+
+def test_an_ordinary_file_reached_through_links_stays_on_file_write(linked):
+    proj, _hooks, _lands = linked
+    (proj / "src").mkdir()
+    (proj / "s").symlink_to(proj / "src", target_is_directory=True)
+    (proj / "s" / "n").symlink_to("../notes.txt")
+    for path in (str(proj / "s" / "n"), "s/../src/a.py", "s/new.py", str(proj / "src") + "//b.py"):
+        for name, tool_input in _file_calls(path):
+            assert governed_call(name, tool_input, cwd=str(proj)).tool_name == "file_write", (name, path)
 
 
 def test_a_path_that_cannot_be_resolved_goes_to_the_ask_tier():

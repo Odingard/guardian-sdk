@@ -196,14 +196,28 @@ def _path_forms(path: str, cwd: Optional[str]) -> List[str]:
     """The spellings of ``path`` the configuration patterns are tried on.
 
     As written; with separators collapsed and ``.`` / ``..`` segments
-    removed; and with symbolic links resolved (the file itself or a folder
-    on the way), relative paths taken from ``cwd`` as the CLI does.
+    removed; and with symbolic links resolved as the operating system
+    resolves them (the file itself or a folder on the way; a relative link
+    target from the link's real folder; ``..`` after the link before it),
+    relative paths taken from ``cwd`` as the CLI does.
     """
+    start = cwd or os.getcwd()
+
+    def absolute_of(text: str) -> str:
+        # Not normalized: ``..`` must apply after any link before it.
+        expanded = os.path.expanduser(text)
+        return expanded if os.path.isabs(expanded) else os.path.join(start, expanded)
+
     forms = [path]
     posix = path.replace("\\", "/")
-    expanded = os.path.expanduser(posix)
-    absolute = expanded if os.path.isabs(expanded) else os.path.join(cwd or os.getcwd(), expanded)
-    for form in (os.path.normpath(posix), os.path.normpath(absolute), os.path.realpath(absolute)):
+    for form in (
+        os.path.normpath(posix),
+        os.path.normpath(absolute_of(posix)),
+        os.path.realpath(absolute_of(posix)),
+        # With the separators as written: where a backslash is an ordinary
+        # character, it can be part of a link's own name.
+        os.path.realpath(absolute_of(path)),
+    ):
         if form not in forms:
             forms.append(form)
     return forms
