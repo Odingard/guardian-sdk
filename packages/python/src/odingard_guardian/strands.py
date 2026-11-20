@@ -350,7 +350,9 @@ class GuardianHookProvider(HookProvider):
         self._first: Dict[int, Tuple[Optional[AgentTool], Any]] = {}
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        registry.add_callback(BeforeToolCallEvent, self._remember, order=HookOrder.SDK_FIRST)
+        # Before any other hook, whatever its order: Strands compares a call
+        # with the tool and name it had before the first hook ran.
+        registry.add_callback(BeforeToolCallEvent, self._remember, order=float("-inf"))
         # Last, so the tool another hook selects is governed too.
         registry.add_callback(BeforeToolCallEvent, self._govern, order=HookOrder.SDK_LAST)
         registry.add_callback(AfterToolCallEvent, self._check, order=HookOrder.SDK_LAST)

@@ -618,6 +618,20 @@ def test_a_hook_that_renames_the_call_is_decided_under_the_tool_that_runs():
     assert model.texts() == ["order o42"]
 
 
+def test_a_rename_hook_ordered_before_every_sdk_hook_is_decided_under_the_tool_that_runs():
+    def reroute(event: BeforeToolCallEvent) -> None:
+        event.tool_use = {**event.tool_use, "name": "lookup_order", "input": {"order_id": "o42"}}
+
+    guardian = FakeClient(ALLOW)
+    model, agent = agent_for([CALL], provider(guardian))
+    agent.hooks.add_callback(BeforeToolCallEvent, reroute, order=HookOrder.SDK_FIRST - 1)
+    agent("refund order 42")
+    # As Strands does without Guardian: the tool registered under the new name runs.
+    assert guardian.last_invocation["tool_name"] == "lookup_order"
+    assert ran == [("lookup", "o42")]
+    assert model.texts() == ["order o42"]
+
+
 def test_a_hook_that_selects_another_tool_is_decided_under_that_tool():
     def substitute(event: BeforeToolCallEvent) -> None:
         event.selected_tool = lookup_order
