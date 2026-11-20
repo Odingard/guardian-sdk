@@ -1,5 +1,15 @@
 # Changelog
 
+## Python odingard-guardian, unreleased
+
+### Added: governed tools for the OpenAI Agents SDK
+
+- **`odingard_guardian.openai_agents`**: `guardian_tool` and `create_guardian_tool` turn a function or an Agents SDK `FunctionTool` into a `FunctionTool` with the same name, description, parameter schema and settings whose every call is sent to Guardian before it runs, as `guardianTool` does in `@odingard/guardian-openai-agents`. ALLOW runs the tool once with the arguments Guardian decided on, then redeems the capability; DENY and an unreachable Guardian do not run it, and the model is told so; a tool that raises is not redeemed and keeps its own `failure_error_function`.
+  - ASK never runs the tool. `on_ask="raise"` (default) raises `GuardianApprovalPending` out of the run (`find_approval_pending(error)` finds it, `resume()` claims the approval and runs the tool once); `"result"` tells the model the call is held, and the same call after approval claims the held request; `"interrupt"` pauses the run as an Agents SDK interruption (`result.interruptions`, `guardian_request_id(interruption)`). After `state.approve(...)` the tool still claims Guardian's request and runs only if a person approved it in Guardian.
+  - `mode="remote"` (or `modes` per tool): Guardian performs the registered call itself, the local function never runs, and the model gets Guardian's record. A generator function is refused when the tool is built: the Agents SDK never runs its body.
+  - If the SDK's tool timeout or a cancelled run stops a call while Guardian is still deciding, the tool does not run. Once the tool has run, the capability is still redeemed.
+  - The existing `guardian_failure_error_function` helpers are unchanged, and the module still imports without the Agents SDK. Extra: `odingard-guardian[openai-agents]` (Python 3.10+; tested with `openai-agents` 0.25.0). Example: `examples/python/openai_agents_agent.py`.
+
 ## guardian-mcp 0.6.0, unreleased
 
 ### Added: list and withdraw held requests

@@ -105,6 +105,7 @@ document.
 | LangChain.js / LangGraph                        | `@odingard/guardian-langchain`                                    |
 | Vercel AI SDK                                   | `@odingard/guardian-vercel-ai`                                    |
 | OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                                |
+| OpenAI Agents SDK (Python)                      | `odingard-guardian` (`guardian_tool`)                             |
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian` ([recipe](packages/python#framework-recipes)) |
 | Microsoft Agent Framework (Python)              | `odingard-guardian`                                               |
 | Semantic Kernel (Python)                        | `odingard-guardian`                                               |

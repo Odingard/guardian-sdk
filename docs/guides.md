@@ -114,6 +114,7 @@ Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as i
 | Python `Guard`                                                 | `in_process` | `mode="remote"`, or `modes={"send_wire": "remote"}`                                                     |
 | Microsoft Agent Framework (Python, unreleased)                 | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | Semantic Kernel (Python, unreleased)                           | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| OpenAI Agents SDK (Python, `guardian_tool`, unreleased)        | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | `guardian-mcp proxy`                                           | in-process   | none: the proxy always forwards an allowed call to the upstream server. Use `guardian-mcp` (see below). |
 
 `modes` is keyed by the tool name Guardian sees.
@@ -235,7 +236,26 @@ guardian = GuardianFunctionInvocationFilter(
 kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)
 ```
 
-In both Python integrations a `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the integration is built.
+**OpenAI Agents SDK, Python** (`guardian_tool`, `create_guardian_tool`, unreleased). The function behind the tool does not run. The tool output the model sees is Guardian's result as JSON text. With `on_ask="interrupt"` Guardian is asked to perform an allowed call only when the Agents SDK invokes it.
+
+```python
+from odingard_guardian.openai_agents import create_guardian_tool
+
+governed = create_guardian_tool(
+    AsyncGuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"send_wire": "remote"},  # or mode="remote" for every tool
+)
+
+@governed
+def send_wire(amount_cents: int, payee_id: str) -> str:
+    """Send a wire transfer."""
+    raise RuntimeError("never runs: Guardian makes this call")
+
+agent = Agent(name="Treasury", tools=[send_wire])
+```
+
+In these Python integrations a `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the integration is built.
 
 **MCP**. `guardian-mcp proxy` has no remote mode: after ALLOW it forwards the call to the upstream MCP server, which runs the tool, and then redeems the capability (in-process). For a call Guardian makes itself, give the agent the `guardian-mcp` server without `proxy`: its `guardian_invoke_tool` takes the registered `toolName` and `arguments` (and a `connectionId` unless `GUARDIAN_CONNECTION_ID` is set), Guardian performs an allowed call and the tool returns the decision, `requestId` and receipt; `guardian_claim` does the same for a request a person approved.
 
