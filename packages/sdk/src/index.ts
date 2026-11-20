@@ -86,6 +86,7 @@ export {
   type GuardianResume,
   type GuardianToolMode,
 } from "./guard.js";
+export { abortable } from "./abortable.js";
 export {
   GUARDIAN_DEFAULT_CALL_TIMEOUT_MS,
   GUARDIAN_MAX_CALL_TIMEOUT_MS,

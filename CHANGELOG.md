@@ -19,6 +19,11 @@
   - The limit is per HTTP call, not per guarded tool call, and it does not limit your own function or the time a person takes to approve. A `request` that is not answered in time may still be held by Guardian; `client.pending()` lists it.
   - A `timeoutMs` that is not a whole number from 1 to 2,147,483,647 throws a `RangeError` when the client config is built.
 
+### Changed: one `abortable` helper, in the SDK
+
+- **`@odingard/guardian-sdk`**: `abortable(client, signal, run)`, the helper the LangChain and Vercel AI adapters each carried a copy of. It honours a caller's `AbortSignal` around one guarded call: an abort before the tool starts rejects at once and refuses every later step (a late ALLOW runs nothing and redeems nothing); once the tool has started (the local function runs, or Guardian was asked to perform a `remote` call) the call waits for its real outcome; a record-transport setup step is not the tool starting; a later `GuardianApprovalPending.resume()` is unaffected.
+- **`@odingard/guardian-langchain`**, **`@odingard/guardian-vercel-ai`**: both import `abortable` from the SDK in place of their own copy. No change in behaviour: LangChain's `config.signal` and the AI SDK's `abortSignal` are honoured as before. Both need the `@odingard/guardian-sdk` release that adds `abortable`; with an earlier SDK they fail to load. Their SDK version ranges are not changed here and must name that release when the adapters are released.
+
 ## guardian-mcp 0.5.2, released 2026-11-18
 
 ### Changed: clearer tool definitions

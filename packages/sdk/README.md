@@ -303,6 +303,9 @@ What it does not do:
 - The limit is per HTTP call, not per guarded tool call, which makes several (the request, the redemption, and a lookup after a lost answer).
 - It does not limit your own function, or how long a person takes to approve: a held request is answered at once and claimed later.
 - A `request` that is not answered in time is refused locally, but Guardian may have received it and may hold it for a person. The SDK does not know its outcome and proposes a new request on a retry; `client.pending()` lists what is held and `client.withdraw(requestId)` withdraws one.
+- `signal` ends every call of the client, a redemption in flight included (its outcome is then unknown, and the lookup is refused too). To stop one tool call without abandoning an action that already started, wrap the call in `abortable(client, signal, run)`, as the LangChain and Vercel AI adapters do.
+
+`abortable(client, signal, run)` is that helper: `run(client, startTool)` gets the client to use for this one call and calls `startTool()` just before the local tool runs. An abort before the tool starts rejects at once and refuses every later step, so a late ALLOW runs nothing and redeems nothing; once the tool has started (your function runs, or Guardian was asked to perform a `remote` call), the call waits for its real outcome. A later `GuardianApprovalPending.resume()` is unaffected.
 
 ## What the agent can and cannot do
 
