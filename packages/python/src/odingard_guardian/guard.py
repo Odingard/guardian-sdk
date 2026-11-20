@@ -39,6 +39,14 @@ is detected after the effect. It is reported as
 and never a success. Use ``mode="remote"`` with a registered catalog tool
 when Guardian itself must perform the call.
 
+**Generator tools (streams).** A guarded generator function stays a
+generator function (an async generator function under an async guard).
+Guardian is asked when the first item is requested, and nothing of the body
+runs before ALLOW. The capability is redeemed and the receipt recorded when
+the stream ends, or when its consumer closes it early; a stream whose body
+raises is not redeemed, like any function that raises. See
+:class:`Guard` for ASK, DENY and ``mode="remote"``.
+
 One sans-IO state machine drives both the sync and async forms, so their
 semantics cannot drift.
 """
@@ -49,6 +57,7 @@ import asyncio
 import copy
 import functools
 import inspect
+import weakref
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -859,6 +868,53 @@ def _resume_install(
 
 # --- drivers -----------------------------------------------------------------
 
+#: What the machine's ``("run",)`` step gets once a stream has ended, so a
+#: stream that ran and was recorded can be told from a result handed back in
+#: its place.
+_STREAM_ENDED = object()
+
+
+def _is_stream_function(fn: Any) -> bool:
+    """A generator or async generator function: calling it runs none of its
+    body, so its call is redeemed when the stream ends. Any other function
+    has run when it returns, also when what it returns is a generator."""
+    return inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
+
+
+def _is_stream(value: Any) -> bool:
+    return inspect.isgenerator(value) or inspect.isasyncgen(value)
+
+
+async def _advance(inner: Any, thrown: Optional[BaseException], sent: Any) -> tuple:
+    """One step of ``inner`` (a generator or an async generator), passing on
+    an exception thrown into the stream or a value sent to it. Returns
+    ``(done, item)``."""
+    if inspect.isasyncgen(inner):
+        try:
+            if thrown is not None:
+                return (False, await inner.athrow(thrown))
+            if sent is not None:
+                return (False, await inner.asend(sent))
+            return (False, await inner.__anext__())
+        except StopAsyncIteration:
+            return (True, None)
+    try:
+        if thrown is not None:
+            return (False, inner.throw(thrown))
+        if sent is not None:
+            return (False, inner.send(sent))
+        return (False, next(inner))
+    except StopIteration:
+        return (True, None)
+
+
+async def _aclose(inner: Any) -> None:
+    if inspect.isasyncgen(inner):
+        await inner.aclose()
+    else:
+        inner.close()
+
+
 
 class _Run:
     """One governed call: its machine, its tool body, and the last receipt.
@@ -876,8 +932,13 @@ class _Run:
         body: Callable[[Optional[VerifiedArguments]], Any],
         caller_args: Optional[Dict[str, Any]] = None,
         file_args: Optional[Mapping[str, str]] = None,
+        stream: bool = False,
     ):
         self.guard = guard
+        #: The tool is a generator function: calling it runs none of its
+        #: body, so the call is redeemed when its stream ends. A function
+        #: that returns a generator has run when it returns.
+        self.stream = stream
         self.tool_name = tool_name
         self.args = args
         self.caller_args = args if caller_args is None else caller_args
@@ -977,9 +1038,87 @@ class _Run:
             return None
         return result if inspect.isawaitable(result) else None
 
-    def drive(self, machine: Generator) -> Any:
+    def _hold_for_stream(self, make: Callable[[Dict[str, bool]], Any]) -> Any:
+        """Build the stream of a governed generator function.
+
+        A private copy of a pinned file lives until the stream has ended and
+        its body has closed: the stream deletes it itself, on every way out.
+        A stream that is dropped before it ever started runs none of that
+        code, so only then does the fallback here delete the copy. (Python
+        runs a generator's weak-reference callbacks before it closes the
+        generator, so the fallback must leave a started stream alone.)
+        """
+        state = {"started": False}
+        stream = make(state)
+        prepared = self._prepared
+        if prepared is not None:
+
+            def drop_unstarted() -> None:
+                if not state["started"]:
+                    prepared.cleanup()
+
+            weakref.finalize(stream, drop_unstarted)
+        return stream
+
+    def _stream(self, machine: Generator, inner: Generator, state: Dict[str, bool]) -> Generator:
+        """The rest of a governed call whose body is a generator: hand its
+        items on, then redeem the capability and record the receipt.
+
+        The body ending, or the consumer closing the stream early, is the
+        action having run: both are redeemed and recorded. An exception
+        from the body propagates and nothing is redeemed, as for a function
+        that raises.
+        """
+        state["started"] = True
+        closed = False
+        returned: Any = None
+        try:
+            try:
+                returned = yield from inner
+            except GeneratorExit:
+                closed = True  # ``yield from`` has closed the body
+        finally:
+            self._cleanup()
+        result = self.drive(machine, _STREAM_ENDED)
+        if closed:
+            return None  # a closed stream takes no more items
+        if result is _STREAM_ENDED:
+            return returned
+        # Handed back in place of raising (on_execution_failed="result"):
+        # the stream's last item.
+        yield result
+        return None
+
+    async def _astream(self, machine: Generator, inner: Any, state: Dict[str, bool]) -> Any:
+        """:meth:`_stream` for an async guard. ``inner`` is an async
+        generator, or a generator (a sync body under an async guard)."""
+        state["started"] = True
+        closed = False
+        thrown: Optional[BaseException] = None
+        sent: Any = None
+        try:
+            while True:
+                done, item = await _advance(inner, thrown, sent)
+                if done:
+                    break
+                thrown = sent = None
+                try:
+                    sent = yield item
+                except GeneratorExit:
+                    await _aclose(inner)
+                    closed = True
+                    break
+                except BaseException as err:  # noqa: BLE001 — passed on to the body
+                    thrown = err
+        finally:
+            self._cleanup()
+        result = await self.adrive(machine, _STREAM_ENDED)
+        if closed or result is _STREAM_ENDED:
+            return
+        yield result
+
+    def drive(self, machine: Generator, value: Any = None) -> Any:
         client = self.guard.client
-        value: Any = None
         try:
             while True:
                 op = machine.send(value)
@@ -995,11 +1134,24 @@ class _Run:
                 elif kind == "pin_check":
                     value = self._pin_check(op[1])
                 elif kind == "run":
+                    streaming = False
                     try:
                         value = self.body(self._prepared)
+                        if self.stream and inspect.isasyncgen(value):
+                            raise TypeError(
+                                f'"{self.tool_name}" is an async generator function, which needs an '
+                                "AsyncGuardianClient-backed Guard. It did not run and nothing was recorded."
+                            )
+                        streaming = self.stream and inspect.isgenerator(value)
                     finally:
                         # A private copy is deleted when the tool returns, also on raise.
-                        self._cleanup()
+                        if not streaming:
+                            self._cleanup()
+                    if streaming:
+                        # A generator function: none of its body has run yet.
+                        # The capability is redeemed when the stream ends.
+                        stream = value
+                        return self._hold_for_stream(lambda state: self._stream(machine, stream, state))
                 elif kind == "failed":
                     pending = self._report_failure(op[1])
                     close = getattr(pending, "close", None)
@@ -1022,9 +1174,8 @@ class _Run:
         except _Ask as ask:
             raise self._pending(ask) from None
 
-    async def adrive(self, machine: Generator) -> Any:
+    async def adrive(self, machine: Generator, value: Any = None) -> Any:
         client = self.guard.client
-        value: Any = None
         try:
             while True:
                 op = machine.send(value)
@@ -1043,12 +1194,18 @@ class _Run:
                     else:
                         value = self._pin_check(op[1])
                 elif kind == "run":
+                    streaming = False
                     try:
                         value = self.body(self._prepared)
                         if inspect.isawaitable(value):
                             value = await value
+                        streaming = self.stream and _is_stream(value)
                     finally:
-                        self._cleanup()
+                        if not streaming:
+                            self._cleanup()
+                    if streaming:
+                        stream = value
+                        return self._hold_for_stream(lambda state: self._astream(machine, stream, state))
                 elif kind == "failed":
                     pending = self._report_failure(op[1])
                     if pending is not None:
@@ -1155,6 +1312,39 @@ class Guard:
     ``"previewRoots"`` any file the process can read may be previewed: add
     ``"previewRoots": ["/srv/reports"]`` to preview only files in those
     folders (others get a ``withheld`` preview, size only).
+
+    **Generator tools (streams).** Calling a generator function runs none
+    of its body, so a generator is a tool that has not run yet:
+
+    * ``@guard`` on a generator function gives a generator function (an
+      async generator function under an async guard, also for a sync
+      generator function). Nothing is asked when it is called. Guardian is
+      asked when the first item is requested, and the body starts only
+      after ALLOW.
+    * The capability is redeemed and the receipt recorded when the stream
+      ends, and also when its consumer closes it early (``close()``,
+      ``aclose()``, or leaving a ``for`` loop and dropping the stream): the
+      body ran in part, so Guardian records it. A body that raises is not
+      redeemed, like any function that raises. A stream that is never
+      started asks nothing and redeems nothing.
+    * ASK and DENY raise when the first item is requested. With
+      ``on_ask="result"`` / ``on_deny="result"`` the decision is the
+      stream's only item. ``GuardianApprovalPending.resume()`` returns the
+      stream as ``output`` with ``receipt=None``: it runs, and
+      ``on_receipt`` gets the receipt, when it is consumed.
+    * A redemption that fails after the stream raises
+      :class:`GuardianExecutionFailed` after the last item (from
+      ``close()`` for a stream closed early); with
+      ``on_execution_failed="result"`` it is the stream's last item, and for
+      a closed stream only ``on_execution_error`` sees it.
+    * ``mode="remote"``: the body never runs and the stream's only item is
+      Guardian's result.
+    * Only generator functions are streams (``@guard`` on one, or one
+      passed to :meth:`run`). A function that returns a generator, an
+      iterator or any other iterable has run when it returns: the
+      capability is redeemed then, and what it returned is handed back as
+      it is. A sync guard refuses an async generator function with a
+      ``TypeError``.
     """
 
     def __init__(
@@ -1266,6 +1456,7 @@ class Guard:
         file_args: Optional[Dict[str, str]],
         previews: Sequence[str] = (),
         preview_roots: Optional[Mapping[str, Sequence[str]]] = None,
+        stream: bool = False,
     ) -> Any:
         # The reserved key is refused for every tool, so an agent cannot
         # supply a pin of its own.
@@ -1276,7 +1467,7 @@ class Guard:
                 'The argument name "guardianContentPins" is reserved for content pins.',
             )
         if not file_args:
-            run = _Run(self, tool_name, args, body)
+            run = _Run(self, tool_name, args, body, stream=stream)
             machine = _run_through(self._opts, self._ensured, tool_name, args)
             if self._async:
                 return run.adrive(machine)
@@ -1314,7 +1505,7 @@ class Guard:
                     proposed = await asyncio.to_thread(pin)
                 except Exception as err:  # noqa: BLE001 — never run unpinned
                     return refusal(err)
-                run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args)
+                run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream)
                 return await run.adrive(_run_through(opts, self._ensured, tool_name, proposed))
 
             return arun()
@@ -1322,7 +1513,7 @@ class Guard:
             proposed = pin()
         except Exception as err:  # noqa: BLE001 — never run unpinned
             return refusal(err)
-        run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args)
+        run = _Run(self, tool_name, proposed, body, caller_args=args, file_args=file_args, stream=stream)
         return run.drive(_run_through(opts, self._ensured, tool_name, proposed))
 
     def run(
@@ -1342,12 +1533,27 @@ class Guard:
         the ``@guard`` decorator for ``"bytes"`` and ``"copy"``. A file
         argument declared without a mode means ``"bytes"``, so here it is
         refused (never silently checked in a weaker mode): name ``"recheck"``.
+
+        A generator function as ``fn`` is a stream: calling it runs nothing,
+        so the call is redeemed when the returned stream ends (see
+        :class:`Guard`). Any other ``fn`` has run when it returns, whatever
+        it returns.
         """
+        return self._run(tool_name, arguments, fn, file_args, _is_stream_function(fn))
+
+    def _run(
+        self,
+        tool_name: str,
+        arguments: Any,
+        fn: Callable[[], Any],
+        file_args: Optional[FileArgsDeclaration],
+        stream: bool,
+    ) -> Any:
         spec = self._check_file_args(tool_name, file_args, allowed=("recheck",))
         previews = normalize_file_arg_previews(tool_name, file_args) if spec else []
         roots = normalize_file_arg_preview_roots(tool_name, file_args) if spec else {}
         args = to_arguments_record(arguments)
-        return self._governed(tool_name, args, lambda _prepared: fn(), spec, previews, roots)
+        return self._governed(tool_name, args, lambda _prepared: fn(), spec, previews, roots, stream)
 
     def __call__(
         self, tool_name: Optional[str] = None, *, file_args: Optional[FileArgsDeclaration] = None
@@ -1433,7 +1639,41 @@ class Guard:
                 # ``snapshot`` stays private to ``body``: _governed deep-copies
                 # this record again, so what is proposed, checked and exposed
                 # shares no object with what the body is rebuilt from.
-                return self._governed(name, record_of(snapshot), body, spec, previews, roots)
+                return self._governed(name, record_of(snapshot), body, spec, previews, roots, streams)
+
+            def governed(args: tuple, kwargs: dict) -> Any:
+                if spec:
+                    return pinned_call(args, kwargs)
+                return self._run(name, arguments_of(args, kwargs), lambda: fn(*args, **kwargs), None, streams)
+
+            streams = _is_stream_function(fn)
+            if streams and self._async:
+
+                @functools.wraps(fn)
+                async def async_stream_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    # Guardian is asked here, when the first item is requested.
+                    stream = await governed(args, kwargs)
+                    if not inspect.isasyncgen(stream):
+                        # A decision handed back as data, or Guardian's
+                        # result for a remote tool: the only item.
+                        yield stream
+                        return
+                    thrown: Optional[BaseException] = None
+                    sent: Any = None
+                    while True:
+                        done, item = await _advance(stream, thrown, sent)
+                        if done:
+                            return
+                        thrown = sent = None
+                        try:
+                            sent = yield item
+                        except GeneratorExit:
+                            await stream.aclose()
+                            raise
+                        except BaseException as err:  # noqa: BLE001 — passed on to the body
+                            thrown = err
+
+                return async_stream_wrapper
 
             if self._async:
 
@@ -1447,6 +1687,23 @@ class Guard:
 
             if inspect.iscoroutinefunction(fn):
                 raise TypeError("async functions need an AsyncGuardianClient-backed Guard")
+            if inspect.isasyncgenfunction(fn):
+                raise TypeError("async generator functions need an AsyncGuardianClient-backed Guard")
+
+            if streams:
+
+                @functools.wraps(fn)
+                def stream_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    # Guardian is asked here, when the first item is requested.
+                    stream = governed(args, kwargs)
+                    if inspect.isgenerator(stream):
+                        return (yield from stream)
+                    # A decision handed back as data, or Guardian's result
+                    # for a remote tool: the only item.
+                    yield stream
+                    return None
+
+                return stream_wrapper
 
             @functools.wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Any:

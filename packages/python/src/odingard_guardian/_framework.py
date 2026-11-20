@@ -10,6 +10,7 @@ before the tool starts means the tool does not run.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import logging
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
 from .client import AsyncGuardianClient
-from .guard import Guard, GuardianExecutionFailed
+from .guard import EXECUTION_OUTCOME_UNKNOWN, Guard, GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -33,7 +34,18 @@ class Outcome:
 
     ``ran`` is True once the tool step started. ``message`` is what the
     model should be told instead of the tool's own result (``None`` when
-    the tool ran and Guardian recorded it).
+    the tool ran and Guardian recorded it). For a ``remote`` tool that
+    Guardian performed, the tool step never starts and ``message`` is
+    Guardian's result as JSON text:
+    ``{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …,
+    "receipt": …}}``.
+
+    ``result`` is Guardian's result record (``{"guardian": {...}}``) whenever
+    the tool step did not answer the call: a refusal, a held call, a call
+    that ran but could not be recorded, or a ``remote`` tool Guardian
+    performed (the only case with ``decision == "ALLOW"`` and ``ran`` False).
+    It is ``None`` when the tool ran and Guardian recorded it, and when
+    Guardian could not be asked.
     """
 
     ran: bool
@@ -41,6 +53,7 @@ class Outcome:
     message: Optional[str] = None
     request_id: Optional[str] = None
     reason_code: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
 
 
 def build_guard(
@@ -53,10 +66,18 @@ def build_guard(
     amount_args: Optional[Mapping[str, Mapping[str, Any]]],
     on_receipt: Optional[Callable[..., Any]],
     on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]],
+    mode: Mode = "in_process",
+    modes: Optional[Mapping[str, Mode]] = None,
 ) -> Guard:
+    # A mistyped mode must not quietly run the local tool.
+    for value in (mode, *(modes or {}).values()):
+        if value not in ("in_process", "remote"):
+            raise ValueError('mode takes "in_process" or "remote"')
     guard = Guard(
         client,
         connection_id=connection_id,
+        mode=mode,
+        modes=modes,
         agent_name=agent_name,
         adapter_id=adapter_id,
         purpose=purpose,
@@ -70,6 +91,17 @@ def build_guard(
     if not guard._async:
         raise TypeError("use an AsyncGuardianClient: tool calls in this framework are async")
     return guard
+
+
+def is_stream_function(fn: Any) -> bool:
+    """Whether ``fn`` is a generator or async generator function.
+
+    Calling one runs none of its body. :func:`decide_and_run` redeems the
+    capability when the tool step returns, so an integration must only take
+    that step for such a tool if the framework consumes the stream inside
+    it; otherwise Guardian would record a call that never ran.
+    """
+    return inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
 
 
 def resolve_tool_name(tool_names: ToolNames, name: str) -> str:
@@ -112,13 +144,31 @@ def unchecked(tool_name: str) -> Outcome:
     )
 
 
+def outcome_unknown(tool_name: str) -> Outcome:
+    """A remote call that failed where Guardian may already have performed it."""
+    return Outcome(
+        ran=False,
+        decision="DENY",
+        message=(
+            f"Guardian could not confirm what happened to {tool_name}: Guardian may have performed it. "
+            "Do not call it again; check the request in Guardian."
+        ),
+        reason_code=EXECUTION_OUTCOME_UNKNOWN,
+    )
+
+
 async def decide_and_run(
     guard: Guard,
     tool_name: str,
     proposed: Dict[str, Any],
     run_tool: Callable[[], Awaitable[None]],
 ) -> Outcome:
-    """Ask Guardian about ``tool_name(proposed)``; await ``run_tool`` after ALLOW, never before."""
+    """Ask Guardian about ``tool_name(proposed)``; await ``run_tool`` after ALLOW, never before.
+
+    The capability is redeemed when ``run_tool`` returns, so the tool must
+    have run by then: a stream the tool produces has to be consumed inside
+    ``run_tool`` (see :func:`is_stream_function`).
+    """
     started = False
 
     async def body() -> Any:
@@ -132,6 +182,15 @@ async def decide_and_run(
     except Exception:
         if started:
             raise  # the tool's own error, or a hook after this one: not ours to hide
+        if guard._opts.mode_for(tool_name) == "remote":
+            # The tool step never starts for a remote tool, so ``started`` says
+            # nothing here: the error may have come after Guardian performed
+            # the call (a raising ``on_receipt``, for example). Never tell the
+            # model it did not run.
+            _logger.warning(
+                "Guardian call for remote tool %s raised; it may have been performed", tool_name, exc_info=True
+            )
+            return outcome_unknown(tool_name)
         _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
         return unchecked(tool_name)
     if out is _RAN:
@@ -139,10 +198,16 @@ async def decide_and_run(
     info = out.get("guardian") if isinstance(out, dict) else None
     if not isinstance(info, dict):  # pragma: no cover - Guard results always carry it
         return unchecked(tool_name) if not started else Outcome(ran=True, decision="ALLOW")
+    message = info.get("message")
+    if message is None and not started and info.get("decision") == "ALLOW":
+        # A remote tool: Guardian performed the call and the tool step never
+        # started. The model gets Guardian's result in place of the tool's.
+        message = json.dumps(out, sort_keys=True, default=str)
     return Outcome(
         ran=started,
         decision=str(info.get("decision")),
-        message=info.get("message"),
+        message=message,
         request_id=info.get("request_id"),
         reason_code=info.get("reason_code"),
+        result=out,
     )

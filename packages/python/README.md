@@ -174,6 +174,46 @@ await send_whatsapp("+15550100", "Your invoice is ready")
 # held.resume() is awaitable for an async guard
 ```
 
+### Generator tools: streams (unreleased)
+
+Calling a generator function runs none of its body, so a guarded generator is decided and recorded around its iteration, not around the call:
+
+```python
+@guard("export_rows")
+def export_rows(table: str):
+    for row in read(table):   # your code
+        yield row
+
+stream = export_rows("invoices")   # nothing asked, nothing run
+for row in stream:                 # Guardian is asked here, before the first row
+    ...
+# the stream ended: the capability is redeemed and the receipt recorded
+```
+
+`@guard` on a generator function gives a generator function (`inspect.isgeneratorfunction` stays true). Under an async guard it gives an async generator function, for `async def` generators and for sync ones: `async for row in export_rows(...)`.
+
+| When                                      | What happens                                                                                                                                                                                              |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The first item is requested               | Guardian is asked. The body starts only after ALLOW.                                                                                                                                                      |
+| **ASK**, **DENY**, Guardian unreachable   | Raised on that first request; the body never runs. With `on_ask="result"` / `on_deny="result"` the decision is the stream's only item.                                                                    |
+| After approval                            | `held.resume()` returns the stream as `output`, with `receipt=None`: it runs when you consume it, and `on_receipt` gets the receipt then. In result mode, call the tool again with the same arguments.     |
+| The stream ends                           | The capability is redeemed and the receipt recorded (`on_receipt`).                                                                                                                                       |
+| The consumer closes it early              | `close()`, `aclose()`, or leaving the loop and dropping the stream: the body is closed, then the capability is redeemed and the receipt recorded. The body ran in part, so Guardian records the call.      |
+| The body raises                           | The error reaches the consumer and nothing is redeemed, as for a function that raises.                                                                                                                    |
+| The redemption fails after the stream     | `GuardianExecutionFailed(local_effect_ran=True)` is raised after the last item (from `close()` for a stream closed early). With `on_execution_failed="result"` it is the stream's last item; for a closed stream only `on_execution_error` sees it. |
+| `mode="remote"`                           | The body never runs. The stream's only item is Guardian's result.                                                                                                                                         |
+
+Only a generator function is a stream: `@guard` on one, or one passed as `fn` to `guard.run(...)`. A function that *returns* a generator is an ordinary call. Its own body has run when it returns, so the capability is redeemed then, also when nobody consumes what it returned, and the generator is handed back as it is. A sync guard refuses an async generator function with a `TypeError` (use an `AsyncGuardianClient`).
+
+Limits:
+
+- What an ordinary function returns is data, whatever it is (a generator, a list, a file object, a `map`): it is returned as it is, and the capability is redeemed when the function returns. If the returned generator is where the action happens, make the tool a generator function.
+- A stream dropped without `close()` is redeemed when Python collects it, which can be late, and not at all if the process exits first. Close a stream you abandon.
+- With `file_args`, the files are checked once, just before the body starts, not between items. A private copy (`"copy"`) is kept until the stream has ended and its body has closed, also for a stream that is dropped midway; a stream that is dropped before it started deletes it at once.
+- Before this change a guarded generator function was redeemed when the generator object was created, before any of its body ran, and a stream that failed was recorded as a success.
+
+In Semantic Kernel, `invoke()` consumes a generator function before the filter's step returns, so it is recorded after it ran. Agent Framework does not iterate a tool's generator, so Guardian's middleware refuses a generator tool before anything is proposed.
+
 ### Give the decision back to the model instead of raising
 
 ```python
@@ -258,7 +298,8 @@ integrations:
   after the effect and raised as `GuardianExecutionFailed(local_effect_ran=True)`
   (or returned as a result that says the call ran, with
   `on_execution_failed="result"`). Treat that as an incident. Where Guardian itself must perform the call, use
-  `mode="remote"` with a tool registered in your Guardian connection.
+  `mode="remote"` with a tool registered in your Guardian connection. What remote mode does, needs and does
+  not support, also for Agent Framework and Semantic Kernel: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Guardian governs what goes through it. An agent or app that never calls
   Guardian is not governed by it.
 - **First-run setup:**
@@ -321,6 +362,8 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 - If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
 - Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
+- `mode="remote"`, or `modes={"refund_order": "remote"}` by Guardian tool name, is for a tool registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the tool's own function does not run, and the model gets Guardian's result (`{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …, "receipt": …}}`) as JSON text. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError`. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- A tool that is a generator function is refused before anything is proposed: Agent Framework does not iterate a tool's generator, so it would not run.
 - Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
 - Tested with `agent-framework-core` 1.26.0 in a real agent loop with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
@@ -350,6 +393,7 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
+- `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
