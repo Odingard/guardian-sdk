@@ -7,6 +7,10 @@ import {
   CONTENT_PIN_INVALID_ARGUMENT,
   abortable,
   normalizeFileArgsSpec,
+  resolveHeldScope,
+  scopeHeldRequests,
+  SCOPE_UNKNOWN,
+  type HeldScope,
 } from "@odingard/guardian-sdk";
 import {
   createGuardianContext,
@@ -26,7 +30,60 @@ export {
   type GuardianToolMode,
 } from "./core.js";
 
-export type GuardianLangChainOptions = GuardianAdapterOptions;
+export type GuardianLangChainOptions = GuardianAdapterOptions &
+  Readonly<{
+    /**
+     * Held requests are scoped per session. The scope of one call: the
+     * conversation or user it belongs to, from the config LangChain passes
+     * the tool. The config is the caller's (your graph run), not part of
+     * the model's tool call; never read the scope from the tool's input. A held call is claimed only by the same call in the same
+     * scope; an identical call in another scope is its own request.
+     *
+     * Without this option the scope is LangGraph's
+     * `config.configurable.thread_id`: a non-empty string, or a number or
+     * bigint as its string form (`1` and `"1"` are one thread). Only
+     * without a thread id (`undefined` or `null`) are held calls shared by
+     * every call of the wrapped tools, which must then serve one principal;
+     * any other thread id (an empty string, an object) is an unknown
+     * session, as below.
+     *
+     * With this option, it alone names the scope (the thread id is not
+     * used). Return a non-empty string. Anything else means the session is
+     * not known, and a held call is then never claimed by a later call:
+     * `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`), `undefined`, `null`,
+     * an empty string, any other value, or the function throwing. The
+     * scope stays in this process.
+     */
+    scope?: (
+      config: Record<string, unknown> | undefined,
+    ) => string | typeof SCOPE_UNKNOWN | null | undefined;
+  }>;
+
+/**
+ * LangGraph's thread id, the default scope of a call. LangGraph does not
+ * require a string, and keys a thread by the id's string form, so `1` and
+ * `"1"` are one thread: a number or bigint is its string form here too.
+ * Only an absent id (`undefined`, `null`) leaves held calls shared. An id
+ * that names no thread (an empty string, NaN, an object, anything else) is
+ * an unknown session.
+ */
+function threadScope(config: Record<string, unknown> | undefined): HeldScope {
+  const threadId = (config?.configurable as { thread_id?: unknown } | undefined)
+    ?.thread_id;
+  if (threadId === undefined || threadId === null) {
+    return undefined;
+  }
+  if (typeof threadId === "string") {
+    return threadId.length > 0 ? threadId : SCOPE_UNKNOWN;
+  }
+  if (
+    (typeof threadId === "number" && Number.isFinite(threadId)) ||
+    typeof threadId === "bigint"
+  ) {
+    return String(threadId);
+  }
+  return SCOPE_UNKNOWN;
+}
 
 /**
  * Wrap a LangChain StructuredTool / DynamicStructuredTool so its `func`
@@ -183,11 +240,24 @@ function wrapWithContext(
       // later step; a started tool runs to its real outcome (`abortable`
       // in @odingard/guardian-sdk).
       const signal = (config as { signal?: AbortSignal } | undefined)?.signal;
+      // Held requests are scoped per session: this call sees only the held
+      // calls of its own scope. The app's `scope` option replaces the
+      // thread-id default, and whatever it gives that is not a session is
+      // an unknown one; only without the option, and without a thread id,
+      // are held calls shared as before.
+      const readScope = (ctx.options as GuardianLangChainOptions).scope;
+      const callConfig = config as Record<string, unknown> | undefined;
+      const scoped = scopeHeldRequests(
+        ctx,
+        readScope === undefined
+          ? threadScope(callConfig)
+          : resolveHeldScope(() => readScope(callConfig)),
+      );
       return abortable(ctx.options.client, signal, (client, startTool) =>
         runThroughGuardian(
           client === ctx.options.client
-            ? ctx
-            : { ...ctx, options: { ...ctx.options, client } },
+            ? scoped
+            : { ...scoped, options: { ...scoped.options, client } },
           inner.name,
           input,
           (approved) => {
@@ -202,6 +272,10 @@ function wrapWithContext(
             );
           },
         ),
+        // So a setup step held by an earlier call is not taken for the tool.
+        // The scoped context shares the wrapper's held setup steps (only
+        // held tool calls are scoped).
+        scoped,
       );
     },
   });

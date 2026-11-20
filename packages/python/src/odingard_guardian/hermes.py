@@ -266,10 +266,16 @@ def protected_paths(env: Optional[Mapping[str, str]] = None) -> List[str]:
 
 
 def _under(path: str, roots: Sequence[str]) -> bool:
+    """Whether ``path`` is in a protected directory, however it is spelled:
+    repeated separators, ``.`` and ``..`` segments, or a symbolic link that
+    leads there. A path that cannot be resolved counts as protected."""
     if not path:
         return False
     expanded = os.path.expanduser(path)
-    forms = {os.path.abspath(expanded), os.path.realpath(expanded)}
+    try:
+        forms = {os.path.abspath(expanded), os.path.realpath(expanded)}
+    except (OSError, ValueError):
+        return True
     if ".hermes" in os.path.normpath(expanded).split(os.sep):
         return True
     for form in forms:
@@ -289,10 +295,42 @@ _CONFIG_WORDS = re.compile(
 )
 
 
+_WORD_BREAK = re.compile(r"""[\s'"`=,;|&<>()]+""")
+# The files a V4A patch names (the same headers as Codex's apply_patch).
+_PATCH_HEADER = re.compile(r"^[ \t]*\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)[ \t\r]*$", re.MULTILINE)
+
+
 def _names_config(text: str, roots: Sequence[str]) -> bool:
     if _CONFIG_WORDS.search(text):
         return True
-    return any(root and root != os.sep and root in text for root in roots)
+    if any(root and root != os.sep and root in text for root in roots):
+        return True
+    # A word that spells a protected directory with ``//``, ``.`` or ``..``
+    # segments. Only the text is checked: links and what the shell expands
+    # are not resolved.
+    for word in _WORD_BREAK.split(text):
+        if os.sep not in word:
+            continue
+        norm = os.path.normpath(os.path.expanduser(word))
+        if any(root and root != os.sep and (norm == root or norm.startswith(root.rstrip(os.sep) + os.sep))
+               for root in roots):
+            return True
+    return False
+
+
+def _patch_touches(patch: str, roots: Sequence[str]) -> bool:
+    """Whether a V4A patch names a file in a protected directory (links resolved, as for ``path``)."""
+    return _names_config(patch, roots) or any(_under(m.group(1), roots) for m in _PATCH_HEADER.finditer(patch))
+
+
+def _env_file(path: str) -> bool:
+    """A ``.env`` file by its name, or by the name of the file a symbolic link leads to."""
+    if os.path.basename(os.path.normpath(path)).startswith(".env"):
+        return True
+    try:
+        return os.path.basename(os.path.realpath(os.path.expanduser(path))).startswith(".env")
+    except (OSError, ValueError):
+        return True
 
 
 def _wrong_type(a: Mapping[str, Any], *fields: str) -> bool:
@@ -338,7 +376,7 @@ def governed_call(
         path = a.get("path")
         if not isinstance(path, str) and path is not None:
             return _raw(tool_name, a)
-        if isinstance(path, str) and _under(path, roots) and os.path.basename(path).startswith(".env"):
+        if isinstance(path, str) and _under(path, roots) and _env_file(path):
             return GovernedCall("hermes_config", {"operation": "read_file", "path": path}, f"Read {path}")
         return None
     if tool_name in READ_ONLY_TOOLS:
@@ -372,7 +410,7 @@ def governed_call(
         content = _str(a.get("content")) if tool_name == "write_file" else (
             _str(a.get("new_string")) or _str(a.get("patch")))
         # A V4A patch names its files inside the patch text.
-        to_config = _under(path, roots) or (tool_name == "patch" and _names_config(_str(a.get("patch")), roots))
+        to_config = _under(path, roots) or (tool_name == "patch" and _patch_touches(_str(a.get("patch")), roots))
         return GovernedCall("hermes_config" if to_config else "file_write", {
             "operation": tool_name,
             "path": path,

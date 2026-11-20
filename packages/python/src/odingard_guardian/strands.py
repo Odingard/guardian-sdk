@@ -21,7 +21,9 @@ tool::
   the capability is redeemed and the decision recorded.
 * ASK: the tool does not run. The model is told the call is held for a
   person; after the person approves, the same call (same tool, same
-  arguments) claims the approved request and runs. With
+  arguments) in the same session claims the approved request and runs. The
+  session is the agent's session manager's, or what ``scope=`` returns;
+  without one, each call asks for its own approval. With
   ``on_ask="interrupt"`` the agent run pauses instead (a Strands interrupt)
   and the call is made again when the run is resumed.
 * DENY, or Guardian unreachable: the tool does not run and the model is
@@ -49,9 +51,17 @@ from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent, HookOrder, Ho
 from strands.types.events import ToolResultEvent
 from strands.types.tools import AgentTool, ToolSpec, ToolUse
 
-from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name, unchecked
+from ._framework import (
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    json_record,
+    resolve_scope,
+    resolve_tool_name,
+    unchecked,
+)
 from .client import AsyncGuardianClient, GuardianClient
-from .guard import GuardianExecutionFailed
+from .guard import SCOPE_UNKNOWN, GuardianExecutionFailed
 
 __all__ = ["GuardianHookProvider"]
 
@@ -211,9 +221,21 @@ class _GuardianTool(AgentTool):
             if final and _failed(final[0]):
                 raise _ToolFailed()
 
+        # The session the call belongs to: a held request is claimed only by
+        # the same call in the same scope. Never read from the arguments.
+        context = kwargs.get("_tool_context")
+        agent = getattr(context, "agent", None) or invocation_state.get("agent")
+        pauses = provider._on_ask == "interrupt" and "event_loop_cycle_id" in invocation_state
+        scope = provider._scope_of(agent, invocation_state)
+        paused_call = scope is SCOPE_UNKNOWN and pauses
+        if paused_call:
+            # A paused call is made again by resuming its own agent run: its
+            # held request belongs to this call of this agent, to no session.
+            scope = provider._call_scope(agent, tool_use_id)
+
         async def governed() -> Any:
             try:
-                return await decide_and_run(provider._guard, tool_name, proposed, run_tool)
+                return await decide_and_run(provider._guard, tool_name, proposed, run_tool, scope=scope)
             finally:
                 events.put_nowait(_DONE)
 
@@ -237,6 +259,9 @@ class _GuardianTool(AgentTool):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
+        held = outcome.decision == "ASK" and bool(outcome.request_id)
+        if paused_call and not (held and callable(getattr(context, "interrupt", None))):
+            provider._forget_call(agent, tool_use_id)  # settled: nothing left to resume
         if outcome.message is None:
             if final:
                 yield final[0]  # ALLOW: the tool ran and Guardian recorded it
@@ -248,12 +273,12 @@ class _GuardianTool(AgentTool):
             # and is reported as an error below.)
             yield told(outcome.message, "success")
             return
-        if outcome.decision == "ASK" and outcome.request_id:
+        if held:
             await provider._held(tool_name, outcome.request_id)
             # Only an agent run can pause: a direct call (agent.tool.x(...)) has
             # no event loop cycle, and its caller gets the held result.
-            if provider._on_ask == "interrupt" and "event_loop_cycle_id" in invocation_state:
-                _pause(kwargs.get("_tool_context"), tool_name, outcome.request_id, outcome.message)
+            if pauses:
+                _pause(context, tool_name, outcome.request_id, outcome.message)
         yield told(outcome.message)
 
 
@@ -305,6 +330,16 @@ class GuardianHookProvider(HookProvider):
         approved in the Guardian console. The response you resume with
         approves nothing: the call claims the request from Guardian and
         pauses again while it is still held.
+    :param scope: ``callback(agent, invocation_state)`` returning the scope of
+        a call: the session, user or conversation it belongs to, as a hashable
+        value. A held call is claimed only by the same call in the same scope.
+        Default: the session id of the agent's session manager (with the
+        agent's ``agent_id``); an agent without a session manager has no
+        scope, and then a held call is never claimed by a later call. Read
+        the scope from something your app sets, such as a value it passes in
+        ``agent(..., invocation_state={"user_id": ...})``; never from the tool
+        call's arguments, which the model writes. ``None``, an empty string or
+        an error means unknown.
     :param on_approval_pending: ``callback(tool_name, request_id)`` when a
         call is held, so the app can show the request to a person.
     :param on_receipt / on_execution_error: as for :class:`Guard`.
@@ -323,6 +358,7 @@ class GuardianHookProvider(HookProvider):
         mode: Mode = "in_process",
         modes: Optional[Mapping[str, Mode]] = None,
         on_ask: OnAsk = "result",
+        scope: Optional[Callable[[Any, Dict[str, Any]], Any]] = None,
         on_approval_pending: Optional[Callable[[str, str], Any]] = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
@@ -345,6 +381,9 @@ class GuardianHookProvider(HookProvider):
         )
         self._tool_names = tool_names
         self._on_ask = on_ask
+        self._scope = scope
+        #: Paused calls of agents without a scope: a private scope per agent and tool use.
+        self._paused: "weakref.WeakKeyDictionary[Any, Dict[str, object]]" = weakref.WeakKeyDictionary()
         self._on_approval_pending = on_approval_pending
         #: The tool and name each call started with, by event, until the last hook ran.
         self._first: Dict[int, Tuple[Optional[AgentTool], Any]] = {}
@@ -401,6 +440,35 @@ class GuardianHookProvider(HookProvider):
                 }
             ],
         }
+
+    def _scope_of(self, agent: Any, invocation_state: Dict[str, Any]) -> Any:
+        """The scope of a call: the app's ``scope`` option, else the agent's session."""
+        default: Any = SCOPE_UNKNOWN
+        # The id the application gave the agent's session manager. An agent
+        # without one only has a random id of its own, which names no session.
+        session_id = getattr(getattr(agent, "_session_manager", None), "session_id", None)
+        if isinstance(session_id, str) and session_id:
+            default = ("strands-session", session_id, getattr(agent, "agent_id", None))
+        option = self._scope
+        return resolve_scope(
+            None if option is None else (lambda _context: option(agent, invocation_state)), None, default
+        )
+
+    def _call_scope(self, agent: Any, tool_use_id: str) -> Any:
+        try:
+            return self._paused.setdefault(agent, {}).setdefault(tool_use_id, object())
+        except TypeError:  # an agent that cannot be referenced: nothing is remembered
+            return SCOPE_UNKNOWN
+
+    def _forget_call(self, agent: Any, tool_use_id: str) -> None:
+        try:
+            calls = self._paused.get(agent)
+        except TypeError:
+            return
+        if calls is not None:
+            calls.pop(tool_use_id, None)
+            if not calls:
+                self._paused.pop(agent, None)
 
     def _governs(self, tool: Any) -> bool:
         """Whether ``tool`` is, or wraps, this provider's stand-in."""

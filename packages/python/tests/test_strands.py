@@ -113,6 +113,11 @@ def _reset():
     ran.clear()
 
 
+def one_session(agent, invocation_state):
+    """A scope option for tests in which every call belongs to one known session."""
+    return "session-1"
+
+
 def provider(guardian, **options):
     return GuardianHookProvider(AsyncFake(guardian), connection_id=CONNECTION, **options)
 
@@ -230,7 +235,7 @@ def test_a_held_direct_tool_call_gets_the_held_result_with_on_ask_interrupt():
     guardian = FakeClient(HELD, claims=[APPROVED])
     pending = []
     _, agent = agent_for(
-        [], provider(guardian, on_ask="interrupt", on_approval_pending=lambda t, r: pending.append(r))
+        [], provider(guardian, on_ask="interrupt", scope=one_session, on_approval_pending=lambda t, r: pending.append(r))
     )
     # A direct call has no agent run to pause: the caller gets the held result.
     held = agent.tool.refund_order(order_id="o42", amount_cents=500)
@@ -250,7 +255,7 @@ def test_held_then_approved_runs_on_the_same_call():
     guardian = FakeClient(HELD, claims=[APPROVED])
     pending = []
     model, agent = agent_for(
-        [CALL, CALL], provider(guardian, on_approval_pending=lambda t, r: pending.append((t, r)))
+        [CALL, CALL], provider(guardian, scope=one_session, on_approval_pending=lambda t, r: pending.append((t, r)))
     )
     agent("refund order 42")
     assert pending == [("refund_order", "req_ask")]
@@ -264,7 +269,7 @@ def test_held_then_approved_runs_on_the_same_call():
 
 def test_held_and_not_yet_approved_does_not_run_or_ask_twice():
     guardian = FakeClient(HELD)
-    model, agent = agent_for([CALL, CALL], provider(guardian))
+    model, agent = agent_for([CALL, CALL], provider(guardian, scope=one_session))
     agent("refund order 42")
     assert ran == []
     assert guardian.calls == ["request:tool.invoke", "claim:req_ask"]
@@ -273,7 +278,7 @@ def test_held_and_not_yet_approved_does_not_run_or_ask_twice():
 
 def test_held_then_declined_never_runs():
     guardian = FakeClient(HELD, claims=[DECLINED])
-    model, agent = agent_for([CALL, CALL], provider(guardian))
+    model, agent = agent_for([CALL, CALL], provider(guardian, scope=one_session))
     agent("refund order 42")
     assert ran == []
     assert "Guardian denied refund_order (APPROVAL_DENIED)" in model.texts()[1]
@@ -572,7 +577,7 @@ def test_a_change_made_while_guardian_decides_does_not_reach_the_tool():
 def test_a_change_made_while_waiting_for_approval_is_a_new_request():
     guardian = FakeClient(HELD, claims=[APPROVED])
     model, agent = agent_for(
-        [CALL, ("refund_order", {"order_id": "o42", "amount_cents": 99_999})], provider(guardian)
+        [CALL, ("refund_order", {"order_id": "o42", "amount_cents": 99_999})], provider(guardian, scope=one_session)
     )
     agent("refund order 42")
     # Other arguments never claim the approved request.
@@ -824,3 +829,184 @@ def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_reporte
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError, match="mode"):
         provider(FakeClient(ALLOW), mode="hosted")
+
+
+# --- held requests are scoped per session ---------------------------------------
+
+
+class Desk(FakeClient):
+    """Holds every call under a request id of its own; a person approves by id."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.approved = set()
+        self.requests = []
+
+    def request(self, invocation):
+        self.calls.append(f"request:{invocation['action']}")
+        self.last_invocation = invocation
+        request_id = f"req_{len(self.requests) + 1}"
+        self.requests.append(request_id)
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        if request_id in self.approved:
+            return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
+
+
+def by_user(agent, invocation_state):
+    return invocation_state.get("user_id")
+
+
+def test_without_a_session_a_held_call_is_never_claimed_by_a_later_call():
+    guardian = Desk()
+    model, agent = agent_for([CALL, CALL], provider(guardian))
+    guardian.approved.add("req_1")
+    agent("refund order 42")
+    # No session manager and no scope option: every call proposes its own request.
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+    assert not any(call.startswith("claim") for call in guardian.calls)
+    assert "calling the tool again asks for a new approval" in model.texts()[0]
+
+
+def test_two_users_on_one_agent_never_share_an_approval():
+    guardian = Desk()
+    model, agent = agent_for([CALL], provider(guardian, scope=by_user))
+    agent("refund order 42", invocation_state={"user_id": "alice"})
+    assert guardian.requests == ["req_1"]
+    guardian.approved.add("req_1")  # a person approves alice's request
+
+    model.turns = [[CALL]]
+    agent("refund order 42", invocation_state={"user_id": "bob"})
+    # Bob's identical call is its own request and does not run on alice's approval.
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+    assert "claim:req_1" not in guardian.calls
+
+    model.turns = [[CALL]]
+    agent("refund order 42", invocation_state={"user_id": "alice"})
+    assert guardian.calls[-2:] == ["claim:req_1", "execute:req_1"]
+    assert ran == [("o42", 500)]
+
+    model.turns = [[CALL]]
+    agent("refund order 42", invocation_state={"user_id": "bob"})
+    assert guardian.calls[-1] == "claim:req_2" and ran == [("o42", 500)]
+
+
+def test_the_default_scope_is_the_session_managers_session(tmp_path):
+    from strands.session import FileSessionManager
+
+    guardian = Desk()
+    hooks = provider(guardian)  # one provider, two sessions
+
+    def session_agent(session_id):
+        return agent_for(
+            [CALL], hooks, session_manager=FileSessionManager(session_id=session_id, storage_dir=str(tmp_path))
+        )
+
+    first_model, first = session_agent("s1")
+    first("refund order 42")
+    guardian.approved.add("req_1")
+    _, second = session_agent("s2")
+    second("refund order 42")
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+    assert "claim:req_1" not in guardian.calls
+
+    first_model.turns = [[CALL]]
+    first("refund order 42 now")
+    assert guardian.calls[-2:] == ["claim:req_1", "execute:req_1"]
+    assert ran == [("o42", 500)]
+
+
+def test_the_models_arguments_cannot_name_another_users_scope():
+    @tool
+    def refund_for(user_id: str, order_id: str) -> str:
+        """Refund an order for a user."""
+        ran.append((user_id, order_id))
+        return "refunded"
+
+    call = ("refund_for", {"user_id": "alice", "order_id": "o42"})
+    guardian = Desk()
+    model, agent = agent_for([call], provider(guardian, scope=by_user), tools=(refund_for,))
+    agent("refund", invocation_state={"user_id": "alice"})
+    guardian.approved.add("req_1")
+    # In bob's run the model writes alice's id into the arguments.
+    model.turns = [[call]]
+    agent("refund", invocation_state={"user_id": "bob"})
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+    assert "claim:req_1" not in guardian.calls
+
+
+@pytest.mark.parametrize("value", [None, "", ["unhashable"]])
+def test_a_scope_that_is_missing_is_unknown(value):
+    guardian = Desk()
+    _, agent = agent_for([CALL, CALL], provider(guardian, scope=lambda agent, state: value))
+    guardian.approved.add("req_1")
+    agent("refund order 42")
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+
+
+def test_a_scope_option_that_raises_is_unknown():
+    def broken(agent, invocation_state):
+        raise LookupError("no user")
+
+    guardian = Desk()
+    _, agent = agent_for([CALL, CALL], provider(guardian, scope=broken))
+    guardian.approved.add("req_1")
+    agent("refund order 42")
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+
+
+def test_zero_is_a_scope():
+    guardian = Desk()
+    _, agent = agent_for([CALL, CALL], provider(guardian, scope=lambda agent, state: 0))
+    guardian.approved.add("req_1")
+    agent("refund order 42")
+    assert guardian.requests == ["req_1"] and ran == [("o42", 500)]
+
+
+def test_direct_tool_calls_use_the_same_scope():
+    guardian = Desk()
+    current = {"user": "alice"}
+    _, agent = agent_for([], provider(guardian, scope=lambda agent, state: current["user"]))
+    agent.tool.refund_order(order_id="o42", amount_cents=500)
+    guardian.approved.add("req_1")
+    current["user"] = "bob"
+    agent.tool.refund_order(order_id="o42", amount_cents=500)
+    assert guardian.requests == ["req_1", "req_2"] and ran == []
+    current["user"] = "alice"
+    done = agent.tool.refund_order(order_id="o42", amount_cents=500)
+    assert done["status"] == "success" and ran == [("o42", 500)]
+
+
+def test_a_paused_call_is_resumed_by_its_own_agent_only():
+    guardian = Desk()
+    hooks = provider(guardian, on_ask="interrupt")  # no session and no scope option
+    _, first = agent_for([CALL], hooks)
+    _, second = agent_for([CALL], hooks)
+    paused = first("refund order 42")
+    assert paused.interrupts[0].reason["guardian"]["request_id"] == "req_1"
+    guardian.approved.add("req_1")
+    # The other agent's identical call (same tool, arguments and tool use id) pauses on its own request.
+    other = second("refund order 42")
+    assert other.stop_reason == "interrupt" and ran == []
+    assert other.interrupts[0].reason["guardian"]["request_id"] == "req_2"
+    assert "claim:req_1" not in guardian.calls
+    # Resuming the first agent's run claims its own request.
+    done = first(respond(paused.interrupts[0]))
+    assert done.stop_reason == "end_turn" and ran == [("o42", 500)]
+    assert guardian.calls[-2:] == ["claim:req_1", "execute:req_1"]
+    still = second(respond(other.interrupts[0]))
+    assert still.stop_reason == "interrupt" and ran == [("o42", 500)]
+    assert guardian.calls[-1] == "claim:req_2"
+
+
+def test_a_paused_call_with_a_scope_is_resumed_under_that_scope():
+    guardian = Desk()
+    _, agent = agent_for([CALL], provider(guardian, on_ask="interrupt", scope=by_user))
+    paused = agent("refund order 42", invocation_state={"user_id": "alice"})
+    guardian.approved.add("req_1")
+    done = agent(respond(paused.interrupts[0]), invocation_state={"user_id": "alice"})
+    assert done.stop_reason == "end_turn" and ran == [("o42", 500)]
+    assert guardian.requests == ["req_1"]

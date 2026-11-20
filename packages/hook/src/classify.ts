@@ -8,8 +8,9 @@
  * while `terraform apply` waits for a human approval.
  */
 import { createHash } from "node:crypto";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, posix } from "node:path";
 
 import {
   CONTENT_PIN_INVALID_ARGUMENT,
@@ -489,7 +490,7 @@ function rankParsed(parsed: Parsed, depth: number): number {
     const l = rankArgv(cmd.words, depth);
     rank = Math.max(rank, l.rank);
     // `> .mcp.json`, `>> .claude/settings.json`.
-    if (cmd.writes.some((w) => AGENT_CONFIG_PATH.test(w.value))) rank = ASK;
+    if (cmd.writes.some((w) => namesAgentConfig(w.value))) rank = ASK;
     const subs = [
       ...cmd.subs,
       ...cmd.words.flatMap((w) => w.subs),
@@ -584,7 +585,7 @@ function rankArgv(words: readonly Word[], depth: number): Leaf {
     leaf(Math.max(rank, r), b, a);
   const inner = (from: readonly Word[]) => rankArgv(from, depth + 1);
   const pathCheck = (values: readonly string[]) =>
-    values.some((v) => AGENT_CONFIG_PATH.test(v)) ? ASK : 0;
+    values.some((v) => namesAgentConfig(v)) ? ASK : 0;
 
   if (base === "env") return done(rankEnv(argWords, depth));
   if (base === "sudoedit") return done(pathCheck(args));
@@ -740,7 +741,7 @@ function rankFind(argWords: readonly Word[], depth: number): number {
       i = end;
     }
     if (/^-f(print|print0|printf|ls)$/.test(a)) {
-      if (AGENT_CONFIG_PATH.test(argWords[i + 1]?.value ?? "")) rank = ASK;
+      if (namesAgentConfig(argWords[i + 1]?.value ?? "")) rank = ASK;
     }
   }
   return rank;
@@ -945,7 +946,7 @@ function rankGit(argWords: readonly Word[], depth: number): number {
       sr = ASK;
       break;
   }
-  if (!GIT_READS.has(sub) && rest.some((a) => AGENT_CONFIG_PATH.test(a)))
+  if (!GIT_READS.has(sub) && rest.some((a) => namesAgentConfig(a)))
     sr = ASK;
   return Math.max(rank, sr);
 }
@@ -1423,9 +1424,131 @@ function routeCommand(command: string, sensitive: boolean): HookToolName {
   return BY_RANK[rank]!;
 }
 
-/** True when a file path is agent MCP, hook, permission or plugin config. */
-export function isAgentConfigPath(path: string): boolean {
-  return AGENT_CONFIG_PATH.test(path);
+/**
+ * `path` with its symbolic links resolved as the operating system resolves
+ * them: the file itself, or a folder on the way. A link whose target does
+ * not exist yet is followed too; its relative target is taken from the
+ * link's real folder, and `..` applies after the link before it. What does
+ * not exist yet is kept as written under the deepest folder that does.
+ * Throws when a part cannot be resolved (a link loop, a folder that cannot
+ * be read, a NUL byte).
+ *
+ * Nothing here is normalized or rewritten as text before it is resolved:
+ * `a/link/..` is the parent of the link's target, not `a`, and off Windows a
+ * backslash stays the ordinary character it is in a name.
+ */
+const ON_WINDOWS = process.platform === "win32";
+const TRAILING_SEPARATORS = ON_WINDOWS ? /[/\\]+$/ : /\/+$/;
+/** A path the file system gave back, with `/` as its separator. */
+const asSlashes = (path: string) =>
+  ON_WINDOWS ? path.replace(/\\/g, "/") : path;
+
+export function resolveLinks(path: string): string {
+  const pending: string[] = [];
+  let at = path;
+  let followed = 0;
+  for (;;) {
+    // `lstat("link/")` follows the link; the name without the separator is
+    // the link. A backslash is a separator on Windows only: elsewhere it is
+    // an ordinary character and may be the end of a name, or all of it.
+    const trimmed = at.replace(TRAILING_SEPARATORS, "");
+    if (trimmed !== "") at = trimmed;
+    try {
+      const real = asSlashes(realpathSync.native(at));
+      // Only names that do not exist are left, so no link is skipped here.
+      return pending.length > 0
+        ? posix.join(real, ...pending.reverse())
+        : real;
+    } catch (err) {
+      const code = (err as { code?: unknown })?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+      // A link whose target does not exist yet still leads somewhere.
+      let link: string | undefined;
+      try {
+        if (lstatSync(at).isSymbolicLink()) link = readlinkSync(at);
+      } catch {
+        // `at` itself does not exist: step up to its folder below.
+      }
+      if (link !== undefined) {
+        if (++followed > 40) throw new Error("too many symbolic links");
+        // The link exists, so its folder does: a relative target starts at
+        // that folder as it is on disk. The result is resolved again, not
+        // normalized, so a `..` in the target applies after any link in it.
+        at =
+          link.startsWith("/") || isAbsolute(link)
+            ? link
+            : `${realpathSync.native(dirname(at))}/${link}`;
+        continue;
+      }
+      const parent = dirname(at);
+      if (parent === at) return path;
+      pending.push(basename(at));
+      at = parent;
+    }
+  }
+}
+
+/**
+ * The spellings of `path` the configuration patterns are tried on: as
+ * written; with separators collapsed and `.` / `..` segments removed; and
+ * with symbolic links resolved, relative paths taken from `cwd` as the
+ * agent does and `~` as the home folder.
+ */
+function pathForms(path: string, cwd: string | undefined): string[] {
+  const home = homedir();
+  const from = cwd ?? process.cwd();
+  // Not `join`: it would remove `..` before any link is followed.
+  const absoluteOf = (p: string) => {
+    const expanded = p === "~" || p.startsWith("~/") ? home + p.slice(1) : p;
+    return expanded.startsWith("/") || isAbsolute(expanded)
+      ? expanded
+      : `${from}/${expanded}`;
+  };
+  // The text forms read a backslash as a separator, so a Windows-style
+  // spelling is caught wherever the hook runs.
+  const slashes = path.replace(/\\/g, "/");
+  const absolute = absoluteOf(slashes).replace(/\\/g, "/");
+  return [
+    ...new Set([
+      path,
+      posix.normalize(slashes),
+      posix.normalize(absolute),
+      resolveLinks(posix.normalize(absolute)),
+      // As the operating system reads it: `..` applies after a link is
+      // followed (`normalize` drops the link first).
+      resolveLinks(absolute),
+      // And exactly as written, the path the operating system is given:
+      // where a backslash is an ordinary character, it can be part of a
+      // link's own name, at its start, in it, at its end, or all of it.
+      resolveLinks(absoluteOf(path)),
+    ]),
+  ];
+}
+
+/**
+ * True when a file path is agent MCP, hook, permission or plugin config.
+ * Also for another spelling of such a path: repeated separators, `.` and
+ * `..` segments, backslashes, letter case, and a symbolic link that leads
+ * there. A path that cannot be resolved counts as configuration (the Ask
+ * tier).
+ */
+export function isAgentConfigPath(path: string, cwd?: string): boolean {
+  try {
+    return pathForms(path, cwd).some((form) => AGENT_CONFIG_PATH.test(form));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * A command word that names agent configuration, also spelled with `//`,
+ * `.` or `..` segments. A pattern check on the word: it does not resolve
+ * symbolic links or anything the shell expands.
+ */
+function namesAgentConfig(word: string): boolean {
+  if (AGENT_CONFIG_PATH.test(word)) return true;
+  if (!/[/\\]/.test(word)) return false;
+  return AGENT_CONFIG_PATH.test(posix.normalize(word.replace(/\\/g, "/")));
 }
 
 /** Guardian tool names: /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/, ≤ 64 chars. */
@@ -1613,7 +1736,7 @@ function fileWrite(
 ): GovernedCall {
   // Editing the agent's own MCP servers, hooks or permissions changes what
   // it may do next, so it goes to the Ask tier like other consequential calls.
-  const config = isAgentConfigPath(path);
+  const config = isAgentConfigPath(path, cwd.cwd);
   return {
     toolName: config ? "shell_destructive" : "file_write",
     arguments: {
@@ -1838,7 +1961,7 @@ export function governedCall(
     const targets = patchTargets(patch);
     const paths = [...new Set(targets.map((t) => t.path))];
     const shown = paths.slice(0, MAX_PATHS).map((p) => bounded(p, 500));
-    const config = paths.some((p) => isAgentConfigPath(p));
+    const config = paths.some((p) => isAgentConfigPath(p, call.cwd));
     return {
       toolName: config ? "shell_destructive" : "file_write",
       arguments: {
