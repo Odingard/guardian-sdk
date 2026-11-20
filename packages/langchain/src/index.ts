@@ -7,6 +7,9 @@ import {
   CONTENT_PIN_INVALID_ARGUMENT,
   abortable,
   normalizeFileArgsSpec,
+  resolveHeldScope,
+  scopeHeldRequests,
+  type HeldScope,
 } from "@odingard/guardian-sdk";
 import {
   createGuardianContext,
@@ -26,7 +29,34 @@ export {
   type GuardianToolMode,
 } from "./core.js";
 
-export type GuardianLangChainOptions = GuardianAdapterOptions;
+export type GuardianLangChainOptions = GuardianAdapterOptions &
+  Readonly<{
+    /**
+     * Held requests are scoped per session. The scope of one call: the
+     * conversation or user it belongs to, from the config LangChain passes
+     * the tool. A held call is claimed only by the same call in the same
+     * scope; an identical call in another scope is its own request.
+     *
+     * Default: LangGraph's `config.configurable.thread_id`, when it is a
+     * non-empty string. Return `SCOPE_UNKNOWN` (from
+     * `@odingard/guardian-sdk`) when the session is not known: a held call
+     * is then never claimed by a later call. A function that throws, or
+     * returns something that is not a non-empty string, counts as that.
+     * `undefined` (also the default without a thread id) keeps held calls
+     * shared by every call of the wrapped tools, so they must then serve
+     * one principal. The scope stays in this process.
+     */
+    scope?: (config: Record<string, unknown> | undefined) => HeldScope;
+  }>;
+
+/** LangGraph's thread id, the default scope of a call. */
+function threadScope(config: Record<string, unknown> | undefined): HeldScope {
+  const threadId = (config?.configurable as { thread_id?: unknown } | undefined)
+    ?.thread_id;
+  return typeof threadId === "string" && threadId.length > 0
+    ? threadId
+    : undefined;
+}
 
 /**
  * Wrap a LangChain StructuredTool / DynamicStructuredTool so its `func`
@@ -183,11 +213,21 @@ function wrapWithContext(
       // later step; a started tool runs to its real outcome (`abortable`
       // in @odingard/guardian-sdk).
       const signal = (config as { signal?: AbortSignal } | undefined)?.signal;
+      // Held requests are scoped per session: this call sees only the held
+      // calls of its own scope.
+      const readScope =
+        (ctx.options as GuardianLangChainOptions).scope ?? threadScope;
+      const scoped = scopeHeldRequests(
+        ctx,
+        resolveHeldScope(() =>
+          readScope(config as Record<string, unknown> | undefined),
+        ),
+      );
       return abortable(ctx.options.client, signal, (client, startTool) =>
         runThroughGuardian(
           client === ctx.options.client
-            ? ctx
-            : { ...ctx, options: { ...ctx.options, client } },
+            ? scoped
+            : { ...scoped, options: { ...scoped.options, client } },
           inner.name,
           input,
           (approved) => {

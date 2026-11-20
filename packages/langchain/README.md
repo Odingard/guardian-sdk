@@ -105,6 +105,18 @@ try {
 }
 ```
 
+## Held requests are scoped per session (unreleased)
+
+A wrapped tool remembers each call held for approval, by connection, tool name and arguments, so that the same call made again claims the held request. One wrapped tool usually serves many conversations, so a held call is claimed only in its own scope:
+
+- **Default: LangGraph's thread.** When the config LangChain passes the tool has `configurable.thread_id` (a non-empty string), that is the scope: an identical call in another thread is its own request and needs its own approval, and the first thread's repeat call claims its own.
+- `scope: (config) => string` names the scope yourself, for example a user id: `scope: (config) => config?.configurable?.user_id`. It overrides the thread.
+- Return `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is not known: a held call is then never claimed by a later call. A `scope` function that throws, or returns something that is not a non-empty string, counts as that.
+- **Without a thread id and without `scope`, held calls are shared** by every call of the wrapped tool, as in earlier versions: it must then serve one principal (one user, one conversation).
+- The scope stays in this process; it is not sent to Guardian. `resume()` on a `GuardianApprovalPending` claims that call's own request, whatever the scope.
+
+Needs the `@odingard/guardian-sdk` release that adds `scopeHeldRequests`.
+
 ## Pin the contents of file arguments — `fileArgs` (0.4)
 
 Approval binds the exact arguments. A file path is an argument; the file's contents are not, unless you declare the argument in `fileArgs`.

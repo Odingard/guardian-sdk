@@ -122,6 +122,27 @@ local tool runs, or Guardian has been asked to perform the call), an abort no
 longer rejects early, so a started action is never reported as not done. A
 `resume()` after an approval is not tied to the original signal.
 
+## Held requests are scoped per session (unreleased)
+
+A wrapped tool set remembers each call held for approval, by connection, tool name and arguments, so that the same call made again claims the held request. The AI SDK's tool call options do not name a conversation, so say which session a call belongs to when one tool set serves several users:
+
+```ts
+const tools = withGuardian(myTools, {
+  client: guardian,
+  connectionId: "pcn_…",
+  // the context you pass generateText({ experimental_context: { userId } })
+  scope: (callOptions) =>
+    (callOptions?.experimental_context as { userId?: string } | undefined)?.userId,
+});
+```
+
+- A held call is claimed only by the same call in the same scope. An identical call in another scope is its own request and needs its own approval.
+- Return `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is not known: a held call is then never claimed by a later call. A `scope` function that throws, or returns something that is not a non-empty string, counts as that.
+- **Without `scope`, held calls are shared** by every call of the wrapped tools, as in earlier versions: wrap the tools per conversation, or serve one principal.
+- The scope stays in this process; it is not sent to Guardian. `resume()` on a `GuardianApprovalPending` claims that call's own request, whatever the scope.
+
+Needs the `@odingard/guardian-sdk` release that adds `scopeHeldRequests`.
+
 ## Pin the contents of file arguments — `fileArgs` (0.4)
 
 Approval binds the exact arguments. A file path is an argument; the file's contents are not, unless you declare the argument in `fileArgs`.

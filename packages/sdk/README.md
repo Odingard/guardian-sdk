@@ -309,6 +309,35 @@ What it does not do:
 
 `abortable(client, signal, run)` is that helper: `run(client, startTool)` gets the client to use for this one call and calls `startTool()` just before the local tool runs. An abort before the tool starts rejects at once and refuses every later step, so a late ALLOW runs nothing and redeems nothing; once the tool has started (your function runs, or Guardian was asked to perform a `remote` call), the call waits for its real outcome. A later `GuardianApprovalPending.resume()` is unaffected.
 
+## Held requests are scoped per session (unreleased)
+
+A Guardian context (`createGuardianContext`, and so `createGuard` and every adapter) remembers each call held for approval, by connection, tool name and arguments. The same call made again then claims the held request instead of opening a new one, in both `onAsk` modes. When one context serves several users or conversations, say which session each call belongs to, so that a held request is claimed only by the same call in the same session:
+
+```ts
+import {
+  createGuardianContext,
+  runThroughGuardian,
+  scopeHeldRequests,
+} from "@odingard/guardian-sdk";
+
+const ctx = createGuardianContext({ client, connectionId: "pcn_…", mode: "inProcess" }); // once
+
+// per call: `sessionId` is your user id, conversation id or thread id
+const result = await runThroughGuardian(
+  scopeHeldRequests(ctx, sessionId),
+  "refund_order",
+  input,
+  (approved) => refund(approved),
+);
+```
+
+- A scope is a string. It is part of an in-memory key only, as a SHA-256 digest; it is not sent to Guardian or put in the proposal.
+- A request held under one scope is claimed only by the same call under the same scope. An identical call under another scope is proposed as its own request and needs its own approval.
+- `SCOPE_UNKNOWN` is the scope of a call whose session is not known: its held request is not remembered, so no later call can claim it and every call proposes its own. `resolveHeldScope(() => …)` turns a failing or non-string answer into `SCOPE_UNKNOWN`.
+- **Without a scope (`undefined`), one context must serve one principal** (one user, one conversation): an identical call from anywhere claims the held request. This is the behaviour of earlier versions, and of `createGuard`, which takes no scope: make one guard per session with `createGuard`, or use `runThroughGuardian` with `scopeHeldRequests` as above.
+- `GuardianApprovalPending.resume()` claims that call's own request, whatever the scope.
+- The adapters take a `scope` option: LangChain (default: LangGraph's `configurable.thread_id`), Vercel AI and the OpenAI Agents SDK (no default; see their READMEs).
+
 ## What the agent can and cannot do
 
 - The agent only ever holds a scoped, revocable agent credential (`gak_…`).

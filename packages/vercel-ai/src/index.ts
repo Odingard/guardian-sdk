@@ -1,5 +1,10 @@
 import type { ToolSet } from "ai";
-import { abortable } from "@odingard/guardian-sdk";
+import {
+  abortable,
+  resolveHeldScope,
+  scopeHeldRequests,
+  type HeldScope,
+} from "@odingard/guardian-sdk";
 
 import {
   createGuardianContext,
@@ -19,7 +24,26 @@ export {
   type GuardianToolMode,
 } from "./core.js";
 
-export type GuardianVercelAIOptions = GuardianAdapterOptions;
+export type GuardianVercelAIOptions = GuardianAdapterOptions &
+  Readonly<{
+    /**
+     * Held requests are scoped per session. The scope of one call: the
+     * conversation or user it belongs to, from the options the AI SDK
+     * passes the tool's `execute` (for example a user id you put in
+     * `experimental_context`). A held call is claimed only by the same call
+     * in the same scope; an identical call in another scope is its own
+     * request.
+     *
+     * The AI SDK's tool call options name no conversation, so there is no
+     * default: without this option held calls are shared by every call of
+     * the wrapped tools, which must then serve one principal. Return
+     * `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is
+     * not known: a held call is then never claimed by a later call. A
+     * function that throws, or returns something that is not a non-empty
+     * string, counts as that. The scope stays in this process.
+     */
+    scope?: (callOptions: Record<string, unknown> | undefined) => HeldScope;
+  }>;
 
 type AnyExecute = (input: never, options: never) => unknown;
 
@@ -74,12 +98,26 @@ export function withGuardian<T extends ToolSet>(
             // the generation, and refuses every later step; a started tool
             // runs to its real outcome (`abortable` in
             // @odingard/guardian-sdk).
-            execute: (input: unknown, callOptions: unknown) =>
-              abortable(options.client, abortSignalOf(callOptions), (client, startTool) =>
+            execute: (input: unknown, callOptions: unknown) => {
+              // Held requests are scoped per session: this call sees only
+              // the held calls of its own scope.
+              const readScope = options.scope;
+              const scoped =
+                readScope === undefined
+                  ? ctx
+                  : scopeHeldRequests(
+                      ctx,
+                      resolveHeldScope(() =>
+                        readScope(
+                          callOptions as Record<string, unknown> | undefined,
+                        ),
+                      ),
+                    );
+              return abortable(options.client, abortSignalOf(callOptions), (client, startTool) =>
                 runThroughGuardian(
                   client === options.client
-                    ? ctx
-                    : { ...ctx, options: { ...ctx.options, client } },
+                    ? scoped
+                    : { ...scoped, options: { ...scoped.options, client } },
                   toolName,
                   input,
                   (approved) => {
@@ -89,7 +127,8 @@ export function withGuardian<T extends ToolSet>(
                     return execute(approved as never, callOptions as never);
                   },
                 ),
-              ),
+              );
+            },
           }
         : definition;
   }

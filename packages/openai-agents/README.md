@@ -164,8 +164,28 @@ step before Guardian is asked. It never replaces Guardian's decision.
 Options: `client`, `connectionId`, `adapterId?`, `agentName?`, `purpose?`
 (string or `(toolName, input) => string`), `mode?`, `modes?`,
 `installRecordTransport?`, `onAsk?` (`"throw"` default, or `"result"`),
-`onDeny?` (`"result"` default, or `"throw"`), `decisionTimeoutMs?`,
+`onDeny?` (`"result"` default, or `"throw"`), `decisionTimeoutMs?`, `scope?`,
 `onApprovalPending?`, `onGuardianError?`, `onReceipt?`.
+
+## Held requests are scoped per session (unreleased)
+
+Tools made with one set of Guardian options remember each call held for approval, by connection, tool name and arguments, so that the same call made again claims the held request. The run context does not name a conversation by itself, so say which session a call belongs to when the same tools serve several users:
+
+```ts
+const governed = createGuardianTool({
+  client: guardian,
+  connectionId: "pcn_…",
+  // run(agent, input, { context: { userId } })
+  scope: (runContext) => (runContext?.context as { userId?: string })?.userId,
+});
+```
+
+- A held call is claimed only by the same call in the same scope. An identical call in another scope is its own request and needs its own approval.
+- Return `SCOPE_UNKNOWN` (from `@odingard/guardian-sdk`) when the session is not known: a held call is then never claimed by a later call. A `scope` function that throws, or returns something that is not a non-empty string, counts as that.
+- **Without `scope`, held calls are shared** by every call of those tools, as in earlier versions: build the tools per conversation, or serve one principal.
+- The scope stays in this process; it is not sent to Guardian. `pending.resume()` claims that call's own request, whatever the scope.
+
+Needs the `@odingard/guardian-sdk` release that adds `scopeHeldRequests`.
 
 ## Pin the contents of file arguments — `fileArgs` (0.2)
 

@@ -1,0 +1,134 @@
+import { describe, expect, it } from "vitest";
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+import type { GuardianClient } from "@odingard/guardian-sdk";
+import { SCOPE_UNKNOWN } from "@odingard/guardian-sdk";
+import { guardianTool } from "../src/index.js";
+
+/**
+ * Held requests are scoped per session. One wrapped tool serves several
+ * conversations; a held call is claimed only by the same call in the same
+ * conversation (LangGraph's `configurable.thread_id`, or the `scope` option).
+ */
+
+/** Holds every request under its own id; a claim is approved. */
+function holdingClient() {
+  const calls: string[] = [];
+  let count = 0;
+  const client = {
+    async request() {
+      count += 1;
+      calls.push(`request:req_${count}`);
+      return { ok: true, requestId: `req_${count}`, decision: "ASK" };
+    },
+    async claim(requestId: string) {
+      calls.push(`claim:${requestId}`);
+      return { ok: true, requestId, decision: "ALLOW", capabilityToken: "cap" };
+    },
+    async execute({ requestId }: { requestId: string }) {
+      calls.push(`execute:${requestId}`);
+      return { ok: true, receipt: { requestId, status: "sent-verified" } };
+    },
+    async receipts(requestId: string) {
+      return { ok: true, requestId, receipts: [] };
+    },
+  } as unknown as GuardianClient;
+  return { client, calls };
+}
+
+function refund(client: GuardianClient, ran: string[], extra: object = {}) {
+  return guardianTool(
+    tool(
+      async ({ orderId }: { orderId: string }) => {
+        ran.push(orderId);
+        return `refunded ${orderId}`;
+      },
+      {
+        name: "refund_order",
+        description: "Refund an order",
+        schema: z.object({ orderId: z.string() }),
+      },
+    ),
+    {
+      client,
+      connectionId: "con_1",
+      mode: "inProcess",
+      onAsk: "result",
+      onDeny: "result",
+      ...extra,
+    },
+  );
+}
+
+const thread = (id: string) => ({ configurable: { thread_id: id } });
+const heldId = (out: unknown) =>
+  (out as { guardian: { requestId: string } }).guardian.requestId;
+
+describe("held requests are scoped per session", () => {
+  it("a held call is claimed only in the same LangGraph thread", async () => {
+    const { client, calls } = holdingClient();
+    const ran: string[] = [];
+    const wrapped = refund(client, ran); // one tool for every conversation
+    const input = { orderId: "ord_1" };
+
+    expect(heldId(await wrapped.invoke(input, thread("alice")))).toBe("req_1");
+    // The identical call in another thread is a request of its own.
+    expect(heldId(await wrapped.invoke(input, thread("bob")))).toBe("req_2");
+    expect(ran).toEqual([]);
+    // The first thread's repeat call claims its own request and runs once.
+    expect(await wrapped.invoke(input, thread("alice"))).toBe("refunded ord_1");
+    expect(calls).toEqual([
+      "request:req_1",
+      "request:req_2",
+      "claim:req_1",
+      "execute:req_1",
+    ]);
+    expect(ran).toEqual(["ord_1"]);
+  });
+
+  it("the scope option overrides the thread", async () => {
+    const { client, calls } = holdingClient();
+    const ran: string[] = [];
+    const wrapped = refund(client, ran, {
+      scope: (config: { configurable?: { user?: string } } | undefined) =>
+        config?.configurable?.user,
+    });
+    const input = { orderId: "ord_1" };
+    const as = (user: string) => ({
+      configurable: { thread_id: "one-thread", user },
+    });
+    await wrapped.invoke(input, as("alice"));
+    expect(heldId(await wrapped.invoke(input, as("bob")))).toBe("req_2");
+    expect(await wrapped.invoke(input, as("alice"))).toBe("refunded ord_1");
+    expect(calls).toEqual([
+      "request:req_1",
+      "request:req_2",
+      "claim:req_1",
+      "execute:req_1",
+    ]);
+  });
+
+  it("SCOPE_UNKNOWN, or a scope option that throws, never reuses a held request", async () => {
+    for (const scope of [
+      () => SCOPE_UNKNOWN,
+      () => {
+        throw new Error("no session");
+      },
+    ]) {
+      const { client, calls } = holdingClient();
+      const wrapped = refund(client, [], { scope });
+      await wrapped.invoke({ orderId: "ord_1" }, thread("alice"));
+      await wrapped.invoke({ orderId: "ord_1" }, thread("alice"));
+      expect(calls).toEqual(["request:req_1", "request:req_2"]);
+    }
+  });
+
+  it("without a thread or a scope, held requests are shared as before", async () => {
+    const { client, calls } = holdingClient();
+    const ran: string[] = [];
+    const wrapped = refund(client, ran);
+    await wrapped.invoke({ orderId: "ord_1" });
+    expect(await wrapped.invoke({ orderId: "ord_1" })).toBe("refunded ord_1");
+    expect(calls).toEqual(["request:req_1", "claim:req_1", "execute:req_1"]);
+  });
+});
