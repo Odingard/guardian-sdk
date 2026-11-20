@@ -55,9 +55,10 @@ Commands below run from `examples/`.
 
 ## Python: [`python/`](python/)
 
-| Example                                              | What it shows                                               | Run                              |
-| ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------- |
-| [`python/invoice_agent.py`](python/invoice_agent.py) | the invoice agent in Python (pip install odingard-guardian) | `python python/invoice_agent.py` |
+| Example                                                                | What it shows                                                                                                                                         | Run                                       |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| [`python/invoice_agent.py`](python/invoice_agent.py)                   | the invoice agent in Python (pip install odingard-guardian)                                                                                           | `python python/invoice_agent.py`          |
+| [`python/claude_agent_sdk_agent.py`](python/claude_agent_sdk_agent.py) | Claude Agent SDK: the PreToolUse hook and a guarded `@tool`, with a scripted stand-in for the CLI (pip install "odingard-guardian[claude-agent-sdk]") | `python python/claude_agent_sdk_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).
