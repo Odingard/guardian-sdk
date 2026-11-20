@@ -64,6 +64,7 @@ Commands below run from `examples/`.
 | [`python/openai_agents_agent.py`](python/openai_agents_agent.py) | an OpenAI Agents SDK agent with governed tools: ALLOW, ASK as a paused run, DENY (scripted model, no API key; `pip install "odingard-guardian[openai-agents]"`) | `python python/openai_agents_agent.py` |
 | [`python/google_adk_agent.py`](python/google_adk_agent.py) | a Google ADK agent with Guardian's plugin on ADK's real loop (scripted model, local demo policy; pip install "odingard-guardian[google-adk]") | `python python/google_adk_agent.py` |
 | [`python/strands_agent.py`](python/strands_agent.py) | a Strands agent loop: ALLOW, ASK pauses the run, DENY       | `python python/strands_agent.py` |
+| [`python/claude_agent_sdk_agent.py`](python/claude_agent_sdk_agent.py) | Claude Agent SDK: the PreToolUse hook and a guarded `@tool`, with a scripted stand-in for the CLI (pip install "odingard-guardian[claude-agent-sdk]") | `python python/claude_agent_sdk_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).

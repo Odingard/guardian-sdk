@@ -113,6 +113,7 @@ document.
 | Semantic Kernel (Python)                        | `odingard-guardian`                                               |
 | crewAI (Python)                                 | `odingard-guardian`                                               |
 | Google ADK (Python)                             | `odingard-guardian`                                               |
+| Claude Agent SDK (Python)                       | `odingard-guardian[claude-agent-sdk]`                             |
 | Codex CLI                                       | `@odingard/guardian-hook`                                         |
 | DeepSeek Harness                                | `@odingard/guardian-hook`                                         |
 | Hermes Agent                                    | `odingard-guardian`                                               |
