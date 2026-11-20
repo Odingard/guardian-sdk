@@ -513,6 +513,11 @@ class _ScopeUnknown:
 SCOPE_UNKNOWN: Any = _ScopeUnknown()
 
 
+def _empty_scope(scope: Any) -> bool:
+    """An empty string (or bytes) as a scope: a missing id, not a session."""
+    return isinstance(scope, (str, bytes)) and len(scope) == 0
+
+
 def _held_key(
     opts: _Options, kind: str, tool_name: str, args: Optional[Dict[str, Any]], scope: Any = None
 ) -> Optional[Hashable]:
@@ -1347,8 +1352,9 @@ class Guard:
         the call being made: the session it belongs to (a user id, a
         conversation id; any hashable value), for example read from a
         ``contextvars.ContextVar`` your app sets per request.
-        If it returns ``None`` the session is not known and the call is
-        treated as :data:`SCOPE_UNKNOWN`, not as unscoped.
+        If it returns ``None`` or an empty string the session is not known
+        and the call is treated as :data:`SCOPE_UNKNOWN`, not as unscoped
+        and not as a scope of its own. ``0`` and other values are scopes.
         :meth:`run` also takes ``scope=`` for one call. See "Held requests
         are scoped per session" below.
     :param max_pin_bytes / max_pin_total_bytes: caps for content pins
@@ -1535,11 +1541,16 @@ class Guard:
         ``None`` given with the call means "use the Guard's function". A
         Guard's function that returns ``None`` does not know the session, so
         the scope is :data:`SCOPE_UNKNOWN`, never the shared unscoped key.
-        Only a Guard without a scope function is unscoped."""
+        Only a Guard without a scope function is unscoped. An empty string
+        names no session either (wherever it comes from): it is
+        :data:`SCOPE_UNKNOWN`, not one scope every such call would share.
+        Other falsy values (``0``) are scopes."""
         if scope is None and self._scope is not None:
             scope = self._scope()
             if scope is None:
                 scope = SCOPE_UNKNOWN
+        if _empty_scope(scope):
+            scope = SCOPE_UNKNOWN
         hash(scope)
         return scope
 

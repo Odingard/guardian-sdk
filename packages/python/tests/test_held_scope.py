@@ -190,6 +190,25 @@ def test_a_scope_function_that_returns_none_is_scope_unknown():
     assert client.calls[-2:] == ["claim:req_3", "execute:req_3"]
 
 
+def test_an_empty_scope_names_no_session():
+    """An empty string (a ContextVar default of "", a missing header) is no
+    session: it must not become one scope that every such call shares."""
+    session = contextvars.ContextVar("session", default="")
+    for options, scope in (({"scope": session.get}, None), ({}, ""), ({}, b"")):
+        client, guard, ran, refund = make(**options)
+        first, second = refund(scope), refund(scope)
+        assert (request_id_of(first), request_id_of(second)) == ("req_1", "req_2")
+        assert guard._opts.held == {} and ran == []
+
+
+def test_falsy_values_that_do_name_a_session_are_scopes():
+    client, _, _, refund = make()
+    assert request_id_of(refund(0)) == "req_1"  # user id 0
+    assert request_id_of(refund(1)) == "req_2"
+    assert refund(0) == "refunded"
+    assert client.calls == ["request:req_1", "request:req_2", "claim:req_1", "execute:req_1"]
+
+
 def test_without_a_scope_function_a_call_without_a_scope_is_unscoped():
     client, _, _, refund = make()
     refund(None)
@@ -291,3 +310,10 @@ def test_resolve_scope_fails_to_the_strict_side():
     assert resolve_scope(lambda context: ["unhashable"], object(), "session-1") is SCOPE_UNKNOWN
     assert resolve_scope(broken, object(), "session-1") is SCOPE_UNKNOWN
     assert resolve_scope(lambda context: SCOPE_UNKNOWN, object(), "session-1") is SCOPE_UNKNOWN
+    # An empty id names no session; a falsy id that is a real one does.
+    assert resolve_scope(lambda context: "", object(), "session-1") is SCOPE_UNKNOWN
+    assert resolve_scope(lambda context: b"", object(), "session-1") is SCOPE_UNKNOWN
+    assert resolve_scope(None, object(), "") is SCOPE_UNKNOWN
+    assert resolve_scope(lambda context: 0, object()) == 0
+    assert resolve_scope(None, object(), 0) == 0
+    assert resolve_scope(lambda context: ("tenant", 7), object()) == ("tenant", 7)

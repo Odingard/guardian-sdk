@@ -38,7 +38,8 @@ export const SCOPE_UNKNOWN: unique symbol = Symbol.for(
 );
 
 /**
- * - a string: the session the call belongs to (a user id, a thread id);
+ * - a non-empty string: the session the call belongs to (a user id, a
+ *   thread id). An empty string is treated as `SCOPE_UNKNOWN`;
  * - `SCOPE_UNKNOWN`: the session is not known (held requests are not reused);
  * - `undefined`: no scope. Held requests are shared by every call the
  *   context sees, so the context must then serve one principal. An
@@ -92,8 +93,9 @@ export function scopeHeldRequests(
   if (scope === undefined) {
     return ctx;
   }
-  if (scope === SCOPE_UNKNOWN) {
-    // Remembered nowhere: the map is dropped with this call.
+  if (scope === SCOPE_UNKNOWN || scope === "") {
+    // Remembered nowhere: the map is dropped with this call. An empty
+    // string is a missing id, not a session every such call would share.
     return { ...ctx, heldInvocations: new Map() };
   }
   if (typeof scope !== "string") {

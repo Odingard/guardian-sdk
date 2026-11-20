@@ -157,6 +157,14 @@ describe("scopeHeldRequests", () => {
     expect(ran).toEqual([]);
   });
 
+  it("an empty scope names no session: it is never the shared or a common scope", async () => {
+    const { refund, calls, ctx } = setup();
+    expect(heldId(await refund(""))).toBe("req_1");
+    expect(heldId(await refund(""))).toBe("req_2");
+    expect(ctx.heldInvocations!.size).toBe(0);
+    expect(calls).toEqual(["request:req_1", "request:req_2"]);
+  });
+
   it("resume() of a pending approval claims its own request under any scope", async () => {
     const { refund, calls, ran } = setup("throw");
     const pending = (await refund("alice").catch(

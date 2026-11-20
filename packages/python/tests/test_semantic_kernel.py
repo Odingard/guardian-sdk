@@ -398,3 +398,17 @@ async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
         await call_as(kernel, "alice")
         await call_as(kernel, "alice")
         assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_an_empty_scope_names_no_conversation():
+    """``arguments.get("user_id", "")`` for callers without an id: the empty
+    string must not become one scope they all share."""
+    guardian = TwoRequests()
+    kernel, billing = kernel_with(guardian, scope=lambda context: context.arguments.get("user_id", ""))
+    assert "request_id req_1" in await call_as(kernel)  # one caller without an id
+    assert "request_id req_2" in await call_as(kernel)  # another one, same call
+    assert billing.ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    # A caller with an id is scoped as usual.
+    assert "request_id req_3" in await call_as(kernel, "alice")
+    assert await call_as(kernel, "alice") == "refunded o42"

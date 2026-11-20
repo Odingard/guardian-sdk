@@ -471,3 +471,13 @@ async def test_a_scope_option_that_fails_or_gives_none_is_the_strict_side():
         await run_in(None, shared, AgentSession())
         await run_in(None, shared, AgentSession())
         assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+async def test_an_empty_scope_names_no_session():
+    guardian = TwoRequests()
+    shared = middleware(guardian, scope=lambda context: "")
+    first, _ = await run_in(None, shared, AgentSession())
+    second, _ = await run_in(None, shared, AgentSession())
+    assert "request_id req_1" in first and "request_id req_2" in second
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]

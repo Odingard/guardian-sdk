@@ -86,6 +86,61 @@ describe("held requests are scoped per session", () => {
     expect(ran).toEqual(["ord_1"]);
   });
 
+  it("a thread id that is a number scopes held calls like its string form", async () => {
+    // LangGraph does not require a string: its checkpointers key a thread
+    // by the id's string form, so 1 and "1" are one thread.
+    const { client, calls } = holdingClient();
+    const ran: string[] = [];
+    const wrapped = refund(client, ran);
+    const input = { orderId: "ord_1" };
+    const numbered = (id: unknown) => ({ configurable: { thread_id: id } });
+
+    expect(heldId(await wrapped.invoke(input, numbered(1)))).toBe("req_1");
+    // Another user's thread, same call: its own request.
+    expect(heldId(await wrapped.invoke(input, numbered(2)))).toBe("req_2");
+    expect(heldId(await wrapped.invoke(input, numbered(0)))).toBe("req_3");
+    expect(heldId(await wrapped.invoke(input, numbered(10n)))).toBe("req_4");
+    expect(ran).toEqual([]);
+    // The same thread, written as a string, claims its own request.
+    expect(await wrapped.invoke(input, numbered("1"))).toBe("refunded ord_1");
+    expect(await wrapped.invoke(input, numbered(0))).toBe("refunded ord_1");
+    expect(calls.slice(4)).toEqual([
+      "claim:req_1",
+      "execute:req_1",
+      "claim:req_3",
+      "execute:req_3",
+    ]);
+  });
+
+  it("a thread id that names no thread never reuses a held request", async () => {
+    for (const id of ["", {}, [], true, Number.NaN, Symbol("t")]) {
+      const { client, calls } = holdingClient();
+      const wrapped = refund(client, []);
+      const config = { configurable: { thread_id: id } };
+      await wrapped.invoke({ orderId: "ord_1" }, config as never);
+      await wrapped.invoke({ orderId: "ord_1" }, config as never);
+      expect(calls).toEqual(["request:req_1", "request:req_2"]);
+    }
+  });
+
+  it("only an absent thread id shares held calls as before", async () => {
+    for (const config of [
+      undefined,
+      {},
+      { configurable: {} },
+      { configurable: { thread_id: undefined } },
+      { configurable: { thread_id: null } },
+    ]) {
+      const { client, calls } = holdingClient();
+      const wrapped = refund(client, []);
+      await wrapped.invoke({ orderId: "ord_1" }, config as never);
+      expect(await wrapped.invoke({ orderId: "ord_1" }, config as never)).toBe(
+        "refunded ord_1",
+      );
+      expect(calls).toEqual(["request:req_1", "claim:req_1", "execute:req_1"]);
+    }
+  });
+
   it("the scope option overrides the thread", async () => {
     const { client, calls } = holdingClient();
     const ran: string[] = [];

@@ -115,9 +115,10 @@ def resolve_scope(scope: ScopeOption, context: Any, default: Any = SCOPE_UNKNOWN
     ``default`` is what the integration read from the framework's context
     (a session or conversation id), or :data:`SCOPE_UNKNOWN` when the
     framework does not say. The app's ``scope`` option overrides it. A scope
-    that is ``None``, cannot be hashed, or a ``scope`` option that raises,
-    is :data:`SCOPE_UNKNOWN`: a held request is then never claimed by a
-    later call, so no other session can use its approval.
+    that is ``None`` or an empty string (a missing id), cannot be hashed, or
+    a ``scope`` option that raises, is :data:`SCOPE_UNKNOWN`: a held request
+    is then never claimed by a later call, so no other session can use its
+    approval. Any other value is a scope, falsy ones such as ``0`` included.
     """
     value = default
     if scope is not None:
@@ -126,7 +127,7 @@ def resolve_scope(scope: ScopeOption, context: Any, default: Any = SCOPE_UNKNOWN
         except Exception:  # noqa: BLE001 - an unknown session is the strict side
             _logger.warning("Guardian scope option failed; held requests are not reused", exc_info=True)
             return SCOPE_UNKNOWN
-    if value is None:
+    if value is None or (isinstance(value, (str, bytes)) and len(value) == 0):
         return SCOPE_UNKNOWN
     try:
         hash(value)

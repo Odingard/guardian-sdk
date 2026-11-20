@@ -9,8 +9,8 @@ import {
   normalizeFileArgsSpec,
   resolveHeldScope,
   scopeHeldRequests,
+  SCOPE_UNKNOWN,
   type HeldScope,
-  type SCOPE_UNKNOWN,
 } from "@odingard/guardian-sdk";
 import {
   createGuardianContext,
@@ -39,9 +39,12 @@ export type GuardianLangChainOptions = GuardianAdapterOptions &
      * scope; an identical call in another scope is its own request.
      *
      * Without this option the scope is LangGraph's
-     * `config.configurable.thread_id` when it is a non-empty string;
-     * without a thread id held calls are then shared by every call of the
-     * wrapped tools, which must serve one principal.
+     * `config.configurable.thread_id`: a non-empty string, or a number or
+     * bigint as its string form (`1` and `"1"` are one thread). Only
+     * without a thread id (`undefined` or `null`) are held calls shared by
+     * every call of the wrapped tools, which must then serve one principal;
+     * any other thread id (an empty string, an object) is an unknown
+     * session, as below.
      *
      * With this option, it alone names the scope (the thread id is not
      * used). Return a non-empty string. Anything else means the session is
@@ -55,13 +58,30 @@ export type GuardianLangChainOptions = GuardianAdapterOptions &
     ) => string | typeof SCOPE_UNKNOWN | null | undefined;
   }>;
 
-/** LangGraph's thread id, the default scope of a call. */
+/**
+ * LangGraph's thread id, the default scope of a call. LangGraph does not
+ * require a string, and keys a thread by the id's string form, so `1` and
+ * `"1"` are one thread: a number or bigint is its string form here too.
+ * Only an absent id (`undefined`, `null`) leaves held calls shared. An id
+ * that names no thread (an empty string, NaN, an object, anything else) is
+ * an unknown session.
+ */
 function threadScope(config: Record<string, unknown> | undefined): HeldScope {
   const threadId = (config?.configurable as { thread_id?: unknown } | undefined)
     ?.thread_id;
-  return typeof threadId === "string" && threadId.length > 0
-    ? threadId
-    : undefined;
+  if (threadId === undefined || threadId === null) {
+    return undefined;
+  }
+  if (typeof threadId === "string") {
+    return threadId.length > 0 ? threadId : SCOPE_UNKNOWN;
+  }
+  if (
+    (typeof threadId === "number" && Number.isFinite(threadId)) ||
+    typeof threadId === "bigint"
+  ) {
+    return String(threadId);
+  }
+  return SCOPE_UNKNOWN;
 }
 
 /**
