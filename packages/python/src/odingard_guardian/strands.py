@@ -41,7 +41,6 @@ import asyncio
 import copy
 import dataclasses
 import inspect
-import json
 import logging
 import weakref
 from typing import Any, AsyncGenerator, Callable, Dict, Literal, Mapping, Optional, Tuple, Union
@@ -70,7 +69,7 @@ class _Paused(Exception):
 
 
 class _ToolFailed(Exception):
-    """The tool reported an error of its own: there is nothing to record."""
+    """The tool raised or returned an error result: nothing is redeemed."""
 
 
 class _InThreads:
@@ -96,6 +95,22 @@ class _InThreads:
 
 def _is_interrupt(event: Any) -> bool:
     return isinstance(event, dict) and "tool_interrupt_event" in event
+
+
+def _failed(event: ToolResultEvent) -> bool:
+    """Whether the tool reported a failure: it raised, or its result has the error status."""
+    if event.exception is not None:
+        return True
+    result = event.get("tool_result")
+    return isinstance(result, Mapping) and result.get("status") == "error"
+
+
+def _takes_keywords(stream: Any) -> bool:
+    try:
+        parameters = inspect.signature(stream).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters)
 
 
 def _registered(agent: Any, name: Any) -> Optional[AgentTool]:
@@ -165,6 +180,9 @@ class _GuardianTool(AgentTool):
             call = dict(tool_use)
             call["input"] = copy.deepcopy(decided)
             passed = dict(kwargs)
+            if not _takes_keywords(self._tool.stream):
+                # Strands hands its context only to a stream that takes **kwargs.
+                passed.pop("_tool_context", None)
             context = passed.get("_tool_context")
             if dataclasses.is_dataclass(context) and not isinstance(context, type) and hasattr(context, "tool_use"):
                 # The tool's context names the decided call, not the caller's record.
@@ -190,7 +208,7 @@ class _GuardianTool(AgentTool):
                 close = getattr(stream, "aclose", None)
                 if callable(close):
                     await close()
-            if final and final[0].exception is not None:
+            if final and _failed(final[0]):
                 raise _ToolFailed()
 
         async def governed() -> Any:
@@ -220,19 +238,21 @@ class _GuardianTool(AgentTool):
                 await asyncio.gather(task, return_exceptions=True)
 
         if outcome.message is None:
-            if outcome.ran:
-                if final:
-                    yield final[0]  # ALLOW: the tool ran and Guardian recorded it
-                return
-            if outcome.result is None:  # pragma: no cover - a remote ALLOW always carries Guardian's answer
-                yield told(unchecked(tool_name).message or "")
-                return
+            if final:
+                yield final[0]  # ALLOW: the tool ran and Guardian recorded it
+            return
+        info = (outcome.result or {}).get("guardian") or {}
+        if outcome.decision == "ALLOW" and not outcome.ran and "outcome" not in info:
             # Remote mode: Guardian performed the call; its answer is the result.
-            yield told(json.dumps(outcome.result, default=str), "success")
+            # (A remote call that could not be confirmed carries an "outcome"
+            # and is reported as an error below.)
+            yield told(outcome.message, "success")
             return
         if outcome.decision == "ASK" and outcome.request_id:
             await provider._held(tool_name, outcome.request_id)
-            if provider._on_ask == "interrupt":
+            # Only an agent run can pause: a direct call (agent.tool.x(...)) has
+            # no event loop cycle, and its caller gets the held result.
+            if provider._on_ask == "interrupt" and "event_loop_cycle_id" in invocation_state:
                 _pause(kwargs.get("_tool_context"), tool_name, outcome.request_id, outcome.message)
         yield told(outcome.message)
 

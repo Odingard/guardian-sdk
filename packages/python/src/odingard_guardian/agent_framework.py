@@ -31,6 +31,16 @@ nothing can change the arguments between the decision and the tool. Function
 middleware listed after it, and middleware passed to ``agent.run``, does not
 run for the call. Put middleware that should see the call (argument repair,
 logging) before Guardian's in the agent's list.
+
+A tool that is a generator function (``def`` or ``async def`` with
+``yield``) is refused before anything is proposed: Agent Framework does not
+iterate a tool's generator, so its body would never run.
+
+``mode="remote"`` (or ``modes={"refund_order": "remote"}``) is for a tool
+registered on the Guardian connection as a call Guardian performs itself.
+After ALLOW Guardian performs it; the tool's own function never runs, and
+the model gets ``{"guardian": {"decision": "ALLOW", "request_id": …,
+"tool_name": …, "receipt": …}}`` as the tool result.
 """
 
 from __future__ import annotations
@@ -41,9 +51,16 @@ from typing import Any, Awaitable, Callable, Dict, Literal, Mapping, Optional, U
 
 from agent_framework import FunctionInvocationContext, FunctionMiddleware, MiddlewareTermination
 
-from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
+from ._framework import (
+    ToolNames,
+    build_guard,
+    decide_and_run,
+    is_stream_function,
+    json_record,
+    resolve_tool_name,
+)
 from .client import AsyncGuardianClient
-from .guard import GuardianExecutionFailed
+from .guard import GuardianExecutionFailed, Mode
 
 __all__ = ["GuardianFunctionMiddleware"]
 
@@ -62,6 +79,10 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         as set in the Guardian console (see :class:`Guard`).
     :param tool_names: the Guardian tool name for an Agent Framework function
         name, as a mapping or a function. Default: the same name.
+    :param mode / modes: ``"in_process"`` (default): the tool runs in your
+        process after ALLOW. ``"remote"``: Guardian performs the call itself
+        and the tool's own function never runs; the model gets Guardian's
+        result. ``modes`` sets it per Guardian tool name.
     :param on_ask: ``"result"`` (default) tells the model the call is held;
         ``"stop"`` also stops the agent run.
     :param on_deny: ``"result"`` (default) tells the model the call was
@@ -86,6 +107,8 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         on_approval_pending: Optional[Callable[[str, str], Any]] = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
+        mode: Mode = "in_process",
+        modes: Optional[Mapping[str, Mode]] = None,
     ) -> None:
         if on_ask not in ("result", "stop") or on_deny not in ("result", "stop"):
             raise ValueError('on_ask and on_deny take "result" or "stop"')
@@ -98,6 +121,8 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
             amount_args=amount_args,
             on_receipt=on_receipt,
             on_execution_error=on_execution_error,
+            mode=mode,
+            modes=modes,
         )
         self._tool_names = tool_names
         self._on_ask = on_ask
@@ -110,6 +135,16 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         call_next: Callable[[], Awaitable[None]],
     ) -> None:
         tool_name = resolve_tool_name(self._tool_names, context.function.name)
+        in_process = self._guard._opts.mode_for(tool_name) == "in_process"
+        if in_process and is_stream_function(getattr(context.function, "func", None)):
+            # Agent Framework hands a generator tool's generator to the model
+            # as text and never iterates it: the body would not run, and
+            # Guardian would record a call that did not happen.
+            context.result = (
+                f"{tool_name} is a generator function. Agent Framework does not iterate a tool's "
+                "generator, so it would not run. Nothing was proposed or run."
+            )
+            return
         try:
             proposed = json_record(context.arguments)
             decided = copy.deepcopy(context.arguments)
@@ -133,6 +168,8 @@ class GuardianFunctionMiddleware(FunctionMiddleware):
         outcome = await decide_and_run(self._guard, tool_name, proposed, run_tool)
         if outcome.message is None:
             return  # ALLOW: the tool ran and Guardian recorded it
+        # A refusal, a call that could not be confirmed, or (remote mode)
+        # Guardian's result for the call it performed.
         context.result = outcome.message
         if outcome.decision == "ASK":
             if self._on_approval_pending is not None and outcome.request_id:

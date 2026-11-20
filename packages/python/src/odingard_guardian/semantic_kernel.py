@@ -33,6 +33,12 @@ Add this filter last. Filters added later run closer to the function, so
 they would run between Guardian's decision and the call: while another
 function invocation filter was added after Guardian's, every native function
 call is refused before anything is proposed or run.
+
+``mode="remote"`` (or ``modes={"billing-refund_order": "remote"}``) is for a
+function registered on the Guardian connection as a call Guardian performs
+itself. After ALLOW Guardian performs it; the kernel function never runs,
+and its result is ``{"guardian": {"decision": "ALLOW", "request_id": …,
+"tool_name": …, "receipt": …}}`` as JSON text.
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from semantic_kernel.functions import FunctionResult
 
 from ._framework import ToolNames, build_guard, decide_and_run, json_record, resolve_tool_name
 from .client import AsyncGuardianClient
-from .guard import GuardianDenied, GuardianExecutionFailed
+from .guard import GuardianDenied, GuardianExecutionFailed, Mode
 
 __all__ = ["GuardianFunctionInvocationFilter", "default_tool_name"]
 
@@ -74,6 +80,10 @@ class GuardianFunctionInvocationFilter:
         qualified function name (``plugin-function``), as a mapping or a
         function. Default: that name.
     :param on_receipt / on_execution_error: as for :class:`Guard`.
+    :param mode / modes: ``"in_process"`` (default): the function runs in
+        your process after ALLOW. ``"remote"``: Guardian performs the call
+        itself and the kernel function never runs; its result is Guardian's
+        result. ``modes`` sets it per Guardian tool name.
     """
 
     def __init__(
@@ -88,6 +98,8 @@ class GuardianFunctionInvocationFilter:
         tool_names: ToolNames = None,
         on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
         on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
+        mode: Mode = "in_process",
+        modes: Optional[Mapping[str, Mode]] = None,
     ) -> None:
         self._guard = build_guard(
             client,
@@ -98,6 +110,8 @@ class GuardianFunctionInvocationFilter:
             amount_args=amount_args,
             on_receipt=on_receipt,
             on_execution_error=on_execution_error,
+            mode=mode,
+            modes=modes,
         )
         self._tool_names = tool_names
 
@@ -176,4 +190,6 @@ class GuardianFunctionInvocationFilter:
 
         outcome = await decide_and_run(self._guard, tool_name, proposed, run_function)
         if outcome.message is not None:
+            # A refusal, a call that could not be confirmed, or (remote mode)
+            # Guardian's result for the call it performed.
             refuse(outcome.message)

@@ -2,9 +2,19 @@
 
 `guardian init` sets Guardian up for the agent project in the current folder, in one command.
 
+The package is not on npm yet, so `npx @odingard/guardian` does not work
+today. Build it from this repository and run the built command in your
+project's folder:
+
 ```sh
-npx @odingard/guardian init --tools send_reply,refund_order
+# in a clone of github.com/Odingard/guardian-sdk
+npm install && npm run build
+# in your agent project
+node /path/to/guardian-sdk/packages/guardian/dist/cli.js init --tools send_reply,refund_order
 ```
+
+Once it is published, the same command is
+`npx @odingard/guardian init --tools send_reply,refund_order`.
 
 1. **Finds the framework.** It reads `package.json`, `pyproject.toml` or `requirements.txt` (LangChain, Vercel AI SDK, OpenAI Agents SDK, other Node.js code, Python). It changes no file in your project.
 2. **Opens the Guardian console** to sign in. The page shows a code; check that the terminal shows the same one. Press **Create agent and connection**: the console creates the agent and a tool server with your tools as "My own code (record-only)".

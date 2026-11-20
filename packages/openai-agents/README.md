@@ -143,7 +143,8 @@ effect. Use `mode: "remote"` where Guardian itself must hold the effect.
 In remote mode, a call Guardian performed whose recorded status is not
 `sent-verified` (for example the upstream answered with an error) is a
 `GuardianExecutionFailed`, and the model is told it did not complete; it is
-never reported as an `ALLOW` result.
+never reported as an `ALLOW` result. What remote mode does, needs and does
+not support: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 `modes` sets the mode per tool name. The Agents SDK renames tools: every
 character that is not a letter or a digit becomes `_` (`refund-order`
 becomes `refund_order`), and Guardian sees the new name. A `modes` entry

@@ -119,7 +119,7 @@ def send_report(to: str, attachment_path: PinnedFile) -> str: ...
 - **Display only.** The check before the function runs compares the size and SHA-256, as before. Previews count toward the 16 KB arguments limit; over it the call is refused (`CONTENT_PIN_TOO_MANY`).
 - `content_preview(name, data)` returns the preview for bytes you hold; `normalize_file_arg_preview_roots(tool_name, file_args)` returns the folders per argument. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
 
-### Dollar amounts on tools: `amount_args` (unreleased)
+### Dollar amounts on tools: `amount_args` (0.5.0)
 
 An owner can put a dollar limit on a tool in the Guardian console: allow up to an amount, ask a person above it, and block above a maximum. The owner names the argument that holds the amount. Pass the same declaration in `amount_args`, keyed by the tool name:
 
@@ -173,6 +173,46 @@ async def send_whatsapp(to: str, body: str): ...
 await send_whatsapp("+15550100", "Your invoice is ready")
 # held.resume() is awaitable for an async guard
 ```
+
+### Generator tools: streams (unreleased)
+
+Calling a generator function runs none of its body, so a guarded generator is decided and recorded around its iteration, not around the call:
+
+```python
+@guard("export_rows")
+def export_rows(table: str):
+    for row in read(table):   # your code
+        yield row
+
+stream = export_rows("invoices")   # nothing asked, nothing run
+for row in stream:                 # Guardian is asked here, before the first row
+    ...
+# the stream ended: the capability is redeemed and the receipt recorded
+```
+
+`@guard` on a generator function gives a generator function (`inspect.isgeneratorfunction` stays true). Under an async guard it gives an async generator function, for `async def` generators and for sync ones: `async for row in export_rows(...)`.
+
+| When                                      | What happens                                                                                                                                                                                              |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The first item is requested               | Guardian is asked. The body starts only after ALLOW.                                                                                                                                                      |
+| **ASK**, **DENY**, Guardian unreachable   | Raised on that first request; the body never runs. With `on_ask="result"` / `on_deny="result"` the decision is the stream's only item.                                                                    |
+| After approval                            | `held.resume()` returns the stream as `output`, with `receipt=None`: it runs when you consume it, and `on_receipt` gets the receipt then. In result mode, call the tool again with the same arguments.     |
+| The stream ends                           | The capability is redeemed and the receipt recorded (`on_receipt`).                                                                                                                                       |
+| The consumer closes it early              | `close()`, `aclose()`, or leaving the loop and dropping the stream: the body is closed, then the capability is redeemed and the receipt recorded. The body ran in part, so Guardian records the call.      |
+| The body raises                           | The error reaches the consumer and nothing is redeemed, as for a function that raises.                                                                                                                    |
+| The redemption fails after the stream     | `GuardianExecutionFailed(local_effect_ran=True)` is raised after the last item (from `close()` for a stream closed early). With `on_execution_failed="result"` it is the stream's last item; for a closed stream only `on_execution_error` sees it. |
+| `mode="remote"`                           | The body never runs. The stream's only item is Guardian's result.                                                                                                                                         |
+
+Only a generator function is a stream: `@guard` on one, or one passed as `fn` to `guard.run(...)`. A function that *returns* a generator is an ordinary call. Its own body has run when it returns, so the capability is redeemed then, also when nobody consumes what it returned, and the generator is handed back as it is. A sync guard refuses an async generator function with a `TypeError` (use an `AsyncGuardianClient`).
+
+Limits:
+
+- What an ordinary function returns is data, whatever it is (a generator, a list, a file object, a `map`): it is returned as it is, and the capability is redeemed when the function returns. If the returned generator is where the action happens, make the tool a generator function.
+- A stream dropped without `close()` is redeemed when Python collects it, which can be late, and not at all if the process exits first. Close a stream you abandon.
+- With `file_args`, the files are checked once, just before the body starts, not between items. A private copy (`"copy"`) is kept until the stream has ended and its body has closed, also for a stream that is dropped midway; a stream that is dropped before it started deletes it at once.
+- Before this change a guarded generator function was redeemed when the generator object was created, before any of its body ran, and a stream that failed was recorded as a success.
+
+In Semantic Kernel, `invoke()` consumes a generator function before the filter's step returns, so it is recorded after it ran. Agent Framework does not iterate a tool's generator, so Guardian's middleware refuses a generator tool before anything is proposed.
 
 ### Give the decision back to the model instead of raising
 
@@ -242,14 +282,16 @@ integrations:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI** (example): `@tool("Pay invoice")` on top of
-  `@guard`.
+- **CrewAI**: `@tool("Pay invoice")` on top of `@guard`. A recipe only: this
+  repository has no CrewAI example or test yet.
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
 - **Strands Agents**: use the hook provider below, which decides every tool
   call the agent makes.
-- **Claude Agent SDK** (example): guard the handler, or put
+- **Claude Agent SDK**: guard the handler of a tool you define, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
+  A recipe only: this repository has no Python Claude Agent SDK example or
+  test yet.
 
 ### Honest limits
 
@@ -258,7 +300,8 @@ integrations:
   after the effect and raised as `GuardianExecutionFailed(local_effect_ran=True)`
   (or returned as a result that says the call ran, with
   `on_execution_failed="result"`). Treat that as an incident. Where Guardian itself must perform the call, use
-  `mode="remote"` with a tool registered in your Guardian connection.
+  `mode="remote"` with a tool registered in your Guardian connection. What remote mode does, needs and does
+  not support, also for Agent Framework and Semantic Kernel: [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Guardian governs what goes through it. An agent or app that never calls
   Guardian is not governed by it.
 - **First-run setup:**
@@ -278,7 +321,7 @@ integrations:
   itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
 
-## Microsoft Agent Framework: `odingard_guardian.agent_framework` (unreleased)
+## Microsoft Agent Framework: `odingard_guardian.agent_framework` (0.5.0)
 
 [Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/overview/)
 runs function middleware around each tool call in its function-calling loop.
@@ -321,10 +364,12 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 - If Guardian allowed the call and the tool ran but redeeming the capability failed, the model is told the tool ran and not to call it again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agent Framework function names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent.
 - Agent Framework's own `approval_mode="always_require"` adds a local approval step before Guardian is asked; it does not replace Guardian's decision.
+- `mode="remote"`, or `modes={"refund_order": "remote"}` by Guardian tool name, is for a tool registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the tool's own function does not run, and the model gets Guardian's result (`{"guardian": {"decision": "ALLOW", "request_id": …, "tool_name": …, "receipt": …}}`) as JSON text. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError`. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- A tool that is a generator function is refused before anything is proposed: Agent Framework does not iterate a tool's generator, so it would not run.
 - Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
 - Tested with `agent-framework-core` 1.26.0 in a real agent loop with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
-## Semantic Kernel: `odingard_guardian.semantic_kernel` (unreleased)
+## Semantic Kernel: `odingard_guardian.semantic_kernel` (0.5.0)
 
 [Semantic Kernel](https://learn.microsoft.com/semantic-kernel/concepts/enterprise-readiness/filters)
 runs function invocation filters around each kernel function call, including
@@ -350,6 +395,7 @@ kernel.add_filter(FilterTypes.FUNCTION_INVOCATION, guardian)  # add it last
 - The Guardian tool name is Semantic Kernel's fully qualified name, `plugin-function` (for example `billing-refund_order`); `tool_names` maps it to another name. The proposal carries the function's own parameters, not other kernel arguments; a function with an `arguments` parameter receives every kernel argument, so then every kernel argument is proposed.
 - Prompt functions pass through without a decision: they call the model, and each native function the model then asks for is decided. A streaming call of a native function (`invoke_stream`) is refused, because the function would run after the filter returns.
 - **Add Guardian's filter last.** Filters added later run closer to the function, between Guardian's decision and the call. While another function invocation filter is added after Guardian's, every native function call is refused before anything is proposed or run.
+- `mode="remote"`, or `modes={"billing-refund_order": "remote"}` by Guardian tool name, is for a function registered on the connection as a call Guardian makes itself: after ALLOW Guardian performs it, the kernel function does not run, and its result is Guardian's result as JSON text. See [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - Tested with `semantic-kernel` 1.47.0 through the kernel's own automatic function-calling path, with a stand-in Guardian.
 
 ## Strands Agents: `odingard_guardian.strands` (unreleased)
@@ -394,10 +440,10 @@ agent("Refund order 42")
 - **The decision is made in the last step Strands takes for a tool call.** The stand-in tool runs after every `BeforeToolCallEvent` hook (Guardian's own hook is ordered last, `HookOrder.SDK_LAST`) and after the tool middleware (`ExecuteToolStage`). It takes a private copy of the arguments it is handed, proposes that copy and runs the tool with it, so nothing can change the arguments between the decision and the tool. Arguments that a hook or a middleware changed before that point are the ones Guardian decides on and the tool runs with. A hook that renames the call or selects another tool is decided under the name of the tool that runs.
 - Guardian decides on the arguments as the model sent them. Strands validates them inside the tool, so `"500"` for an `int` parameter is proposed as `"500"`. Arguments the tool rejects are not redeemed.
 - **Clients.** Pass a `GuardianClient` when you call the agent synchronously (`agent(...)`): Strands runs every sync call on an event loop of its own, and an `AsyncGuardianClient` keeps connections that belong to the loop that opened them (a call on a later loop can fail, and then the tool does not run). A `GuardianClient` is called in worker threads. With `invoke_async` / `stream_async` on one event loop, either client works.
-- **`on_ask="interrupt"`** pauses the agent run instead of telling the model: the result has `stop_reason == "interrupt"`, and `result.interrupts[0].reason["guardian"]` carries the `request_id`. After the person approved in the Guardian console, resume the run with `agent([{"interruptResponse": {"interruptId": interrupt.id, "response": "resume"}}])`. The response approves nothing: the paused call claims the request from Guardian and runs once it is approved, and the run pauses again (a new interrupt) while it is still held. Other calls of the same turn that already ran are not made again. `on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in either setting.
-- **Modes.** In the default `mode="in_process"` your Strands tool is the action: it runs after ALLOW, and the capability is redeemed after it. A revocation that lands in between is detected after the effect; the model is then told the tool ran and not to call it again, and `on_execution_error` gets the error. With `mode="remote"`, or `modes={"refund_order": "remote"}` for single tools (by Guardian tool name), Guardian performs the call itself with the tool registered on the connection: the Strands tool body never runs, the credential for the upstream stays with Guardian, and the tool result is Guardian's answer as JSON (`{"guardian": {"decision": "ALLOW", "request_id": ..., "receipt": ...}}`). A receipt that is not `sent-verified` is reported as "may have run, do not call again".
+- **`on_ask="interrupt"`** pauses the agent run instead of telling the model: the result has `stop_reason == "interrupt"`, and `result.interrupts[0].reason["guardian"]` carries the `request_id`. After the person approved in the Guardian console, resume the run with `agent([{"interruptResponse": {"interruptId": interrupt.id, "response": "resume"}}])`. The response approves nothing: the paused call claims the request from Guardian and runs once it is approved, and the run pauses again (a new interrupt) while it is still held. Other calls of the same turn that already ran are not made again. A direct call (`agent.tool.refund_order(...)`) has no agent run to pause: it returns the held result, and the same direct call after approval runs the approved request. `on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in either setting.
+- **Modes.** In the default `mode="in_process"` your Strands tool is the action: it runs after ALLOW, and the capability is redeemed after it. A revocation that lands in between is detected after the effect; the model is then told the tool ran and not to call it again, and `on_execution_error` gets the error. With `mode="remote"`, or `modes={"refund_order": "remote"}` for single tools (by Guardian tool name), Guardian performs the call itself with the tool registered on the connection: the Strands tool body never runs, the credential for the upstream stays with Guardian, and the tool result is Guardian's answer as JSON text (`{"guardian": {"decision": "ALLOW", "request_id": ..., "tool_name": ..., "receipt": ...}}`). A receipt that is not `sent-verified`, and an error after Guardian was asked to perform the call, is reported as "may have run, do not call again", never as "did not run". The tool must be registered on the connection as a call Guardian makes itself, not as a record-only entry: see [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
 - **Streaming tools** (async generator tools) work in both `agent(...)` and `stream_async`: their events pass through while the tool runs, after the decision. The tool's result follows once Guardian recorded the run.
-- A tool that raises, or returns its own error, is reported as the tool reported it, and the capability is not redeemed. A call a hook retries (`AfterToolCallEvent.retry`) is decided again.
+- A tool that raises, or returns a result with `status: "error"`, is reported as the tool reported it, and the capability is not redeemed: Guardian keeps no record that the call was done. A call a hook retries (`AfterToolCallEvent.retry`) is decided again.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Strands tool names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. Direct calls (`agent.tool.refund_order(...)`) are decided too.
 - Limits:
   - A hook ordered after `HookOrder.SDK_LAST` that selects another tool takes Guardian's stand-in away, and that tool runs without a decision. Guardian's hook reports it after the fact (an error tool result and an error log); it cannot prevent it. Tool middleware that replaces the tool object does the same and is not detected. Hooks and middleware that only change arguments, rename the call or cancel it are covered.

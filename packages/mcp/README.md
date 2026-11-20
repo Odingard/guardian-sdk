@@ -105,7 +105,9 @@ upstream server's tools unchanged, and every call is decided first:
   the agent credential.
 - **Decision-gated:** an allowed call runs upstream before the capability is
   redeemed. A refusal at redemption is reported as an incident
-  (`localEffectRan: true`), never as success.
+  (`localEffectRan: true`), never as success. The proxy has no mode in which
+  Guardian makes the call; for that, use `guardian-mcp` without `proxy`
+  ([Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote)).
 - **First-run setup:** in the Guardian console, connect a tool server and add
   each upstream tool as "My own code (record-only)". Then allow those tools
   for the agent.

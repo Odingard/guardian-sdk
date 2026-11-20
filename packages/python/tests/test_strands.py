@@ -226,6 +226,23 @@ def test_a_direct_tool_call_is_decided_too():
     assert result["status"] == "error" and "Guardian denied refund_order" in result["content"][0]["text"]
 
 
+def test_a_held_direct_tool_call_gets_the_held_result_with_on_ask_interrupt():
+    guardian = FakeClient(HELD, claims=[APPROVED])
+    pending = []
+    _, agent = agent_for(
+        [], provider(guardian, on_ask="interrupt", on_approval_pending=lambda t, r: pending.append(r))
+    )
+    # A direct call has no agent run to pause: the caller gets the held result.
+    held = agent.tool.refund_order(order_id="o42", amount_cents=500)
+    assert ran == [] and pending == ["req_ask"]
+    assert held["status"] == "error"
+    assert "held for human approval (request_id req_ask)" in held["content"][0]["text"]
+    # The same direct call after approval claims the approved request.
+    done = agent.tool.refund_order(order_id="o42", amount_cents=500)
+    assert ran == [("o42", 500)] and done["content"][0]["text"] == "refunded o42"
+    assert guardian.calls == ["request:tool.invoke", "claim:req_ask", "execute:req_ask"]
+
+
 # --- decisions -----------------------------------------------------------------
 
 
@@ -323,6 +340,51 @@ def test_a_tool_that_fails_is_reported_as_the_tool_reported_it_and_nothing_is_re
     assert guardian.calls == ["request:tool.invoke"]
     assert model.results()[0]["status"] == "error"
     assert model.texts() == ["Error: RuntimeError - card declined"]
+
+
+def test_a_tool_that_returns_its_own_error_is_not_redeemed():
+    @tool
+    def charge(order_id: str) -> dict:
+        """Charge an order."""
+        ran.append("charge")
+        return {"status": "error", "content": [{"text": "card declined"}]}
+
+    guardian = FakeClient(ALLOW)
+    receipts = []
+    model, agent = agent_for(
+        [("charge", {"order_id": "o1"})],
+        provider(guardian, on_receipt=lambda t, r, rc: receipts.append(r)),
+        tools=(charge,),
+    )
+    agent("charge")
+    assert ran == ["charge"]
+    assert guardian.calls == ["request:tool.invoke"] and receipts == []
+    assert model.results()[0]["status"] == "error"
+    assert model.texts() == ["card declined"]
+
+
+def test_a_custom_tool_whose_stream_takes_no_keyword_arguments_runs():
+    from strands.types.tools import AgentTool
+
+    class Plain(AgentTool):
+        tool_name = "plain_lookup"
+        tool_type = "python"
+        tool_spec = {
+            "name": "plain_lookup",
+            "description": "Look something up.",
+            "inputSchema": {"json": {"type": "object", "properties": {"key": {"type": "string"}}}},
+        }
+
+        async def stream(self, tool_use, invocation_state):
+            ran.append(("plain", tool_use["input"]["key"]))
+            yield {"toolUseId": tool_use["toolUseId"], "status": "success", "content": [{"text": "found"}]}
+
+    guardian = FakeClient(ALLOW)
+    model, agent = agent_for([("plain_lookup", {"key": "k1"})], provider(guardian), tools=(Plain(),))
+    agent("look up")
+    assert ran == [("plain", "k1")]
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    assert model.results()[0]["status"] == "success" and model.texts() == ["found"]
 
 
 def test_arguments_the_tool_rejects_are_not_redeemed():
@@ -728,6 +790,21 @@ def test_remote_mode_an_unverified_receipt_is_not_reported_as_done():
     assert ran == []
     assert model.results()[0]["status"] == "error"
     assert "may have run" in model.texts()[0] and "Do not call it again" in model.texts()[0]
+
+
+def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_reported_as_not_run():
+    def broken(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store is down")
+
+    guardian = FakeClient(ALLOW)
+    model, agent = agent_for([CALL], provider(guardian, mode="remote", on_receipt=broken))
+    agent("refund order 42")
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    (result,) = model.results()
+    assert result["status"] == "error"
+    assert "Guardian may have performed it" in model.texts()[0] and "Do not call it again" in model.texts()[0]
+    assert "did not run" not in model.texts()[0]
 
 
 def test_an_unknown_mode_is_refused():
