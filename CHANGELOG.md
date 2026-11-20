@@ -1,5 +1,17 @@
 # Changelog
 
+## guardian-mastra 0.1.0, unreleased
+
+### Added: Mastra adapter
+
+- **`@odingard/guardian-mastra`** (new package, not on npm yet): `guardianTool(tool, options)` and `guardianTools({ … }, options)` wrap tools made with `createTool` from `@mastra/core/tools`, so each call of the tool's `execute` is decided by Guardian before it runs. The returned tool has the same `id`, description, schemas and flags. Guardian knows a tool by its `id`. It is built on `createGuardianContext` / `runThroughGuardian` from `@odingard/guardian-sdk`.
+  - `ALLOW` runs the tool once on the decided arguments and redeems the capability. `ASK` does not run and carries the `requestId`; the same call after approval claims the approved request. `DENY`, or Guardian unreachable, does not run.
+  - `mode: "remote"` (default, enforced): Guardian performs the call, the local `execute` does not run and the model gets Guardian's result. `mode: "inProcess"`: the local `execute` runs after `ALLOW` and the evidence is recorded afterwards. `modes` sets it per tool id.
+  - `onAsk: "suspend"` suspends the Mastra run with the `requestId` in its suspend payload. A resumed run asks Guardian again and runs the tool only if a person approved the request in Guardian; the resume data passed to Mastra is not read. Mastra's own tool approval (`requireApproval`) stays in place and does not stand in for Guardian's decision.
+  - In an agent run Guardian decides on the arguments as parsed by the tool's `inputSchema`, and the tool receives a copy of exactly those. Mastra's `abortSignal` is honoured. `fileArgs` and `amountArgs` are passed to the SDK, keyed by tool id.
+  - Peer dependency `@mastra/core` `>=1.83.0 <2.0.0`; tested with 1.83.0, 1.84.0 and 1.85.0.
+  - Example: `examples/agents/mastra-agent.mjs` (a Mastra agent with a scripted model and the local demo policy; no account or API key).
+
 ## guardian-mcp 0.6.0, unreleased
 
 ### Added: list and withdraw held requests

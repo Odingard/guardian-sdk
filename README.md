@@ -45,6 +45,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-vercel-ai`](https://www.npmjs.com/package/@odingard/guardian-vercel-ai)         | You build with the Vercel AI SDK                                                                                                                                                                                                                                       | [packages/vercel-ai](packages/vercel-ai)         |
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                                                     | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs                                                                                                                                       | [packages/openai-agents](packages/openai-agents) |
+| [`@odingard/guardian-mastra`](packages/mastra) (unreleased, not on npm yet) | You build with Mastra (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs | [packages/mastra](packages/mastra) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                                                            | [packages/openclaw](packages/openclaw)           |
 | [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Supports USDC on Base Sepolia (testnet). Base mainnet is off by default; run your flow on Base Sepolia before you turn it on. | [packages/x402](packages/x402)                   |
 | [`@odingard/guardian-ap2`](https://www.npmjs.com/package/@odingard/guardian-ap2)                     | Your agent pays over AP2 v0.2: Guardian decides closed Checkout and Payment Mandates before the agent key signs them (pinned merchant keys, USD)                                                                                                                       | [packages/ap2](packages/ap2)                     |
@@ -105,6 +106,7 @@ document.
 | LangChain.js / LangGraph                        | `@odingard/guardian-langchain`                                    |
 | Vercel AI SDK                                   | `@odingard/guardian-vercel-ai`                                    |
 | OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                                |
+| Mastra (TypeScript)                             | `@odingard/guardian-mastra` (unreleased)                          |
 | Python with LangChain / OpenAI Agents SDK       | `odingard-guardian` ([recipe](packages/python#framework-recipes)) |
 | Microsoft Agent Framework (Python)              | `odingard-guardian`                                               |
 | Semantic Kernel (Python)                        | `odingard-guardian`                                               |
@@ -140,6 +142,7 @@ packages/hook           @odingard/guardian-hook           coding-agent hooks
 packages/langchain      @odingard/guardian-langchain
 packages/vercel-ai      @odingard/guardian-vercel-ai
 packages/openai-agents  @odingard/guardian-openai-agents  OpenAI Agents SDK adapter
+packages/mastra         @odingard/guardian-mastra         Mastra adapter (unreleased)
 packages/steel          @odingard/guardian-steel
 packages/openclaw       @odingard/guardian-openclaw       OpenClaw plugin
 packages/x402           @odingard/guardian-x402           x402 payment guard
