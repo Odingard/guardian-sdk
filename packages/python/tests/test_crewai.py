@@ -5,6 +5,7 @@ agent, the task, the crew and both tool-calling loops (native function
 calling and the text/ReAct path) are crewAI's own.
 """
 
+import contextvars
 import json
 import os
 import threading
@@ -32,7 +33,7 @@ from crewai.tools import BaseTool, tool  # noqa: E402
 from crewai.tools.tool_failure import ToolExecutionFailedError, ToolFailure  # noqa: E402
 
 from odingard_guardian import ExecuteResult, RequestResult  # noqa: E402
-from odingard_guardian.crewai import GuardianTool, guardian_tool, guardian_tools  # noqa: E402
+from odingard_guardian.crewai import GuardianTool, guardian_tool, guardian_tools, kickoff_scope  # noqa: E402
 
 from test_guard import ALLOW, CONNECTION, HELD, AsyncFake, FakeClient  # noqa: E402
 
@@ -115,6 +116,8 @@ def _reset():
 
 
 def governed(guardian, tools=(refund_order,), **options):
+    # One session, named by the app: held calls are scoped to it.
+    options.setdefault("scope", "session-1")
     return guardian_tools(list(tools), guardian, connection_id=CONNECTION, **options)
 
 
@@ -789,3 +792,130 @@ def test_each_task_and_each_kickoff_gets_a_fresh_usage_budget(path, mode):
     (wrapped,) = tools
     wrapped.reset_usage_count()
     assert not isinstance(wrapped.run(order_id="o44", amount_cents=1), ToolFailure)
+
+
+# --- held requests are scoped per session -----------------------------------------
+
+session = contextvars.ContextVar("session", default=None)  # the app sets it per request
+
+
+class Counting(FakeClient):
+    """Holds every proposal under its own request id; a claim is approved."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.proposed = 0
+
+    def request(self, invocation):
+        self.calls.append(f"request:{invocation['action']}")
+        self.proposed += 1
+        return RequestResult(ok=False, request_id=f"req_{self.proposed}", reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+
+
+def kickoff_as(user, calls, tools, path=NATIVE):
+    token = session.set(user)
+    try:
+        return run(calls, tools, path)
+    finally:
+        session.reset(token)
+
+
+@BOTH
+def test_another_users_identical_call_never_claims_a_held_request(path):
+    guardian = Counting()
+    tools = governed(guardian, scope=lambda tool: session.get())  # ONE set of wrapped tools
+    kickoff_as("alice", [CALL], tools, path)  # held as req_1; a person approves it
+    llm, _ = kickoff_as("bob", [CALL], tools, path)
+    assert ran == []
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke"]  # bob proposed his own
+    assert "request_id req_2" in llm.results()[0]
+    llm, _ = kickoff_as("alice", [CALL], tools, path)  # alice's repeat claims her own request
+    assert guardian.calls[2:] == ["claim:req_1", "execute:req_1"]
+    assert ran == [("o42", 500)] and llm.results() == ["refunded o42"]
+
+
+def test_the_scope_is_never_read_from_the_tool_calls_arguments():
+    @tool("refund_for")
+    def refund_for(session_id: str, order_id: str) -> str:
+        """Refund an order for a session."""
+        ran.append((session_id, order_id))
+        return "refunded"
+
+    guardian = Counting()
+    tools = governed(guardian, tools=(refund_for,), scope=lambda tool: session.get())
+    call = ("refund_for", {"session_id": "alice", "order_id": "o42"})
+    kickoff_as("alice", [call], tools)
+    # Bob's model writes alice's id into the arguments: still bob's session.
+    kickoff_as("bob", [call], tools)
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+@BOTH
+def test_without_a_scope_a_held_call_is_never_claimed_by_a_later_call(path):
+    guardian = Counting()
+    tools = governed(guardian, tools=(refund_order, lookup_order), scope=None)
+    llm, _ = run([CALL, LOOKUP, CALL], tools, path)  # the same call again in the same run
+    run([CALL], tools, path)  # and in the next kickoff
+    assert ran == []
+    assert "claim:req_1" not in guardian.calls and not any(c.startswith("claim:") for c in guardian.calls)
+    assert "held for human approval" in llm.results()[0]
+    assert "After a person approves, call the tool again" not in llm.results()[0]
+
+
+def test_kickoff_scope_is_one_kickoff():
+    guardian = Counting()
+    tools = governed(guardian, scope=kickoff_scope)
+    llm, _ = run([CALL, CALL], tools)  # the same run: the repeat claims
+    assert guardian.calls == ["request:tool.invoke", "claim:req_1", "execute:req_1"]
+    assert ran == [("o42", 500)]
+    other = ("refund_order", {"order_id": "o43", "amount_cents": 700})
+    run([other], tools)
+    run([other], tools)  # another kickoff proposes its own
+    assert guardian.calls[3:] == ["request:tool.invoke", "request:tool.invoke"]
+    assert kickoff_scope(tools[0]) is None  # outside a kickoff no session is known
+
+
+def test_a_scope_value_names_one_session_for_these_wrapped_tools():
+    guardian = Counting()
+    alice, bob = governed(guardian, scope="alice"), governed(guardian, scope="bob")
+    run([CALL], alice)
+    run([CALL], bob)
+    run([CALL], alice)
+    assert guardian.calls == ["request:tool.invoke", "request:tool.invoke", "claim:req_1", "execute:req_1"]
+
+
+@pytest.mark.parametrize("scope", ["", lambda tool: None, lambda tool: 1 / 0, lambda tool: ["unhashable"]])
+def test_a_scope_that_names_no_session_is_the_strict_side(scope):
+    guardian = Counting()
+    tools = governed(guardian, scope=scope)
+    run([CALL], tools)
+    run([CALL], tools)
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+
+
+def test_usage_limits_are_counted_per_session():
+    refund_order.max_usage_count = 1
+    guardian = FakeClient(ALLOW)
+    (wrapped,) = governed(guardian, scope=lambda tool: session.get())
+    other = {"order_id": "o43", "amount_cents": 700}
+
+    def call_as(user, **arguments):
+        token = session.set(user)
+        try:
+            return wrapped._run(**arguments)
+        finally:
+            session.reset(token)
+
+    assert call_as("alice", order_id="o42", amount_cents=500) == "refunded o42"
+    assert isinstance(call_as("alice", **other), ToolFailure)  # alice's budget is spent
+    assert call_as("bob", **other) == "refunded o43"  # bob has his own
+    # crewAI preparing the tool for bob's next task does not give alice a new budget.
+    token = session.set("bob")
+    wrapped.reset_usage_count()
+    session.reset(token)
+    assert isinstance(call_as("alice", **other), ToolFailure)
+    assert call_as("bob", order_id="o44", amount_cents=1) == "refunded o44"

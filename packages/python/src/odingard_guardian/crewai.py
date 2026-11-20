@@ -30,9 +30,11 @@ is not governed.
 * ALLOW: the tool runs once with the arguments Guardian decided on, then
   the capability is redeemed and the decision recorded.
 * ASK: the tool does not run. The result is a crewAI ``ToolFailure`` that
-  tells the model the call is held for a person; after the person approves,
-  the same call (same tool, same arguments) claims the approved request and
-  runs.
+  tells the model the call is held for a person. With a ``scope`` (the
+  session the call belongs to, from your application), the same call (same
+  tool, same arguments) in the same session claims the approved request and
+  runs. Without one, no later call claims it: crewAI gives a tool nothing
+  that names the user or conversation.
 * DENY, or Guardian unreachable: the tool does not run and the
   ``ToolFailure`` says so.
 
@@ -51,6 +53,7 @@ governed tool; Guardian decides inside the tool, after every before hook.
 from __future__ import annotations
 
 import asyncio
+import collections
 import concurrent.futures
 import contextvars
 import copy
@@ -60,6 +63,7 @@ import logging
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
 
+from crewai.execution import get_execution_uuid
 from crewai.tools import BaseTool
 from crewai.tools.tool_failure import ToolFailure, ToolFailureReason
 from crewai.utilities.string_utils import sanitize_tool_name
@@ -70,13 +74,37 @@ from ._framework import (
     is_stream_function,
     json_record,
     outcome_unknown,
+    resolve_scope,
     resolve_tool_name,
     unchecked,
 )
 from .client import AsyncGuardianClient
-from .guard import EXECUTION_OUTCOME_UNKNOWN, Guard, GuardianExecutionFailed, Mode, execution_failed_message
+from .guard import (
+    EXECUTION_OUTCOME_UNKNOWN,
+    SCOPE_UNKNOWN,
+    Guard,
+    GuardianExecutionFailed,
+    Mode,
+    execution_failed_message,
+)
 
-__all__ = ["GuardianTool", "guardian_tool", "guardian_tools"]
+__all__ = ["GuardianTool", "guardian_tool", "guardian_tools", "kickoff_scope"]
+
+#: Sessions whose usage count is kept per wrapped tool; the oldest go first.
+_MAX_COUNTED_SCOPES = 4096
+
+
+def kickoff_scope(_tool: Any = None) -> Optional[str]:
+    """A ``scope`` option: one crewAI kickoff is one session.
+
+    The scope is crewAI's execution id, which crewAI (or the host, with
+    ``crewai.execution.set_execution_uuid``) sets for the outermost crew or
+    flow run; the model cannot write it. A held call is then claimed by the
+    same call later in the same kickoff only. Use it only where one kickoff
+    serves one user: a flow that runs crews for several users is one
+    execution. ``None`` outside a kickoff (no session is known).
+    """
+    return get_execution_uuid()
 
 _logger = logging.getLogger("odingard_guardian")
 
@@ -148,9 +176,11 @@ class GuardianTool(BaseTool):
     _guard: Optional[Guard] = PrivateAttr(default=None)
     _guardian_name: str = PrivateAttr(default="")
     _on_approval_pending: Optional[Callable[[str, str], Any]] = PrivateAttr(default=None)
+    _scope: Optional[Callable[[Any], Any]] = PrivateAttr(default=None)
     #: Calls counted against the wrapped tool's ``max_usage_count`` since
-    #: crewAI last reset this tool: calls in flight, and calls that ran.
-    _used: int = PrivateAttr(default=0)
+    #: crewAI last reset this tool, by scope (session): calls in flight, and
+    #: calls that ran. One session cannot spend or reset another's budget.
+    _used: Any = PrivateAttr(default_factory=collections.OrderedDict)
     _usage_lock: Any = PrivateAttr(default_factory=threading.Lock)
 
     @property
@@ -167,8 +197,17 @@ class GuardianTool(BaseTool):
         if name == "current_usage_count" and value == 0:
             # crewAI resets a tool's count when it prepares the tool for a task
             # (and in reset_usage_count()): the budget starts again.
+            # Only for the session crewAI is preparing it in.
+            scope = self._scope_now()
             with self._usage_lock:
-                self._used = 0
+                self._used.pop(scope, None)
+
+    def _scope_now(self) -> Any:
+        """The session of the call being made: the app's ``scope`` option, else unknown.
+
+        Never read from the call's arguments, which the model writes.
+        """
+        return resolve_scope(self._scope, self, SCOPE_UNKNOWN)
 
     def _bind(self, args: tuple, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """Positional arguments (a direct ``tool.run("x")``) by schema field order, validated."""
@@ -182,7 +221,7 @@ class GuardianTool(BaseTool):
         record.update(kwargs)
         return self._validate_kwargs(record)
 
-    def _reserve_use(self) -> Optional[ToolFailure]:
+    def _reserve_use(self, scope: Any) -> Optional[ToolFailure]:
         """Take one use of the wrapped tool's ``max_usage_count``, or say it is spent.
 
         Taken before Guardian is asked, in one step with the check, so calls
@@ -190,8 +229,11 @@ class GuardianTool(BaseTool):
         ends without the action having happened gives its use back.
         """
         limit = getattr(self._inner, "max_usage_count", None)
+        if limit is None:
+            return None
         with self._usage_lock:
-            if limit is not None and self._used >= limit:
+            used = self._used.get(scope, 0)
+            if used >= limit:
                 return ToolFailure(
                     message=(
                         f"Tool '{self.name}' has reached its usage limit of {limit} times "
@@ -199,12 +241,19 @@ class GuardianTool(BaseTool):
                     ),
                     reason=ToolFailureReason.USAGE_LIMIT,
                 )
-            self._used += 1
+            self._used[scope] = used + 1
+            self._used.move_to_end(scope)
+            while len(self._used) > _MAX_COUNTED_SCOPES:
+                self._used.popitem(last=False)
             return None
 
-    def _release_use(self) -> None:
+    def _release_use(self, scope: Any) -> None:
         with self._usage_lock:
-            self._used = max(0, self._used - 1)
+            used = self._used.get(scope, 0)
+            if used <= 1:
+                self._used.pop(scope, None)
+            else:
+                self._used[scope] = used - 1
 
     def _report_unconfirmed(self, tool_name: str) -> ToolFailure:
         """The tool ran, and what Guardian did afterwards is not known."""
@@ -238,22 +287,29 @@ class GuardianTool(BaseTool):
                 "proposed and did not run.",
                 "ARGUMENTS_NOT_READABLE",
             )
-        spent = self._reserve_use()
+        scope = self._scope_now()
+        spent = self._reserve_use(scope)
         if spent is not None:
             return spent  # nothing is proposed for a tool that may not run
         used = False  # whether this call keeps its use: the action happened, or may have
         try:
-            result, used = self._governed(guard, inner, tool_name, proposed, decided)
+            result, used = self._governed(guard, inner, tool_name, proposed, decided, scope)
             return result
         except BaseException:
             used = True  # only the wrapped tool's own error leaves _governed
             raise
         finally:
-            if not used:
-                self._release_use()
+            if not used and getattr(inner, "max_usage_count", None) is not None:
+                self._release_use(scope)
 
     def _governed(
-        self, guard: Guard, inner: BaseTool, tool_name: str, proposed: Dict[str, Any], decided: Dict[str, Any]
+        self,
+        guard: Guard,
+        inner: BaseTool,
+        tool_name: str,
+        proposed: Dict[str, Any],
+        decided: Dict[str, Any],
+        scope: Any,
     ) -> Any:
         """One governed call: ``(tool result, whether the action happened or may have)``."""
         remote = guard._opts.mode_for(tool_name) == "remote"
@@ -269,7 +325,7 @@ class GuardianTool(BaseTool):
             return value
 
         try:
-            out = guard.run(tool_name, proposed, body)
+            out = guard.run(tool_name, proposed, body, scope=scope)
         except Exception:
             if finished:
                 # The tool ran to its end and the error came afterwards, while
@@ -329,6 +385,7 @@ def _wrap(
     guard: Guard,
     tool_names: ToolNames,
     on_approval_pending: Optional[Callable[[str, str], Any]],
+    scope: Optional[Callable[[Any], Any]],
 ) -> GuardianTool:
     if isinstance(tool, GuardianTool):
         raise TypeError(f'"{tool.name}" is already a Guardian tool')
@@ -364,6 +421,7 @@ def _wrap(
     wrapped._guard = guard
     wrapped._guardian_name = guardian_name
     wrapped._on_approval_pending = on_approval_pending
+    wrapped._scope = scope
     return wrapped
 
 
@@ -379,6 +437,7 @@ def guardian_tools(
     modes: Optional[Mapping[str, Mode]] = None,
     amount_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
     tool_names: ToolNames = None,
+    scope: Any = None,
     on_approval_pending: Optional[Callable[[str, str], Any]] = None,
     on_receipt: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Any]] = None,
     on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]] = None,
@@ -410,6 +469,19 @@ def guardian_tools(
         (keyed by the tool's ``name`` or by the sanitized name the model
         calls) or a function of the sanitized name. Default: the sanitized
         name (``"Refund order"`` is ``refund_order``).
+    :param scope: the session a call belongs to, so that a held call is
+        claimed only by the same call in the same session. Either a value for
+        everything these wrapped tools do (wrap the tools once per user or
+        conversation), or ``callback(tool)`` called for each call, for example
+        ``lambda tool: current_user.get()`` with a ``ContextVar`` your app
+        sets, or :func:`kickoff_scope`. It must come from data your
+        application sets, never from the tool call's arguments or anything
+        else the model writes. Default: no session is known
+        (``SCOPE_UNKNOWN``), because crewAI gives a tool nothing that names
+        the user or conversation: a held call is then never claimed by a later
+        call, and every call proposes its own request. ``None``, an empty
+        string, a value that cannot be hashed and a callback that raises mean
+        the same. The wrapped tool's ``max_usage_count`` is counted per scope.
     :param on_approval_pending: ``callback(tool_name, request_id)`` when a
         call is held, so the app can show the request to a person. Errors it
         raises are ignored.
@@ -448,7 +520,15 @@ def guardian_tools(
         on_execution_error=on_execution_error,
         amount_args=amount_args,
     )
-    return [_wrap(tool, guard, tool_names, on_approval_pending) for tool in tools]
+    if scope is None or callable(scope):
+        scope_option = scope
+    else:
+        fixed = scope
+
+        def scope_option(_tool: Any) -> Any:
+            return fixed
+
+    return [_wrap(tool, guard, tool_names, on_approval_pending, scope_option) for tool in tools]
 
 
 def guardian_tool(tool: BaseTool, client: Any, **options: Any) -> GuardianTool:
