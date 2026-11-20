@@ -30,7 +30,7 @@ jobs:
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |
-          for f in demo-classes prompt-injection-deny coding-agent-ask shopping-agent payments/steel-checkout payments/invoice-agent; do
+          for f in demo-classes prompt-injection-deny coding-agent-ask shopping-agent payments/steel-checkout payments/invoice-agent agents/mastra-agent; do
             node "$f.mjs" > /dev/null
           done
 
@@ -54,6 +54,12 @@ jobs:
       - name: crewAI (Python 3.10 to 3.13)
         if: matrix.python-version == '3.13'
         run: pip install "crewai==1.15.44"
+      - name: LangChain and LangGraph (Python 3.11+)
+        if: matrix.python-version == '3.13'
+        run: pip install "langchain==1.5.2" "langchain-core==1.8.4" "langgraph==1.2.24"
+      - name: OpenAI Agents SDK (Python 3.10+)
+        if: matrix.python-version == '3.13'
+        run: pip install "openai-agents==0.25.0"
       - run: python -m pytest -q
       - name: Build and check Python distributions
         if: matrix.python-version == '3.13'
@@ -67,3 +73,9 @@ jobs:
       - name: crewAI example runs (scripted model, local demo policy)
         if: matrix.python-version == '3.13'
         run: python ../../examples/python/crewai_agent.py > /dev/null
+      - name: Python LangChain example runs (local demo policy)
+        if: matrix.python-version == '3.13'
+        run: python ../../examples/python/langchain_agent.py > /dev/null
+      - name: OpenAI Agents SDK example runs (scripted model, local demo policy)
+        if: matrix.python-version == '3.13'
+        run: python ../../examples/python/openai_agents_agent.py > /dev/null
