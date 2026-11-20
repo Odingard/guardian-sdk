@@ -1,0 +1,59 @@
+{
+  "name": "@odingard/guardian-mastra",
+  "version": "0.1.0",
+  "description": "Mastra adapter — route a Mastra tool's execute through Guardian for a deterministic ALLOW/ASK/DENY decision before anything runs.",
+  "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@mastra/core --external:@odingard/guardian-sdk --outfile=dist/index.js && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "peerDependencies": {
+    "@mastra/core": ">=1.83.0 <2.0.0",
+    "@odingard/guardian-sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@mastra/core": "1.85.0",
+    "@odingard/guardian-sdk": "^0.6.0",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "guardian",
+    "ai-agents",
+    "authorization",
+    "authority",
+    "mastra",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/mastra"
+  },
+  "homepage": "https://odingard.com/guardian"
+}

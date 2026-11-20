@@ -29,6 +29,7 @@ Commands below run from `examples/`.
 | [`agents/agent-hooks.mjs`](agents/agent-hooks.mjs)                  | Codex CLI hook: shell, apply_patch, MCP → ALLOW / ASK / DENY (guardian-hook codex)       | `node agents/agent-hooks.mjs codex`                        |
 | [`agents/agent-hooks.mjs`](agents/agent-hooks.mjs)                  | DeepSeek Harness hook via its Claude Code bridge (guardian-hook dsh)                     | `node agents/agent-hooks.mjs dsh`                          |
 | [`agents/claude-agent-sdk.mjs`](agents/claude-agent-sdk.mjs)        | A Claude agent governed by Guardian (Claude Agent SDK + guardian-hook)                   | `npm run claude-agent-sdk`                                 |
+| [`agents/mastra-agent.mjs`](agents/mastra-agent.mjs)                | A Mastra agent (scripted model): ALLOW, ASK with suspend and resume, DENY (guardian-mastra) | `node agents/mastra-agent.mjs`                             |
 | [`agents/codex/`](agents/codex/README.md)                           | OpenAI Codex CLI, governed by Guardian                                                   | see README                                                 |
 | [`agents/deepseek-harness/`](agents/deepseek-harness/README.md)     | DeepSeek Harness (dsh), governed by Guardian                                             | see README                                                 |
 | [`agents/hosted-claude-code/`](agents/hosted-claude-code/README.md) | Claude Code in a hosted agent VM, governed by Guardian                                   | see README                                                 |
@@ -58,6 +59,9 @@ Commands below run from `examples/`.
 | Example                                              | What it shows                                               | Run                              |
 | ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------- |
 | [`python/invoice_agent.py`](python/invoice_agent.py) | the invoice agent in Python (pip install odingard-guardian) | `python python/invoice_agent.py` |
+| [`python/crewai_agent.py`](python/crewai_agent.py) | a crewAI agent with governed tools: ALLOW, ASK then approved, DENY (scripted model; pip install "odingard-guardian[crewai]") | `python python/crewai_agent.py` |
+| [`python/langchain_agent.py`](python/langchain_agent.py) | LangChain agent: ALLOW, ASK as a LangGraph interrupt, DENY | `python python/langchain_agent.py` |
+| [`python/openai_agents_agent.py`](python/openai_agents_agent.py) | an OpenAI Agents SDK agent with governed tools: ALLOW, ASK as a paused run, DENY (scripted model, no API key; `pip install "odingard-guardian[openai-agents]"`) | `python python/openai_agents_agent.py` |
 | [`python/google_adk_agent.py`](python/google_adk_agent.py) | a Google ADK agent with Guardian's plugin on ADK's real loop (scripted model, local demo policy; pip install "odingard-guardian[google-adk]") | `python python/google_adk_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
