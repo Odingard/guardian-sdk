@@ -244,6 +244,7 @@ tools = guardian_tools(
     GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
     connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
     modes={"send_wire": "remote"},  # or mode="remote" for every tool
+    scope=lambda tool: current_user.get(),  # the session, from what your app set
 )
 agent = Agent(role="Treasury", goal="...", backstory="...", tools=tools)
 ```

@@ -95,6 +95,10 @@ tools = guardian_tools(
     # LIVE: register pay_invoice once in the console as "My own code
     # (record-only)" and allow it for the agent.
     agent_name="ap-agent",
+    # This process serves one accounts-payable run. In an app with several users,
+    # take the scope from what your app set (the authenticated user or the
+    # conversation), never from the tool call's arguments.
+    scope="ap-run",
     purpose=lambda name, a: f"Pay invoice {a['invoice_id']}: ${a['amount_cents'] / 100:,.2f} to {a['payee_id']}",
     on_approval_pending=approval_pending,
     on_receipt=lambda name, request_id, receipt: print(f"  {G} ALLOW → receipt recorded ({request_id})"),
