@@ -114,6 +114,10 @@ governed = create_guardian_tool(
     agent_name="ap-agent",
     purpose=lambda tool, a: f"Pay invoice {a['invoice_id']}: ${a['amount_cents'] / 100:,.2f} to {a['payee_id']}",
     on_ask="interrupt",  # a held call pauses the run, as an Agents SDK interruption
+    # Whose call this is: read from what the app passes to Runner.run(context=...),
+    # never from the tool call's arguments, which the model writes. A held call
+    # is claimed only by the same call of the same session.
+    scope=lambda context: context.context["session"],
     on_receipt=lambda tool, request_id, receipt: print(f"  {G} recorded {tool} ({request_id})"),
 )
 
@@ -137,12 +141,13 @@ async def wait_for_person(request_id):
 
 async def main():
     agent = Agent(name="Accounts payable", model=ScriptedModel(), tools=[pay_invoice])
-    result = await Runner.run(agent, "Pay this week's invoices.")
+    session = "ap-clerk-7"  # your app knows who it runs the agent for; the model does not set this
+    result = await Runner.run(agent, "Pay this week's invoices.", context={"session": session})
     while result.interruptions:
         # Guardian holds a call (ASK). Nothing ran; the run is paused.
         state = result.to_state()
         for held in result.interruptions:
-            request_id = guardian_request_id(held)
+            request_id = guardian_request_id(held, session)
             print(f"  {G} ASK → {held.name} is held, nothing paid yet (request_id {request_id})")
             await wait_for_person(request_id)
             # Approving here only lets the SDK invoke the call again. The tool

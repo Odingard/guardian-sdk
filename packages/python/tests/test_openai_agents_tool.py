@@ -16,6 +16,7 @@ from agents import (  # noqa: E402
     Agent,
     FunctionTool,
     ModelResponse,
+    RunContextWrapper,
     Runner,
     Usage,
     function_tool,
@@ -130,19 +131,36 @@ def _reset():
     module._held_requests.clear()
 
 
+class AppContext:
+    """What an app passes as ``Runner.run(context=...)``: the model never sees it."""
+
+    def __init__(self, session):
+        self.session = session
+
+
+ALICE, BOB = AppContext("alice"), AppContext("bob")
+
+
+def session_of(context):
+    """The ``scope=`` option of these tests: the session the app put in the run context."""
+    return context.context.session
+
+
 def governed(guardian, tool=refund_order, **options):
+    """A governed tool scoped by the app's session, unless the test passes its own ``scope``."""
+    options.setdefault("scope", session_of)
     return guardian_tool(tool, AsyncFake(guardian), connection_id=CONNECTION, **options)
 
 
-async def run(turns, *tools, streamed=False):
+async def run(turns, *tools, streamed=False, context=ALICE):
     model = ScriptedModel(turns)
     agent = Agent(name="Billing", model=model, tools=list(tools))
     if streamed:
-        result = Runner.run_streamed(agent, "refund order 42")
+        result = Runner.run_streamed(agent, "refund order 42", context=context)
         async for _ in result.stream_events():
             pass
     else:
-        result = await Runner.run(agent, "refund order 42")
+        result = await Runner.run(agent, "refund order 42", context=context)
     return model, result
 
 
@@ -180,7 +198,8 @@ async def test_allow_runs_the_tool_once_then_records_it(streamed):
 def test_run_sync_allow():
     guardian = FakeClient(ALLOW)
     model = ScriptedModel([CALL])
-    result = Runner.run_sync(Agent(name="Billing", model=model, tools=[governed(guardian)]), "refund order 42")
+    agent = Agent(name="Billing", model=model, tools=[governed(guardian)])
+    result = Runner.run_sync(agent, "refund order 42", context=ALICE)
     assert result.final_output == "done"
     assert ran == [("o42", 500)]
     assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
@@ -490,7 +509,8 @@ async def test_interrupt_pauses_the_run_and_runs_after_guardians_approval(stream
     tool = governed(guardian, on_ask="interrupt", on_approval_pending=lambda t, r: pending_seen.append(r))
     model, result = await run([CALL], tool, streamed=streamed)
     assert len(result.interruptions) == 1 and result.final_output is None
-    assert guardian_request_id(result.interruptions[0]) == "req_ask"
+    assert guardian_request_id(result.interruptions[0], "alice") == "req_ask"
+    assert guardian_request_id(result.interruptions[0], "bob") is None
     assert pending_seen == ["req_ask"]
     assert ran == [] and guardian.calls == ["request:tool.invoke"]
     # A person approved in Guardian; the app approves the interruption and resumes.
@@ -581,7 +601,8 @@ async def test_interrupt_resumed_by_a_tool_that_does_not_know_the_held_request_d
 async def test_interrupt_mode_remote_executes_only_when_the_sdk_invokes_the_call():
     guardian = FakeClient(ALLOW)
     tool = governed(guardian, on_ask="interrupt", mode="remote")
-    assert await tool.needs_approval(None, {"order_id": "o42", "amount_cents": 500}, "call_x") is False
+    context = RunContextWrapper(context=ALICE)
+    assert await tool.needs_approval(context, {"order_id": "o42", "amount_cents": 500}, "call_x") is False
     await asyncio.sleep(0)
     assert guardian.calls == ["request:tool.invoke"]  # allowed, waiting for the invocation
     model, _ = await run([CALL], governed(guardian, on_ask="interrupt", mode="remote"))
@@ -592,7 +613,8 @@ async def test_interrupt_mode_an_allowed_call_the_sdk_never_invokes_is_dropped(m
     monkeypatch.setattr(module, "PARKED_SECONDS", 0.01)
     guardian = FakeClient(ALLOW)
     tool = governed(guardian, on_ask="interrupt")
-    assert await tool.needs_approval(None, {"order_id": "o42", "amount_cents": 500}, "call_x") is False
+    context = RunContextWrapper(context=ALICE)
+    assert await tool.needs_approval(context, {"order_id": "o42", "amount_cents": 500}, "call_x") is False
     await asyncio.sleep(0.05)
     assert ran == [] and guardian.calls == ["request:tool.invoke"]
 
@@ -602,7 +624,7 @@ async def test_interrupt_mode_the_tools_own_needs_approval_comes_first():
     plain = function_tool(refund_order, needs_approval=True)
     model, result = await run([CALL], governed(guardian, plain, on_ask="interrupt"))
     assert len(result.interruptions) == 1 and guardian.calls == []
-    assert guardian_request_id(result.interruptions[0]) is None
+    assert guardian_request_id(result.interruptions[0], "alice") is None
     await resume(model, result)
     assert ran == [("o42", 500)]
     assert guardian.calls == ["request:tool.invoke", "execute:req_allow"]
@@ -615,6 +637,150 @@ async def test_the_tools_own_needs_approval_is_kept_and_never_replaces_guardian(
     assert len(result.interruptions) == 1 and guardian.calls == []
     await resume(model, result)
     assert ran == [] and guardian.calls == ["request:tool.invoke"]
+
+
+# --- held requests are scoped per session ---
+
+
+class Holding(FakeClient):
+    """Holds every call under its own request id; claims succeed for approved ids only."""
+
+    def __init__(self):
+        super().__init__(HELD)
+        self.approved = set()
+
+    def request(self, invocation):
+        self.calls.append(f"request:{invocation['action']}")
+        self.last_invocation = invocation
+        request_id = f"req_{sum(1 for call in self.calls if call.startswith('request:'))}"
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_REQUIRED")
+
+    def claim(self, request_id):
+        self.calls.append(f"claim:{request_id}")
+        if request_id in self.approved:
+            return RequestResult(ok=True, request_id=request_id, decision="ALLOW", capability_token="cap")
+        return RequestResult(ok=False, request_id=request_id, reason_code="APPROVAL_PENDING")
+
+
+async def test_two_sessions_making_the_same_call_never_share_an_approval():
+    # One governed tool serves two sessions. Alice's call is held and approved.
+    guardian = Holding()
+    tool = governed(guardian, on_ask="result")
+    alice, _ = await run([CALL], tool, context=ALICE)
+    assert "request_id req_1" in alice.results()[0]
+    guardian.approved.add("req_1")
+    # Bob makes the identical call: his own request, not Alice's approval.
+    bob, _ = await run([CALL], tool, context=BOB)
+    assert "request_id req_2" in bob.results()[0]
+    assert ran == [] and "claim:req_1" not in guardian.calls
+    # Alice's repeat call claims her own request and runs once.
+    alice, _ = await run([CALL, CALL], tool, context=ALICE)
+    assert alice.results()[0] == "refunded o42" and ran == [("o42", 500)]
+    assert guardian.calls == [
+        "request:tool.invoke",
+        "request:tool.invoke",
+        "claim:req_1",
+        "execute:req_1",
+        "request:tool.invoke",  # her second call after that is a new request
+    ]
+
+
+async def test_interrupt_two_sessions_with_the_same_call_id_never_share_an_approval():
+    # The scripted model gives both runs the tool call id "call_1".
+    guardian = Holding()
+    tool = governed(guardian, on_ask="interrupt")
+    alice_model, alice = await run([CALL], tool, context=ALICE)
+    bob_model, bob = await run([CALL], tool, context=BOB)
+    assert guardian_request_id(alice.interruptions[0], "alice") == "req_1"
+    assert guardian_request_id(bob.interruptions[0], "bob") == "req_2"
+    guardian.approved.add("req_1")  # a person approved Alice's request only
+    await resume(bob_model, bob)
+    assert ran == [] and "claim:req_1" not in guardian.calls
+    assert "held for human approval (request_id req_2)" in bob_model.results()[0]
+    await resume(alice_model, alice)
+    assert ran == [("o42", 500)] and alice_model.results() == ["refunded o42"]
+    assert guardian.calls.count("execute:req_1") == 1
+
+
+async def test_the_scope_is_never_read_from_the_tool_calls_arguments():
+    # The model writes Alice's session into the arguments of a call made in
+    # Bob's run: that is an argument, not a session, and claims nothing.
+    def refund_for(order_id: str, session: str) -> str:
+        """Refund an order."""
+        ran.append((order_id, session))
+        return "refunded"
+
+    guardian = Holding()
+    tool = governed(guardian, refund_for, on_ask="result")
+    call = ("refund_for", {"order_id": "o42", "session": "alice"})
+    await run([call], tool, context=ALICE)
+    guardian.approved.add("req_1")
+    bob, _ = await run([call], tool, context=BOB)
+    assert ran == [] and "claim:req_1" not in guardian.calls
+    assert "request_id req_2" in bob.results()[0]
+
+
+async def test_without_a_scope_nothing_is_remembered_and_every_call_asks_for_its_own_approval():
+    guardian = Holding()
+    tool = governed(guardian, on_ask="result", scope=None)
+    guardian.approved.update({"req_1", "req_2"})
+    model, _ = await run([CALL, CALL], tool)
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    assert "request_id req_1" in model.results()[0] and "request_id req_2" in model.results()[1]
+
+
+@pytest.mark.parametrize("answer", [None, "", RuntimeError("no session")], ids=["none", "empty", "raises"])
+async def test_a_scope_option_that_gives_no_session_is_the_strict_side(answer):
+    def scope(context):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    guardian = Holding()
+    guardian.approved.add("req_1")
+    model, _ = await run([CALL, CALL], governed(guardian, on_ask="result", scope=scope))
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "request:tool.invoke"]
+    # on_ask="interrupt": with no session the call is not paused; it is held at invocation.
+    guardian = Holding()
+    model, result = await run([CALL], governed(guardian, on_ask="interrupt", scope=scope))
+    assert result.interruptions == [] and ran == []
+    assert "request_id req_1" in model.results()[0]
+
+
+async def test_a_falsy_scope_such_as_zero_is_a_scope():
+    guardian = Holding()
+    tool = governed(guardian, on_ask="result", scope=lambda context: 0)
+    guardian.approved.add("req_1")
+    model, _ = await run([CALL, CALL], tool)
+    assert ran == [("o42", 500)] and "claim:req_1" in guardian.calls
+
+
+def test_interrupt_needs_a_scope_option():
+    with pytest.raises(ValueError, match="scope"):
+        governed(FakeClient(HELD), on_ask="interrupt", scope=None)
+
+
+async def test_interrupt_an_allowed_call_is_started_only_by_the_run_that_asked():
+    # Alice's run was allowed and waits for its invocation. A call with the
+    # same call id and arguments from another run, also of another session,
+    # does not start on that decision: it is decided on its own.
+    from agents.tool_context import ToolContext
+
+    guardian = FakeClient(ALLOW)
+    tool = governed(guardian, on_ask="interrupt")
+    arguments = {"order_id": "o42", "amount_cents": 500}
+    text = json.dumps(arguments)
+    alice = RunContextWrapper(context=ALICE)
+    assert await tool.needs_approval(alice, arguments, "call_1") is False
+    assert guardian.calls == ["request:tool.invoke"]
+    for context in (BOB, ALICE):  # another session, and another run of the same session
+        other = ToolContext(context=context, tool_name=tool.name, tool_call_id="call_1", tool_arguments=text)
+        assert await tool.on_invoke_tool(other, text) == "refunded o42"
+    assert guardian.calls == ["request:tool.invoke"] + ["request:tool.invoke", "execute:req_allow"] * 2
+    # Alice's own invocation still starts on the decision taken for it.
+    own = ToolContext.from_agent_context(alice, "call_1", tool_name=tool.name, tool_arguments=text)
+    assert await tool.on_invoke_tool(own, text) == "refunded o42"
+    assert guardian.calls.count("request:tool.invoke") == 3 and guardian.calls.count("execute:req_allow") == 3
 
 
 # --- cancellation and the SDK's own tool timeout ---

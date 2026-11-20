@@ -28,10 +28,15 @@ Guardian before it runs::
   :class:`GuardianApprovalPending` out of the run
   (:func:`find_approval_pending` finds it; ``resume()`` claims the approval
   and runs the tool). ``on_ask="result"`` tells the model the call is held;
-  the same call after approval claims the approved request.
-  ``on_ask="interrupt"`` pauses the run as an Agents SDK interruption; after
-  ``state.approve(...)`` the tool still claims Guardian's request and runs
-  only if a person approved it in Guardian.
+  with the ``scope`` option the same call of the same session claims the
+  approved request afterwards. ``on_ask="interrupt"`` (needs ``scope``)
+  pauses the run as an Agents SDK interruption; after ``state.approve(...)``
+  the tool still claims Guardian's request and runs only if a person
+  approved it in Guardian.
+* Held requests are scoped per session by ``scope=callback(context)``, read
+  from what the app passes to ``Runner.run(context=...)`` and never from the
+  tool call's arguments. Without it nothing is remembered: each call asks
+  for its own approval.
 * DENY, or Guardian unreachable: the tool does not run and the model is told
   so.
 
@@ -75,16 +80,19 @@ from ._canonical import canonical_json
 from ._framework import (
     _RAN,
     Outcome,
+    ScopeOption,
     ToolNames,
     build_guard,
     decide_and_run,
     is_stream_function,
     json_record,
+    resolve_scope,
     resolve_tool_name,
 )
 from .client import AsyncGuardianClient
 from .guard import (
     EXECUTION_OUTCOME_UNKNOWN,
+    SCOPE_UNKNOWN,
     GuardianApprovalPending,
     GuardianDenied,
     GuardianExecutionFailed,
@@ -197,9 +205,9 @@ PARKED_SECONDS = 30.0
 
 _HELD_LIMIT = 1024
 
-#: Held Guardian request ids by (Agents SDK tool name, tool call id), for
-#: :func:`guardian_request_id`. In memory, the most recent ``_HELD_LIMIT``.
-_held_requests: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+#: Held Guardian request ids by (scope, Agents SDK tool name, tool call id),
+#: for :func:`guardian_request_id`. In memory, the most recent ``_HELD_LIMIT``.
+_held_requests: "OrderedDict[Tuple[Any, str, str], str]" = OrderedDict()
 
 #: The call a task is deciding, so the client can stop at the call's gate
 #: before Guardian is asked to execute.
@@ -217,20 +225,23 @@ def find_approval_pending(error: BaseException) -> Optional[GuardianApprovalPend
     return _find(error, GuardianApprovalPending)
 
 
-def guardian_request_id(interruption: Any) -> Optional[str]:
+def guardian_request_id(interruption: Any, scope: Any) -> Optional[str]:
     """The Guardian request a paused tool call waits on.
 
     ``interruption`` is an item of ``result.interruptions`` from a run with
-    ``on_ask="interrupt"`` tools. ``None`` when the interruption is not a
-    Guardian hold (for example the tool's own ``needs_approval``), or was
-    made in another process.
+    ``on_ask="interrupt"`` tools, and ``scope`` is the scope of that run:
+    the value the tool's ``scope`` option gives for it (the session your app
+    runs the agent for). ``None`` when the interruption is not a Guardian
+    hold of that scope (for example the tool's own ``needs_approval``), or
+    was made in another process.
     """
+    scope = resolve_scope(None, None, scope)
     raw = getattr(interruption, "raw_item", None)
     call_id = raw.get("call_id") if isinstance(raw, Mapping) else getattr(raw, "call_id", None)
     name = getattr(interruption, "tool_name", None) or getattr(interruption, "name", None)
-    if not isinstance(call_id, str) or not isinstance(name, str):
+    if scope is SCOPE_UNKNOWN or not isinstance(call_id, str) or not isinstance(name, str):
         return None
-    return _held_requests.get((name, call_id))
+    return _held_requests.get((scope, name, call_id))
 
 
 def _sdk() -> Any:
@@ -304,9 +315,12 @@ class _Call:
     own timeout or a cancelled run stops waiting for it.
     """
 
-    def __init__(self, tool: "_GovernedTool", proposed: Dict[str, Any]) -> None:
+    def __init__(self, tool: "_GovernedTool", proposed: Dict[str, Any], scope: Any) -> None:
         loop = asyncio.get_running_loop()
         self.tool = tool
+        #: The session the call belongs to: a held request is claimed only
+        #: by the same call under the same scope.
+        self.scope = scope
         self.at_gate: "asyncio.Future[None]" = loop.create_future()
         self.invoked: "asyncio.Future[None]" = loop.create_future()
         self.finished: "asyncio.Future[Any]" = loop.create_future()
@@ -321,7 +335,9 @@ class _Call:
 
     async def _decide(self, proposed: Dict[str, Any]) -> Outcome:
         _current_call.set(self)
-        return await decide_and_run(self.tool.guard, self.tool.guardian_name, proposed, self._tool_step)
+        return await decide_and_run(
+            self.tool.guard, self.tool.guardian_name, proposed, self._tool_step, scope=self.scope
+        )
 
     def _done(self, task: "asyncio.Task[Outcome]") -> None:
         self.detached = True
@@ -409,14 +425,29 @@ async def _observe(hook: Optional[Callable[..., Any]], *args: Any) -> None:
 
 
 class _Options:
-    def __init__(self, on_ask: str, on_deny: str, on_approval_pending: Optional[Callable[..., Any]]) -> None:
+    def __init__(
+        self,
+        on_ask: str,
+        on_deny: str,
+        on_approval_pending: Optional[Callable[..., Any]],
+        scope: ScopeOption,
+    ) -> None:
         if on_ask not in ("raise", "result", "interrupt"):
             raise ValueError('on_ask takes "raise", "result" or "interrupt"')
         if on_deny not in ("result", "raise"):
             raise ValueError('on_deny takes "result" or "raise"')
+        if scope is not None and not callable(scope):
+            raise TypeError("scope takes a function of the Agents SDK's run context")
+        if on_ask == "interrupt" and scope is None:
+            raise ValueError(
+                'on_ask="interrupt" needs the scope option: after the run is resumed, the call claims the '
+                "request held for its own session, and the Agents SDK does not say which session a run "
+                "belongs to. Pass scope=lambda context: <the session your app put in context.context>"
+            )
         self.on_ask = on_ask
         self.on_deny = on_deny
         self.on_approval_pending = on_approval_pending
+        self.scope = scope
 
 
 class _GovernedTool:
@@ -448,7 +479,8 @@ class _GovernedTool:
         sdk.set_failure(self.raw, None)
         #: on_ask="interrupt": decisions taken when the SDK asked whether the
         #: call needs approval, waiting for the SDK to invoke the call.
-        self.parked: Dict[Tuple[str, str], Tuple[_Call, Any]] = {}
+        #: By (scope, call id, arguments), each with the run that asked.
+        self.parked: Dict[Tuple[Any, str, str], Tuple[_Call, Any, Any]] = {}
         #: Tool invocations in flight, kept so a started tool is not collected
         #: when the SDK stops waiting for it.
         self.running: Set["asyncio.Future[Any]"] = set()
@@ -462,21 +494,32 @@ class _GovernedTool:
     # -- on_ask="interrupt": the decision is taken before the SDK invokes the call --
 
     @staticmethod
-    def _key(call_id: Any, proposed: Dict[str, Any]) -> Tuple[str, str]:
-        return (call_id if isinstance(call_id, str) else "", canonical_json(proposed))
+    def _key(scope: Any, call_id: Any, proposed: Dict[str, Any]) -> Tuple[Any, str, str]:
+        return (scope, call_id if isinstance(call_id, str) else "", canonical_json(proposed))
 
-    def _park(self, key: Tuple[str, str], call: _Call) -> None:
+    @staticmethod
+    def _run_of(context: Any) -> Any:
+        """The run a context belongs to: the SDK's usage record of that run.
+
+        The Agents SDK hands the same object to the approval check and to
+        every tool call of one run, and the model cannot write it. A decision
+        waiting for its invocation is given only to the run that asked.
+        """
+        return getattr(context, "usage", None)
+
+    def _park(self, key: Tuple[Any, str, str], call: _Call, run: Any) -> None:
         handle = asyncio.get_running_loop().call_later(PARKED_SECONDS, self._expire, key, call)
-        self.parked[key] = (call, handle)
+        self.parked[key] = (call, handle, run)
 
-    def _take(self, key: Tuple[str, str]) -> Optional[_Call]:
-        entry = self.parked.pop(key, None)
-        if entry is None:
-            return None
+    def _take(self, key: Tuple[Any, str, str], run: Any) -> Optional[_Call]:
+        entry = self.parked.get(key)
+        if entry is None or run is None or entry[2] is not run:
+            return None  # none, or another run's: that one stays for its own run
+        del self.parked[key]
         entry[1].cancel()
         return entry[0]
 
-    def _expire(self, key: Tuple[str, str], call: _Call) -> None:
+    def _expire(self, key: Tuple[Any, str, str], call: _Call) -> None:
         entry = self.parked.get(key)
         if entry is not None and entry[0] is call:
             del self.parked[key]
@@ -510,21 +553,29 @@ class _GovernedTool:
         """
         if await self._own_needs_approval(context, params, call_id):
             return True  # the tool's own approval step comes first; Guardian is asked at invocation
+        scope = resolve_scope(self.options.scope, context)
+        run = self._run_of(context)
+        if scope is SCOPE_UNKNOWN or run is None:
+            # No session: nothing is carried from here to the invocation.
+            # The call is decided when the SDK invokes it.
+            return False
         try:
             proposed = json_record(copy.deepcopy(params))
-            key = self._key(call_id, proposed)
+            key = self._key(scope, call_id, proposed)
         except Exception:  # noqa: BLE001 - refused, and reported, at invocation
             return False
         entry = self.parked.get(key)
+        if entry is not None and entry[2] is not run:
+            return False  # another run's decision: this call is decided at its own invocation
         if entry is not None:
             call = entry[0]
         else:
-            call = _Call(self, proposed)
-            self._park(key, call)
+            call = _Call(self, proposed, scope)
+            self._park(key, call, run)
         try:
             await asyncio.wait({call.task, call.at_gate}, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
-            self._take(key)
+            self._take(key, run)
             call.abandon()
             raise
         task = call.task
@@ -533,13 +584,13 @@ class _GovernedTool:
         outcome = task.result()
         if outcome.decision != "ASK" or outcome.message is None:
             return False
-        self._take(key)
-        await self._held(outcome, call_id)
+        self._take(key, run)
+        await self._held(outcome, call_id, scope)
         return True
 
-    async def _held(self, outcome: Outcome, call_id: Any) -> None:
-        if outcome.request_id and isinstance(call_id, str):
-            key = (self.tool.name, call_id)
+    async def _held(self, outcome: Outcome, call_id: Any, scope: Any) -> None:
+        if outcome.request_id and isinstance(call_id, str) and scope is not SCOPE_UNKNOWN:
+            key = (scope, self.tool.name, call_id)
             _held_requests[key] = outcome.request_id
             _held_requests.move_to_end(key)
             while len(_held_requests) > _HELD_LIMIT:
@@ -563,9 +614,11 @@ class _GovernedTool:
                 raise GuardianDenied(name, "ARGUMENTS_NOT_JSON") from None
             return f"Guardian could not read the arguments of {name} as JSON, so it was not proposed and did not run."
         call_id = getattr(context, "tool_call_id", None)
-        call = self._take(self._key(call_id, proposed)) if self.parked else None
+        # The session comes from the app's option, never from the arguments.
+        scope = resolve_scope(self.options.scope, context)
+        call = self._take(self._key(scope, call_id, proposed), self._run_of(context)) if self.parked else None
         if call is None:
-            call = _Call(self, proposed)
+            call = _Call(self, proposed, scope)
         call.invoke(context, text)
         try:
             await asyncio.wait({call.task, call.at_gate}, return_when=asyncio.FIRST_COMPLETED)
@@ -597,7 +650,7 @@ class _GovernedTool:
         except GuardianApprovalPending as pending:
             await _observe(self.options.on_approval_pending, name, pending.request_id)
             raise self._pending(pending, call) from None
-        return await self._settle(call, outcome, call_id)
+        return await self._settle(call, outcome, call_id, scope)
 
     def _pending(self, pending: GuardianApprovalPending, call: _Call) -> GuardianApprovalPending:
         """The pending approval handed to the app: ``resume()`` gives the tool's own output."""
@@ -627,7 +680,7 @@ class _GovernedTool:
             proposed_arguments=pending.proposed_arguments,
         )
 
-    async def _settle(self, call: _Call, outcome: Outcome, call_id: Any) -> Any:
+    async def _settle(self, call: _Call, outcome: Outcome, call_id: Any, scope: Any) -> Any:
         name = self.guardian_name
         if outcome.message is None:
             return call.output  # the tool ran and Guardian recorded it
@@ -643,7 +696,7 @@ class _GovernedTool:
                 )
             return outcome.message
         if outcome.decision == "ASK":
-            await self._held(outcome, call_id)
+            await self._held(outcome, call_id, scope)
             return outcome.message
         if outcome.reason_code == "SERVICE_UNAVAILABLE":
             if self.strict_output:
@@ -689,6 +742,7 @@ def create_guardian_tool(
     mode: str = "in_process",
     modes: Optional[Mapping[str, str]] = None,
     tool_names: ToolNames = None,
+    scope: ScopeOption = None,
     on_ask: OnAsk = "raise",
     on_deny: OnDeny = "result",
     on_approval_pending: Optional[Callable[[str, str], Any]] = None,
@@ -714,9 +768,21 @@ def create_guardian_tool(
     :param modes: the mode per Guardian tool name, over ``mode``.
     :param tool_names: the Guardian tool name for an Agents SDK tool name,
         as a mapping or a function. Default: the same name.
+    :param scope: ``callback(context)`` returning the scope of a call: the
+        session it belongs to, any hashable value. ``context`` is the Agents
+        SDK's run context (a ``RunContextWrapper`` at the approval check, a
+        ``ToolContext`` at invocation); read the scope from
+        ``context.context``, the object your app passes to
+        ``Runner.run(context=...)``, never from ``context.tool_arguments``,
+        which the model writes. A held call is claimed only by the same call
+        in the same scope. Default: none. The Agents SDK gives a tool no
+        session identity that outlives a paused run, so without this option
+        a held call is never claimed by a later call: each call asks for its
+        own approval (``on_ask="raise"`` and its ``resume()`` need no scope).
     :param on_ask: ``"raise"`` (default) raises :class:`GuardianApprovalPending`
         out of the run; ``"result"`` tells the model the call is held;
-        ``"interrupt"`` pauses the run as an Agents SDK interruption.
+        ``"interrupt"`` pauses the run as an Agents SDK interruption and
+        needs ``scope``.
     :param on_deny: ``"result"`` (default) tells the model the call was
         refused; ``"raise"`` raises :class:`GuardianDenied` to the tool's
         ``failure_error_function`` (the default one still tells the model;
@@ -730,7 +796,7 @@ def create_guardian_tool(
         or inspect.iscoroutinefunction(getattr(client, "request", None))
     ):
         raise TypeError("use an AsyncGuardianClient: tool calls in the Agents SDK are async")
-    options = _Options(on_ask, on_deny, on_approval_pending)
+    options = _Options(on_ask, on_deny, on_approval_pending, scope)
     guard = build_guard(
         _GatedClient(client),  # type: ignore[arg-type]
         connection_id=connection_id,

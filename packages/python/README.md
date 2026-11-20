@@ -469,7 +469,7 @@ except Exception as error:
 
 `guardian_tool(tool_or_function, client, connection_id=..., ...)` wraps one
 tool; `create_guardian_tool(client, ...)` binds the Guardian options once, and
-tools made by it share the held requests. For a function, any `function_tool`
+tools made by it share the held requests, each under its own scope (below). For a function, any `function_tool`
 option (`name_override`, `strict_mode`, `failure_error_function`, `timeout`,
 …) can be passed along. `billing` stands for your own code.
 
@@ -483,15 +483,19 @@ option (`name_override`, `strict_mode`, `failure_error_function`, `timeout`,
 `on_ask` chooses how a held call reaches you:
 
 - `"raise"` (default): `GuardianApprovalPending` ends the run. The Agents SDK wraps it in its own `UserError`; `find_approval_pending(error)` finds it. After a person approves, `await pending.resume()` claims the approval, runs the tool once and returns its output (`resumed.output`). Before they decide, `resume()` raises a new `GuardianApprovalPending`; if they deny, or the request expires, it raises `GuardianDenied` and the tool never runs. The run itself is over: the output goes to your code, not to the model.
-- `"result"`: the run goes on. The model is told the call is held, with the `request_id`. When the model calls the tool again with the same arguments, that call claims the held request: it runs if a person approved, and is reported as still held (no second approval request) if not.
-- `"interrupt"`: the run pauses the way the Agents SDK's own `needs_approval` pauses it. `result.interruptions` lists the held call and `guardian_request_id(interruption)` gives the Guardian request to show to a person. After they approve in Guardian, approve the interruption and resume:
+- `"result"`: the run goes on. The model is told the call is held, with the `request_id`. With the `scope` option (below), when the model calls the tool again with the same arguments in the same session, that call claims the held request: it runs if a person approved, and is reported as still held (no second approval request) if not. Without `scope` nothing is remembered: every call proposes its own request and needs its own approval.
+- `"interrupt"`: the run pauses the way the Agents SDK's own `needs_approval` pauses it. It needs the `scope` option (below); without it the tool is refused with a `ValueError` when it is built. `result.interruptions` lists the held call and `guardian_request_id(interruption, scope)` gives the Guardian request to show to a person, for the scope of that run. After they approve in Guardian, approve the interruption and resume:
 
   ```python
-  result = await Runner.run(agent, "Refund order 42")
+  governed = create_guardian_tool(client, connection_id=..., on_ask="interrupt",
+                                  scope=lambda context: context.context.session_id)
+
+  result = await Runner.run(agent, "Refund order 42", context=app_context)   # app_context.session_id: set by your app
   while result.interruptions:
       state = result.to_state()
       for held in result.interruptions:
-          print("waiting for approval of", guardian_request_id(held))   # a person approves in Guardian
+          request_id = guardian_request_id(held, app_context.session_id)
+          print("waiting for approval of", request_id)   # a person approves in Guardian
           state.approve(held)
       result = await Runner.run(agent, state)
   ```
@@ -499,6 +503,24 @@ option (`name_override`, `strict_mode`, `failure_error_function`, `timeout`,
   `state.approve(...)` is not the approval. It only lets the SDK invoke the call again; the tool then claims Guardian's request and runs only if a person approved it there. Resumed too early, the tool does not run and the model is told the call is still held; denied in Guardian, the model is told so. `state.reject(...)` skips the call without asking Guardian again. The other tool calls of the same turn are not held back.
 
 `on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in each mode.
+
+**Held requests are scoped per session** (`scope=`). One governed tool usually serves many users and conversations, so a held request must be claimed only by the same call of the same session:
+
+```python
+governed = create_guardian_tool(
+    client,
+    connection_id=...,
+    on_ask="result",
+    scope=lambda context: context.context.session_id,   # what your app passed to Runner.run(context=...)
+)
+result = await Runner.run(agent, user_message, context=AppContext(session_id=authenticated_session))
+```
+
+- **There is no default scope.** The Agents SDK gives a tool no session identity that outlives a paused run: a `Session` passed to `Runner.run` is not reachable from the tool's context, `RunConfig.group_id` is a tracing label that the approval check does not receive, and a run's own state is copied when it is paused. Without `scope`, a held request is not remembered, so no later call can claim it and each call asks for its own approval. `on_ask="raise"` needs no scope: `resume()` claims that call's own request.
+- `scope` is called with the Agents SDK's run context (a `RunContextWrapper` at the approval check, a `ToolContext` at invocation) and returns any hashable value. **Read it from data your application sets**, `context.context`, the object you pass to `Runner.run(context=...)`, which the model never sees. Never read it from the tool call's arguments (`context.tool_arguments`) or anything else the model writes: a model could then name another session.
+- A `scope` that returns `None` or an empty string, cannot be hashed, or raises, means the session is not known for that call: nothing is remembered for it, and with `on_ask="interrupt"` the call is not paused but reported to the model as held when it is invoked. `0` and other falsy values are scopes.
+- An identical call in another scope is proposed as its own request and never claims the first one's approval. The scope is part of an in-memory key only and is not sent to Guardian.
+- With `on_ask="interrupt"`, a call Guardian allowed during the approval check is started only by the run that asked, in the same scope and with the same call id and arguments. Any other call is decided on its own.
 
 **Two execution modes** (`mode=`, or `modes={"tool_name": ...}` per Guardian tool name; what remote mode needs and does not support is in [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote)):
 
@@ -513,7 +535,7 @@ Limits:
 - **Generator tools are refused.** The Agents SDK hands the model the generator object of a generator function (sync or async) and never runs its body, so Guardian would record a call that did not happen. Wrapping one raises `TypeError`; return the result instead.
 - **A tool that raises** is not redeemed. The model gets what the tool's own `failure_error_function` says, as without Guardian. If the tool ran and redeeming the capability then failed, the model is told the tool ran and not to call it again, and `on_execution_error` gets the `GuardianExecutionFailed`.
 - **Timeouts and cancelled runs.** Each Guardian call is bounded by the client's `timeout` (30 s by default). If the SDK's own tool `timeout` or a cancelled run stops a call while Guardian is still deciding, the tool does not run and a late ALLOW is dropped. Once the tool has started (or, in remote mode, once Guardian was asked to perform the call), neither stops it: the tool runs to its end in the background and the capability is then redeemed, although the SDK may already have told the model the tool timed out. This holds for async tools too, so keep a tool within the SDK timeout and make its side effects idempotent. The background work lives on the event loop of the run: if your program closes that loop before the tool has finished (for example `asyncio.run` returning right after a cancelled run), a sync tool's worker thread can still complete the action and nothing is recorded for it. Let the loop run until the tool is done.
-- **`on_ask="interrupt"`** asks Guardian during the SDK's approval check, before the SDK's tool input guardrails and `on_tool_start` hooks; in the other modes Guardian is asked when the tool is invoked, after them. An allowed call waits up to 30 seconds for the SDK to invoke it, and in remote mode Guardian is asked to perform the call only then. Which Guardian request a paused call waits on is kept in memory by the tool: a `RunState` serialized and resumed in another process, or with tools built anew, asks Guardian again, which starts a new request that needs its own approval. Nothing runs unapproved in either case. Use `"raise"` or `"result"` when the approval may outlive the process.
+- **`on_ask="interrupt"`** asks Guardian during the SDK's approval check, before the SDK's tool input guardrails and `on_tool_start` hooks; in the other modes Guardian is asked when the tool is invoked, after them. An allowed call waits up to 30 seconds for the SDK to invoke it, and in remote mode Guardian is asked to perform the call only then. Which Guardian request a paused call waits on is kept in memory by the tool, under the call's scope: a `RunState` serialized and resumed in another process, or with tools built anew, asks Guardian again, which starts a new request that needs its own approval. Nothing runs unapproved in either case. Use `"raise"` or `"result"` when the approval may outlive the process.
 - The SDK's own `needs_approval` on a tool is kept. It adds a local approval step before Guardian is asked and never replaces Guardian's decision. A callable policy is evaluated by the Agents SDK against the original tool, with the SDK's own check: a call whose arguments the tool's validation would default or convert needs manual approval, as without Guardian. On an SDK version without that evaluation, a tool with a callable policy always needs manual approval.
 - A tool with an output schema (`output_type`) cannot return a plain message, so its refusals are raised (the run fails with the Guardian error) and it needs `on_ask="raise"`. It cannot run in remote mode, where the tool output is Guardian's record and not the tool's type: that combination is refused with a `ValueError` when the tool is built.
 - `tool_names={"refund_order": "billing.refund"}` (or a function) maps Agents SDK tool names to Guardian tool names. `amount_args` takes dollar amounts on tools, keyed by the Guardian tool name, as for `Guard`. `file_args` (content pins) and `watch_mode` are not available here; use `@guard` with the recipe above for those.
