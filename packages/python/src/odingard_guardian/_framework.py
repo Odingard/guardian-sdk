@@ -42,10 +42,18 @@ class Outcome:
 
     ``result`` is Guardian's result record (``{"guardian": {...}}``) whenever
     the tool step did not answer the call: a refusal, a held call, a call
-    that ran but could not be recorded, or a ``remote`` tool Guardian
-    performed (the only case with ``decision == "ALLOW"`` and ``ran`` False).
-    It is ``None`` when the tool ran and Guardian recorded it, and when
-    Guardian could not be asked.
+    that ran but could not be recorded, a call Guardian allowed that did not
+    complete, or a ``remote`` tool Guardian performed. It is ``None`` when
+    the tool ran and Guardian recorded it, and when Guardian could not be
+    asked.
+
+    ``decision == "ALLOW"`` with ``ran`` False is not always a performed
+    call. Use :func:`performed_remotely` to tell: a ``remote`` call Guardian
+    performed has no ``"outcome"`` and no ``"message"`` key in
+    ``result["guardian"]``. An allowed call that could not be confirmed (a
+    receipt that is not ``sent-verified``, a lost answer) or that was refused
+    before it started (a content pin) has both, with ``"outcome"`` set to
+    ``"unknown"`` or ``"not_run"``, and must never be reported as done.
     """
 
     ran: bool
@@ -92,6 +100,18 @@ def build_guard(
     if require_async and not guard._async:
         raise TypeError("use an AsyncGuardianClient: tool calls in this framework are async")
     return guard
+
+
+def performed_remotely(outcome: Outcome) -> bool:
+    """Whether ``outcome`` is a ``remote`` call Guardian performed (a verified receipt)."""
+    info = outcome.result.get("guardian") if isinstance(outcome.result, dict) else None
+    return (
+        isinstance(info, dict)
+        and outcome.decision == "ALLOW"
+        and not outcome.ran
+        and "outcome" not in info
+        and "message" not in info
+    )
 
 
 def is_stream_function(fn: Any) -> bool:
