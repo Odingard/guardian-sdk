@@ -65,7 +65,14 @@ from crewai.tools.tool_failure import ToolFailure, ToolFailureReason
 from crewai.utilities.string_utils import sanitize_tool_name
 from pydantic import PrivateAttr
 
-from ._framework import ToolNames, json_record, resolve_tool_name, unchecked
+from ._framework import (
+    ToolNames,
+    is_stream_function,
+    json_record,
+    outcome_unknown,
+    resolve_tool_name,
+    unchecked,
+)
 from .client import AsyncGuardianClient
 from .guard import Guard, GuardianExecutionFailed, Mode
 
@@ -225,6 +232,15 @@ class GuardianTool(BaseTool):
         except Exception:
             if started:
                 raise  # the tool's own error: crewAI reports it to the model
+            if guard._opts.mode_for(tool_name) == "remote":
+                # The wrapped tool never starts for a remote tool, so the error
+                # may have come after Guardian performed the call (a raising
+                # on_receipt, for example). Never tell the model it did not run.
+                _logger.warning(
+                    "Guardian call for remote tool %s raised; it may have been performed", tool_name, exc_info=True
+                )
+                unknown = outcome_unknown(tool_name)
+                return _failure(unknown.message or "", unknown.reason_code or "EXECUTION_OUTCOME_UNKNOWN")
             _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
             return _failure(unchecked(tool_name).message or "", "SERVICE_UNAVAILABLE", retryable=True)
         if isinstance(out, _Ran):
@@ -272,6 +288,13 @@ def _wrap(
     else:
         guardian_name = resolve_tool_name(tool_names, sanitized)
     remote = guard._opts.mode_for(guardian_name) == "remote"
+    if not remote and (is_stream_function(tool._run) or is_stream_function(getattr(tool, "func", None))):
+        # Calling a generator function runs none of its body, and crewAI does
+        # not consume the stream: Guardian would record a call that never ran.
+        raise TypeError(
+            f'"{tool.name}" is a generator function. crewAI does not consume a tool\'s stream, so its '
+            "body would never run; return the result instead."
+        )
     wrapped = GuardianTool(
         name=tool.name,
         description=tool.description,
@@ -323,7 +346,12 @@ def guardian_tools(
         for the agent. ``"remote"``: the tool name is a tool registered on the
         connection that Guardian calls itself; the wrapped tool's code never
         runs.
-    :param modes: the mode per Guardian tool name, over ``mode``.
+    :param modes: the mode per Guardian tool name, over ``mode``. A mode
+        other than these two raises ``ValueError``.
+
+    A tool whose function is a generator function is refused (``TypeError``)
+    in in-process mode: crewAI does not consume a tool's stream, so the body
+    would never run.
     :param amount_args: dollar amounts on tools, by Guardian tool name, exactly
         as set in the Guardian console (see :class:`Guard`).
     :param tool_names: the Guardian tool name for a crewAI tool, as a mapping
@@ -337,6 +365,10 @@ def guardian_tools(
     """
     if isinstance(client, AsyncGuardianClient) or inspect.iscoroutinefunction(getattr(client, "request", None)):
         raise TypeError("use a GuardianClient (sync): crewAI calls tools synchronously")
+    # A mistyped mode must not quietly run the local tool.
+    for value in (mode, *(modes or {}).values()):
+        if value not in ("in_process", "remote"):
+            raise ValueError('mode takes "in_process" or "remote"')
     guard = Guard(
         client,
         connection_id=connection_id,

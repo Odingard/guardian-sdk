@@ -422,6 +422,63 @@ def test_remote_mode_an_unverified_send_is_a_failure_not_a_result():
     assert output.tasks_output[0].tool_failures[0].failure.code == "EXECUTION_OUTCOME_PENDING"
 
 
+@BOTH
+def test_remote_mode_an_error_after_guardian_performed_the_call_is_never_did_not_run(path):
+    def broken_receipt(tool_name, request_id, receipt):
+        raise RuntimeError("receipt store is down")
+
+    guardian = FakeClient(ALLOW)
+    llm, output = run([CALL], governed(guardian, mode="remote", on_receipt=broken_receipt), path)
+    assert ran == [] and guardian.calls == ["request:tool.invoke", "execute:req_allow"]
+    text = llm.results()[0]
+    assert "Guardian may have performed it. Do not call it again" in text
+    assert "did not run" not in text
+    assert output.tasks_output[0].tool_failures[0].failure.code == "EXECUTION_OUTCOME_UNKNOWN"
+    assert not output.tasks_output[0].tool_failures[0].failure.retryable
+
+
+def test_remote_mode_a_client_that_raises_is_reported_as_unknown():
+    class Broken(FakeClient):
+        def execute(self, *, request_id, capability_token):
+            raise ConnectionError("network down")
+
+    llm, _ = run([CALL], governed(Broken(ALLOW), mode="remote"))
+    assert ran == [] and "Guardian may have performed it" in llm.results()[0]
+
+
+def test_a_mistyped_mode_is_refused():
+    with pytest.raises(ValueError, match="in_process"):
+        governed(FakeClient(ALLOW), mode="inProcess")
+    with pytest.raises(ValueError, match="in_process"):
+        governed(FakeClient(ALLOW), modes={"refund_order": "Remote"})
+
+
+def test_a_generator_tool_is_refused_when_wrapped():
+    # crewAI does not consume a tool's stream: the body would never run, and
+    # Guardian would record a call that did not happen.
+    @tool("export_rows")
+    def export_rows(table: str) -> str:
+        """Export rows."""
+        ran.append(table)
+        yield "row"
+
+    class Export(BaseTool):
+        name: str = "export_rows"
+        description: str = "Export rows."
+
+        def _run(self, table: str):
+            ran.append(table)
+            yield "row"
+
+    for generator_tool in (export_rows, Export()):
+        with pytest.raises(TypeError, match="generator function"):
+            governed(FakeClient(ALLOW), tools=(generator_tool,))
+    # Remote: the body never runs anyway, and Guardian performs the call.
+    guardian = FakeClient(ALLOW)
+    llm, _ = run([("export_rows", {"table": "invoices"})], governed(guardian, tools=(export_rows,), mode="remote"))
+    assert ran == [] and json.loads(llm.results()[0])["guardian"]["decision"] == "ALLOW"
+
+
 # --- crewAI's cache, usage limits, result_as_answer ------------------------------
 
 
