@@ -26,13 +26,14 @@
 
 ### Fixed: Python generator tools are recorded after they ran
 
-- **Python** (`odingard-guardian`): a guarded generator function, async generator function, or function returning a generator was treated as an ordinary call: the capability was redeemed and the receipt recorded when the generator object was created, before any of its body ran, a stream that then failed stayed recorded as a success, and under an async guard an `async def` generator became a coroutine function. Now:
+- **Python** (`odingard-guardian`): a guarded generator function or async generator function was treated as an ordinary call: the capability was redeemed and the receipt recorded when the generator object was created, before any of its body ran, a stream that then failed stayed recorded as a success, and under an async guard an `async def` generator became a coroutine function. Now:
   - `@guard` on a generator function gives a generator function (an async generator function under an async guard, also for a sync generator). Guardian is asked when the first item is requested, and the body starts only after ALLOW.
   - The capability is redeemed and the receipt recorded when the stream ends, and when its consumer closes it early (`close()`, `aclose()`, or dropping the stream), since the body ran in part. A body that raises is not redeemed, as for any function that raises. A stream that is never started asks and redeems nothing.
   - ASK and DENY raise when the first item is requested; with `on_ask="result"` / `on_deny="result"` the decision is the stream's only item. `GuardianApprovalPending.resume()` returns the stream as `output` with `receipt=None`; it runs, and `on_receipt` gets the receipt, when it is consumed.
   - A redemption that fails after the stream raises `GuardianExecutionFailed` after the last item (from `close()` for a closed stream); in result mode it is the stream's last item.
   - `mode="remote"`: the body never runs and the stream's only item is Guardian's result.
-  - A function that returns a generator is decided at the call and redeemed when the returned stream ends. A sync guard refuses a returned async generator, and `@guard` on an `async def` generator, with a `TypeError`. Other iterables and iterators are data and are returned as they are.
+  - Only generator functions are streams (`@guard` on one, or one passed to `guard.run`). A function that returns a generator is unchanged: its own body has run when it returns, so it is redeemed then and the generator is handed back as it is. A sync guard refuses an async generator function with a `TypeError`.
+  - With `file_args`, a private copy is kept until the stream has ended and its body has closed, also when the stream is dropped midway.
   - Functions that are not generators behave as before.
 - **Python, Microsoft Agent Framework** (`odingard_guardian.agent_framework`): a tool that is a generator function is refused before anything is proposed. Agent Framework does not iterate a tool's generator, so its body never ran, and Guardian recorded the call as run.
 - **Python, Semantic Kernel** (`odingard_guardian.semantic_kernel`): no change. `invoke()` consumes a generator function before the filter's step returns, so it was already recorded after it ran; a test now covers it.

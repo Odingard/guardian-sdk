@@ -203,14 +203,14 @@ for row in stream:                 # Guardian is asked here, before the first ro
 | The redemption fails after the stream     | `GuardianExecutionFailed(local_effect_ran=True)` is raised after the last item (from `close()` for a stream closed early). With `on_execution_failed="result"` it is the stream's last item; for a closed stream only `on_execution_error` sees it. |
 | `mode="remote"`                           | The body never runs. The stream's only item is Guardian's result.                                                                                                                                         |
 
-A function that returns a generator (or, under an async guard, an async generator) is decided when it is called, like any function, and redeemed when the returned stream ends; a stream that is never consumed is never redeemed. A sync guard refuses an async generator with a `TypeError` (use an `AsyncGuardianClient`). Under an async guard a returned sync generator comes back as an async iterator.
+Only a generator function is a stream: `@guard` on one, or one passed as `fn` to `guard.run(...)`. A function that *returns* a generator is an ordinary call. Its own body has run when it returns, so the capability is redeemed then, also when nobody consumes what it returned, and the generator is handed back as it is. A sync guard refuses an async generator function with a `TypeError` (use an `AsyncGuardianClient`).
 
 Limits:
 
-- Only generators and async generators are treated as streams. Other iterables and iterators (a list, a file object, a `map`) are data: they are returned as they are, and the capability is redeemed when the function returns.
+- What an ordinary function returns is data, whatever it is (a generator, a list, a file object, a `map`): it is returned as it is, and the capability is redeemed when the function returns. If the returned generator is where the action happens, make the tool a generator function.
 - A stream dropped without `close()` is redeemed when Python collects it, which can be late, and not at all if the process exits first. Close a stream you abandon.
-- With `file_args`, the files are checked once, just before the body starts, not between items. A private copy (`"copy"`) is kept until the stream ends.
-- Before this change a guarded generator was redeemed when the generator object was created, before any of its body ran, and a stream that failed was recorded as a success.
+- With `file_args`, the files are checked once, just before the body starts, not between items. A private copy (`"copy"`) is kept until the stream has ended and its body has closed, also for a stream that is dropped midway; a stream that is dropped before it started deletes it at once.
+- Before this change a guarded generator function was redeemed when the generator object was created, before any of its body ran, and a stream that failed was recorded as a success.
 
 In Semantic Kernel, `invoke()` consumes a generator function before the filter's step returns, so it is recorded after it ran. Agent Framework does not iterate a tool's generator, so Guardian's middleware refuses a generator tool before anything is proposed.
 

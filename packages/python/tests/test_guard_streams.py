@@ -403,49 +403,53 @@ def test_a_wrong_call_is_reported_when_the_stream_starts():
 
 
 # --- sync: a function that returns a generator ---------------------------------
+# Its own body has run when it returns, so it is an ordinary call: redeemed
+# at the return, and the generator is handed back as it is.
 
 
-def returning_tool(log, guard):
+def returning_tool(log, guard, made):
     def rows(n):
-        log.append("body:start")
+        log.append("rows:start")
         for i in range(n):
             yield f"row {i}"
-        log.append("body:end")
 
-    @guard("export_rows")
-    def export_rows(n: int):
-        return rows(n)
+    @guard("refund")
+    def refund(n: int):
+        log.append("body:charged back")  # the action itself
+        made.append(rows(n))
+        return made[-1]
 
-    return export_rows
+    return refund
 
 
-def test_a_function_returning_a_generator_is_decided_at_the_call():
+def test_a_function_returning_a_generator_is_redeemed_when_it_returns():
     log, _, guard = setup()
-    tool = returning_tool(log, guard)
+    made = []
+    tool = returning_tool(log, guard, made)
     assert not inspect.isgeneratorfunction(tool)
     stream = tool(2)
-    assert log == ["request"]  # decided, nothing run, nothing redeemed
-    assert inspect.isgenerator(stream)
+    assert log == ["request", "body:charged back", "execute:req_allow"]
+    assert stream is made[0]  # handed back unchanged
     assert list(stream) == ["row 0", "row 1"]
-    assert log == ["request", "body:start", "body:end", "execute:req_allow"]
+    assert log == ["request", "body:charged back", "execute:req_allow", "rows:start"]
+
+
+def test_a_returned_generator_that_is_never_consumed_is_still_recorded():
+    log, _, guard = setup()
+    stream = returning_tool(log, guard, [])(2)
+    del stream
+    gc.collect()
+    assert log == ["request", "body:charged back", "execute:req_allow"]
 
 
 def test_a_function_returning_a_generator_is_denied_at_the_call():
     log, _, guard = setup(invoke=DENIED)
     with pytest.raises(GuardianDenied):
-        returning_tool(log, guard)(2)
+        returning_tool(log, guard, [])(2)
     assert log == ["request"]
 
 
-def test_a_returned_generator_that_is_never_consumed_is_never_redeemed():
-    log, _, guard = setup()
-    stream = returning_tool(log, guard)(2)
-    del stream
-    gc.collect()
-    assert log == ["request"]
-
-
-def test_guard_run_with_a_function_returning_a_generator():
+def test_guard_run_with_a_generator_function_defers_until_the_stream_ends():
     log, _, guard = setup()
 
     def rows():
@@ -453,9 +457,21 @@ def test_guard_run_with_a_function_returning_a_generator():
         yield 1
 
     stream = guard.run("export_rows", {"n": 1}, rows)
-    assert log == ["request"]
+    assert log == ["request"]  # calling a generator function ran nothing
     assert list(stream) == [1]
     assert log == ["request", "body:start", "execute:req_allow"]
+
+
+def test_guard_run_with_a_function_returning_a_generator_is_redeemed_at_the_return():
+    log, _, guard = setup()
+    made = (i for i in range(2))
+
+    def fn():
+        log.append("body")
+        return made
+
+    assert guard.run("export_rows", {}, fn) is made
+    assert log == ["request", "body", "execute:req_allow"]
 
 
 def test_other_iterators_are_data_and_returned_as_they_are():
@@ -531,20 +547,163 @@ def test_an_async_generator_function_needs_an_async_guard():
             yield 1
 
 
-def test_a_returned_async_generator_is_refused_by_a_sync_guard():
+def test_a_returned_async_generator_is_handed_back_by_a_sync_guard():
+    log, _, guard = setup()
+
+    async def rows():
+        yield 1
+
+    made = rows()
+
+    @guard("export_rows")
+    def export_rows():
+        log.append("body")
+        return made
+
+    assert export_rows() is made
+    assert log == ["request", "body", "execute:req_allow"]
+
+
+def test_guard_run_with_an_async_generator_function_needs_an_async_guard():
     log, _, guard = setup()
 
     async def rows():
         log.append("body:start")
         yield 1
 
-    @guard("export_rows")
-    def export_rows():
-        return rows()
-
     with pytest.raises(TypeError, match="AsyncGuardianClient"):
-        export_rows()
+        guard.run("export_rows", {}, rows)
     assert log == ["request"]  # nothing ran, nothing was redeemed
+
+
+# --- file_args: a private copy outlives the body of a dropped stream ------------
+
+
+def copy_tool(log, guard, seen):
+    @guard("send_report", file_args={"path": "copy"})
+    def send_report(path: str):
+        seen["path"] = path
+        try:
+            yield "started"
+            yield "more"
+        finally:
+            with open(path, "rb") as handle:  # the body's cleanup reads the copy
+                log.append(("finally read", handle.read()))
+
+    return send_report
+
+
+def test_a_dropped_stream_keeps_its_private_copy_until_the_body_has_closed(tmp_path):
+    if os.name == "nt":
+        pytest.skip("content pins are not supported on Windows")
+    report = tmp_path / "report.txt"
+    report.write_bytes(b"approved bytes")
+    log, _, guard = setup()
+    seen = {}
+    stream = copy_tool(log, guard, seen)(str(report))
+    assert next(stream) == "started"
+    del stream
+    gc.collect()
+    assert log == ["request", ("finally read", b"approved bytes"), "execute:req_allow"]
+    assert not os.path.exists(seen["path"])  # deleted after the body closed
+
+
+def test_a_resumed_stream_dropped_midway_keeps_its_copy_until_the_body_has_closed(tmp_path):
+    """The resumed stream is the object the caller drops: Python runs its
+    weak-reference callbacks before it closes the body."""
+    if os.name == "nt":
+        pytest.skip("content pins are not supported on Windows")
+    report = tmp_path / "report.txt"
+    report.write_bytes(b"approved bytes")
+    log, _, guard = setup(invoke=HELD, claims=[APPROVED])
+    seen = {}
+    with pytest.raises(GuardianApprovalPending) as pending:
+        next(copy_tool(log, guard, seen)(str(report)))
+    stream = pending.value.resume().output
+    assert next(stream) == "started"
+    del stream
+    gc.collect()
+    assert log == ["request", "claim:req_ask", ("finally read", b"approved bytes"), "execute:req_ask"]
+    assert not os.path.exists(seen["path"])
+
+
+async def test_async_a_resumed_stream_dropped_midway_keeps_its_copy_until_the_body_has_closed(tmp_path):
+    if os.name == "nt":
+        pytest.skip("content pins are not supported on Windows")
+    report = tmp_path / "report.txt"
+    report.write_bytes(b"approved bytes")
+    log, _, guard = asetup(invoke=HELD, claims=[APPROVED])
+    seen = {}
+
+    @guard("send_report", file_args={"path": "copy"})
+    async def send_report(path: str):
+        seen["path"] = path
+        try:
+            yield "started"
+            yield "more"
+        finally:
+            with open(path, "rb") as handle:
+                log.append(("finally read", handle.read()))
+
+    with pytest.raises(GuardianApprovalPending) as pending:
+        await send_report(str(report)).__anext__()
+    stream = (await pending.value.resume()).output
+    assert await stream.__anext__() == "started"
+    del stream
+    gc.collect()
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert log == ["request", "claim:req_ask", ("finally read", b"approved bytes"), "execute:req_ask"]
+    assert not os.path.exists(seen["path"])
+
+
+def test_a_resumed_stream_that_is_never_started_deletes_its_private_copy(tmp_path):
+    if os.name == "nt":
+        pytest.skip("content pins are not supported on Windows")
+    import glob
+    import tempfile
+
+    report = tmp_path / "report.txt"
+    report.write_bytes(b"approved bytes")
+    log, _, guard = setup(invoke=HELD, claims=[APPROVED])
+    with pytest.raises(GuardianApprovalPending) as pending:
+        next(copy_tool(log, guard, {})(str(report)))
+    before = set(glob.glob(os.path.join(tempfile.gettempdir(), "*")))
+    resumed = pending.value.resume()
+    copies = set(glob.glob(os.path.join(tempfile.gettempdir(), "*"))) - before
+    assert len(copies) == 1
+    del resumed
+    gc.collect()
+    assert not any(os.path.exists(path) for path in copies)
+    assert log == ["request", "claim:req_ask"]  # never started: nothing ran or was redeemed
+
+
+async def test_async_a_dropped_stream_keeps_its_private_copy_until_the_body_has_closed(tmp_path):
+    if os.name == "nt":
+        pytest.skip("content pins are not supported on Windows")
+    report = tmp_path / "report.txt"
+    report.write_bytes(b"approved bytes")
+    log, _, guard = asetup()
+    seen = {}
+
+    @guard("send_report", file_args={"path": "copy"})
+    async def send_report(path: str):
+        seen["path"] = path
+        try:
+            yield "started"
+            yield "more"
+        finally:
+            with open(path, "rb") as handle:
+                log.append(("finally read", handle.read()))
+
+    stream = send_report(str(report))
+    assert await stream.__anext__() == "started"
+    del stream
+    gc.collect()
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert log == ["request", ("finally read", b"approved bytes"), "execute:req_allow"]
+    assert not os.path.exists(seen["path"])
 
 
 # --- async ---------------------------------------------------------------------
@@ -676,18 +835,35 @@ async def test_async_remote_mode_yields_guardians_result():
     assert log == ["request", "execute:req_allow"]
 
 
-async def test_async_a_coroutine_returning_an_async_generator_is_decided_at_the_await():
+async def test_async_a_coroutine_returning_an_async_generator_is_redeemed_when_it_returns():
+    log, _, guard = asetup()
+
+    async def rows():
+        log.append("rows:start")
+        yield "row 0"
+
+    made = []
+
+    @guard("export_rows")
+    async def export_rows():
+        log.append("body")
+        made.append(rows())
+        return made[0]
+
+    stream = await export_rows()
+    assert stream is made[0]
+    assert log == ["request", "body", "execute:req_allow"]
+    assert [item async for item in stream] == ["row 0"]
+
+
+async def test_async_guard_run_with_an_async_generator_function_defers():
     log, _, guard = asetup()
 
     async def rows():
         log.append("body:start")
         yield "row 0"
 
-    @guard("export_rows")
-    async def export_rows():
-        return rows()
-
-    stream = await export_rows()
+    stream = await guard.run("export_rows", {}, rows)
     assert log == ["request"]
     assert [item async for item in stream] == ["row 0"]
     assert log == ["request", "body:start", "execute:req_allow"]
