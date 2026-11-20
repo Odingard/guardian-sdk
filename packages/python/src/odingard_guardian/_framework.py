@@ -1,4 +1,4 @@
-"""Shared core of the hook-style framework integrations (Agent Framework, Semantic Kernel).
+"""Shared core of the hook-style framework integrations (Agent Framework, Semantic Kernel, LangChain).
 
 A framework hands the integration one tool call at a time, with a ``next``
 step that runs the tool. :func:`decide_and_run` asks Guardian and takes
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from ._canonical import canonical_json
-from .client import AsyncGuardianClient
+from .client import AsyncGuardianClient, GuardianClient
 from .guard import EXECUTION_OUTCOME_UNKNOWN, SCOPE_UNKNOWN, Guard, GuardianExecutionFailed, Mode
 
 _logger = logging.getLogger("odingard_guardian")
@@ -42,10 +42,18 @@ class Outcome:
 
     ``result`` is Guardian's result record (``{"guardian": {...}}``) whenever
     the tool step did not answer the call: a refusal, a held call, a call
-    that ran but could not be recorded, or a ``remote`` tool Guardian
-    performed (the only case with ``decision == "ALLOW"`` and ``ran`` False).
-    It is ``None`` when the tool ran and Guardian recorded it, and when
-    Guardian could not be asked.
+    that ran but could not be recorded, a call Guardian allowed that did not
+    complete, or a ``remote`` tool Guardian performed. It is ``None`` when
+    the tool ran and Guardian recorded it, and when Guardian could not be
+    asked.
+
+    ``decision == "ALLOW"`` with ``ran`` False is not always a performed
+    call. Use :func:`performed_remotely` to tell: a ``remote`` call Guardian
+    performed has no ``"outcome"`` and no ``"message"`` key in
+    ``result["guardian"]``. An allowed call that could not be confirmed (a
+    receipt that is not ``sent-verified``, a lost answer) or that was refused
+    before it started (a content pin) has both, with ``"outcome"`` set to
+    ``"unknown"`` or ``"not_run"``, and must never be reported as done.
     """
 
     ran: bool
@@ -57,7 +65,7 @@ class Outcome:
 
 
 def build_guard(
-    client: AsyncGuardianClient,
+    client: Union[AsyncGuardianClient, GuardianClient],
     *,
     connection_id: str,
     agent_name: str,
@@ -68,6 +76,7 @@ def build_guard(
     on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]],
     mode: Mode = "in_process",
     modes: Optional[Mapping[str, Mode]] = None,
+    require_async: bool = True,
 ) -> Guard:
     # A mistyped mode must not quietly run the local tool.
     for value in (mode, *(modes or {}).values()):
@@ -88,9 +97,21 @@ def build_guard(
         on_execution_error=on_execution_error,
         amount_args=amount_args,
     )
-    if not guard._async:
+    if require_async and not guard._async:
         raise TypeError("use an AsyncGuardianClient: tool calls in this framework are async")
     return guard
+
+
+def performed_remotely(outcome: Outcome) -> bool:
+    """Whether ``outcome`` is a ``remote`` call Guardian performed (a verified receipt)."""
+    info = outcome.result.get("guardian") if isinstance(outcome.result, dict) else None
+    return (
+        isinstance(info, dict)
+        and outcome.decision == "ALLOW"
+        and not outcome.ran
+        and "outcome" not in info
+        and "message" not in info
+    )
 
 
 def is_stream_function(fn: Any) -> bool:
@@ -246,6 +267,55 @@ async def decide_and_run(
     if message is None and not started and info.get("decision") == "ALLOW":
         # A remote tool: Guardian performed the call and the tool step never
         # started. The model gets Guardian's result in place of the tool's.
+        message = json.dumps(out, sort_keys=True, default=str)
+    return Outcome(
+        ran=started,
+        decision=str(info.get("decision")),
+        message=message,
+        request_id=info.get("request_id"),
+        reason_code=info.get("reason_code"),
+        result=out,
+    )
+
+
+def decide_and_run_sync(
+    guard: Guard,
+    tool_name: str,
+    proposed: Dict[str, Any],
+    run_tool: Callable[[], None],
+    *,
+    scope: Any = None,
+) -> Outcome:
+    """:func:`decide_and_run` for a sync :class:`Guard` (``build_guard(require_async=False)``)
+    and a sync tool step. Same outcomes, case for case, and the same ``scope``."""
+    started = False
+
+    def body() -> Any:
+        nonlocal started
+        started = True
+        run_tool()
+        return _RAN
+
+    try:
+        out = guard.run(tool_name, copy.deepcopy(proposed), body, scope=scope)
+    except Exception:
+        if started:
+            raise
+        if guard._opts.mode_for(tool_name) == "remote":
+            # As in decide_and_run: Guardian may already have performed the call.
+            _logger.warning(
+                "Guardian call for remote tool %s raised; it may have been performed", tool_name, exc_info=True
+            )
+            return outcome_unknown(tool_name)
+        _logger.warning("Guardian check of %s failed; the call did not run", tool_name, exc_info=True)
+        return unchecked(tool_name)
+    if out is _RAN:
+        return Outcome(ran=True, decision="ALLOW")
+    info = out.get("guardian") if isinstance(out, dict) else None
+    if not isinstance(info, dict):  # pragma: no cover - Guard results always carry it
+        return unchecked(tool_name) if not started else Outcome(ran=True, decision="ALLOW")
+    message = info.get("message")
+    if message is None and not started and info.get("decision") == "ALLOW":
         message = json.dumps(out, sort_keys=True, default=str)
     return Outcome(
         ran=started,
