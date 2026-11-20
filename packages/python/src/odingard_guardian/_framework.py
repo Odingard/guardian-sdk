@@ -33,7 +33,8 @@ class Outcome:
 
     ``ran`` is True once the tool step started. ``message`` is what the
     model should be told instead of the tool's own result (``None`` when
-    the tool ran and Guardian recorded it).
+    the tool ran and Guardian recorded it). ``result`` is Guardian's own
+    answer for a remote tool it performed (``None`` otherwise).
     """
 
     ran: bool
@@ -41,6 +42,7 @@ class Outcome:
     message: Optional[str] = None
     request_id: Optional[str] = None
     reason_code: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
 
 
 def build_guard(
@@ -53,10 +55,16 @@ def build_guard(
     amount_args: Optional[Mapping[str, Mapping[str, Any]]],
     on_receipt: Optional[Callable[..., Any]],
     on_execution_error: Optional[Callable[[GuardianExecutionFailed], Any]],
+    mode: str = "in_process",
+    modes: Optional[Mapping[str, str]] = None,
 ) -> Guard:
+    if mode not in ("in_process", "remote") or any(m not in ("in_process", "remote") for m in (modes or {}).values()):
+        raise ValueError('mode takes "in_process" or "remote"')
     guard = Guard(
         client,
         connection_id=connection_id,
+        mode=mode,  # type: ignore[arg-type]
+        modes=modes,  # type: ignore[arg-type]
         agent_name=agent_name,
         adapter_id=adapter_id,
         purpose=purpose,
@@ -145,4 +153,6 @@ async def decide_and_run(
         message=info.get("message"),
         request_id=info.get("request_id"),
         reason_code=info.get("reason_code"),
+        # A remote tool Guardian performed: its answer stands in for the tool's.
+        result=out if not started and info.get("decision") == "ALLOW" and info.get("message") is None else None,
     )
