@@ -88,3 +88,12 @@ jobs:
           .venv-crewai/bin/python -m pip check
           .venv-crewai/bin/python -m pytest -q tests/test_crewai.py
           .venv-crewai/bin/python ../../examples/python/crewai_agent.py > /dev/null
+      # strands-agents 1.65.0 requires watchdog<7 and the Google ADK pin requires watchdog>=7, so Strands is installed and tested in its own environment.
+      - name: Strands Agents in its own environment (Python 3.10+)
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m venv .venv-strands
+          .venv-strands/bin/python -m pip install -e ".[test]" "strands-agents==1.65.0"
+          .venv-strands/bin/python -m pip check
+          .venv-strands/bin/python -m pytest -q tests/test_strands.py
+          .venv-strands/bin/python ../../examples/python/strands_agent.py > /dev/null

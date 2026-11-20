@@ -40,6 +40,8 @@ langchain = ["langchain>=1.5,<2", "langchain-core>=1.8,<2", "langgraph>=1.2,<2"]
 openai-agents = ["openai-agents>=0.25,<1"]
 # Python 3.11+. Tested with google-adk 2.15.0.
 google-adk = ["google-adk>=2.15,<3"]
+# Python 3.10+ (Strands' own minimum). Tested with strands-agents 1.65.0.
+strands = ["strands-agents>=1.65,<2"]
 
 # Hermes Agent discovers this as the plugin "guardian"; it stays off until
 # listed in Hermes' plugins.enabled.

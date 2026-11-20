@@ -63,6 +63,7 @@ Commands below run from `examples/`.
 | [`python/langchain_agent.py`](python/langchain_agent.py) | LangChain agent: ALLOW, ASK as a LangGraph interrupt, DENY | `python python/langchain_agent.py` |
 | [`python/openai_agents_agent.py`](python/openai_agents_agent.py) | an OpenAI Agents SDK agent with governed tools: ALLOW, ASK as a paused run, DENY (scripted model, no API key; `pip install "odingard-guardian[openai-agents]"`) | `python python/openai_agents_agent.py` |
 | [`python/google_adk_agent.py`](python/google_adk_agent.py) | a Google ADK agent with Guardian's plugin on ADK's real loop (scripted model, local demo policy; pip install "odingard-guardian[google-adk]") | `python python/google_adk_agent.py` |
+| [`python/strands_agent.py`](python/strands_agent.py) | a Strands agent loop: ALLOW, ASK pauses the run, DENY       | `python python/strands_agent.py` |
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).

@@ -119,6 +119,7 @@ Dollar amounts (`amountArgs`, Python `amount_args`) are sent in remote mode as i
 | LangChain / LangGraph (Python, unreleased)                     | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | OpenAI Agents SDK (Python, `guardian_tool`, unreleased)        | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | Google ADK (Python, unreleased)                                | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
+| Strands Agents (Python, unreleased)                            | `in_process` | `mode="remote"`, or `modes` (unreleased)                                                                |
 | `guardian-mcp proxy`                                           | in-process   | none: the proxy always forwards an allowed call to the upstream server. Use `guardian-mcp` (see below). |
 
 `modes` is keyed by the tool name Guardian sees.
@@ -317,6 +318,17 @@ guardian = GuardianPlugin(
 )
 agent = LlmAgent(name="billing", model=..., tools=[send_wire, lookup_order])
 runner = Runner(app=App(name="billing_app", root_agent=agent, plugins=[guardian]), session_service=...)
+```
+
+**Strands Agents** (unreleased). The Strands tool's body does not run. The tool result the model sees is Guardian's result as JSON text. A `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the provider is built.
+
+```python
+guardian = GuardianHookProvider(
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    modes={"send_wire": "remote"},  # or mode="remote" for every tool
+)
+agent = Agent(model=..., tools=[send_wire, lookup_order], hooks=[guardian])
 ```
 
 In these Python integrations a `mode` other than `"in_process"` or `"remote"` raises a `ValueError` when the integration is built.

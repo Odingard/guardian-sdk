@@ -317,6 +317,8 @@ integrations:
   the filter below, which decide every function call the agent makes.
 - **Google ADK**: use the plugin in the [Google ADK section](#google-adk-odingard_guardiangoogle_adk-unreleased)
   below, which decides every tool call of every agent.
+- **Strands Agents**: use the hook provider below, which decides every tool
+  call the agent makes.
 - **Claude Agent SDK**: guard the handler of a tool you define, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
   A recipe only: this repository has no Python Claude Agent SDK example or
@@ -934,6 +936,63 @@ runner = Runner(app=app, session_service=InMemorySessionService())
 - **Generator (streaming) function tools.** Calling a generator function runs none of its body, so the capability must only be redeemed after the stream was consumed. In `Runner.run_async` and `Runner.run`, ADK runs a generator function tool to its end inside the tool step, so it is decided before it starts and recorded after it ended. In a live run (`Runner.run_live`), and for a tool with an `input_stream` parameter, ADK starts the stream in the background instead; such a call is refused before anything is proposed (`STREAMING_NOT_GOVERNED`) and does not run. In remote mode nothing local runs, so there is no stream.
 - Not covered: tools the model runs on its own side (Google Search, built-in code execution), which never reach a callback. `Runner.run_live` (bidirectional streaming) was not tested end to end; the refusal of streaming tools there was tested by marking an invocation as live. Workflow tool nodes outside an `LlmAgent` run plugin callbacks too, but were not tested. `MCPToolset` tools are ADK tools and go through the same callback, but were not tested against an MCP server; you can also put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
 - Tested with `google-adk` 2.15.0 on ADK's own loop (`LlmAgent`, `App`, `Runner.run_async` and `Runner.run`, `InMemorySessionService`) with a scripted model and a stand-in Guardian: sync and async function tools (also on ADK's tool thread pool), generator function tools, a cancelled tool, two users and two sessions on one `App`, parallel calls in one model turn, a custom `BaseTool`, `LongRunningFunctionTool`, `AgentTool`, agent transfer, task-mode and single-turn sub-agents, and tool confirmation. Example: [`examples/python/google_adk_agent.py`](../../examples/python/google_adk_agent.py). Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
+
+## Strands Agents: `odingard_guardian.strands` (unreleased)
+
+[Strands Agents](https://strandsagents.com/) fires a `BeforeToolCallEvent`
+hook before every tool call and lets a hook select the tool that runs.
+`GuardianHookProvider` selects a governed stand-in for the tool, which asks
+Guardian about the call and only then runs the tool.
+
+```bash
+pip install "odingard-guardian[strands]"   # Python 3.10+
+```
+
+```python
+import os
+from strands import Agent, tool
+from odingard_guardian import GuardianClient
+from odingard_guardian.strands import GuardianHookProvider
+
+@tool
+def refund_order(order_id: str, amount_cents: int) -> str:
+    """Refund an order."""
+    return billing.refund(order_id, amount_cents)  # your code
+
+guardian = GuardianHookProvider(
+    GuardianClient(credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"]),
+    connection_id=os.environ["GUARDIAN_CONNECTION_ID"],
+    agent_name="billing-agent",
+    amount_args={"refund_order": {"argument": "amount_cents", "unit": "minor", "currency": "usd"}},
+)
+agent = Agent(model=..., tools=[refund_order], hooks=[guardian])
+agent("Refund order 42")
+```
+
+| Decision                 | What happens                                                                                                                                                                                                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ALLOW**                | The tool runs once, with the arguments Guardian decided on. Then the capability is redeemed and the decision recorded.                                                                                                                                                        |
+| **ASK**                  | The tool does not run. The model is told the call is held for a person (an error tool result). After the person approves in the Guardian console, the same call (same tool, same arguments) in the same session runs the approved request; before then it does not ask again. |
+| **DENY**                 | The tool does not run, and the model is told it was refused and not to retry.                                                                                                                                                                                                 |
+| **Guardian unreachable** | The tool does not run (fail closed), and the model is told Guardian could not check it.                                                                                                                                                                                       |
+
+- **The decision is made in the last step Strands takes for a tool call.** The stand-in tool runs after every `BeforeToolCallEvent` hook (Guardian's own hook is ordered last, `HookOrder.SDK_LAST`) and after the tool middleware (`ExecuteToolStage`). It takes a private copy of the arguments it is handed, proposes that copy and runs the tool with it, so nothing can change the arguments between the decision and the tool. Arguments that a hook or a middleware changed before that point are the ones Guardian decides on and the tool runs with. A hook that renames the call or selects another tool is decided under the name of the tool that runs, as Strands would run it without Guardian. This holds for a hook of any order, except a rename hook registered before Guardian's with `order=float("-inf")`: that call is decided and run under its original tool.
+- Guardian decides on the arguments as the model sent them. Strands validates them inside the tool, so `"500"` for an `int` parameter is proposed as `"500"`. Arguments the tool rejects are not redeemed.
+- **Held calls are scoped per session.** A held call is claimed only by the same call in the same scope. The default scope is the session id your app gave the agent's session manager (`Agent(session_manager=FileSessionManager(session_id=...))`), together with the agent's `agent_id`. An identical call in another session is its own request and needs its own approval. An agent without a session manager has no scope (Strands then only gives it a random id of its own, and one agent can serve several users): a held call is never claimed by a later call, each call asks for its own approval, and the result says so. Pass `scope=callback(agent, invocation_state)` returning a hashable value for the user or conversation; it overrides the default. If one agent serves several users, pass the user with every call and read it there: `agent(prompt, invocation_state={"user_id": user.id})` with `scope=lambda agent, state: state.get("user_id")`. `None`, an empty string or an error means unknown. **Never read the scope from the tool call's arguments** (`tool_use["input"]`), which the model writes: the model could name another user's scope. `invocation_state` is set by your app and by Strands, not by the model. Direct calls (`agent.tool.refund_order(...)`) use the same scope.
+- **Clients.** Pass a `GuardianClient` when you call the agent synchronously (`agent(...)`): Strands runs every sync call on an event loop of its own, and an `AsyncGuardianClient` keeps connections that belong to the loop that opened them (a call on a later loop can fail, and then the tool does not run). A `GuardianClient` is called in worker threads. With `invoke_async` / `stream_async` on one event loop, either client works.
+- **`on_ask="interrupt"`** pauses the agent run instead of telling the model: the result has `stop_reason == "interrupt"`, and `result.interrupts[0].reason["guardian"]` carries the `request_id`. After the person approved in the Guardian console, resume the run with `agent([{"interruptResponse": {"interruptId": interrupt.id, "response": "resume"}}])`. The response approves nothing: the paused call claims the request from Guardian and runs once it is approved, and the run pauses again (a new interrupt) while it is still held. The held request belongs to the scope of the call; without a scope it belongs to that paused call of that agent object, so only resuming the same agent's run claims it, and an identical call of another agent pauses on a request of its own. Resume with the same `invocation_state` your `scope` reads from. This memory is in the provider, in this process: a run restored from a saved session in another process asks for a new approval. Other calls of the same turn that already ran are not made again. A direct call (`agent.tool.refund_order(...)`) has no agent run to pause: it returns the held result, and the same direct call in the same scope after approval runs the approved request. `on_approval_pending=callback(tool_name, request_id)` is called whenever a call is held, in either setting.
+- **Modes.** In the default `mode="in_process"` your Strands tool is the action: it runs after ALLOW, and the capability is redeemed after it. A revocation that lands in between is detected after the effect; the model is then told the tool ran and not to call it again, and `on_execution_error` gets the error. With `mode="remote"`, or `modes={"refund_order": "remote"}` for single tools (by Guardian tool name), Guardian performs the call itself with the tool registered on the connection: the Strands tool body never runs, the credential for the upstream stays with Guardian, and the tool result is Guardian's answer as JSON text (`{"guardian": {"decision": "ALLOW", "request_id": ..., "tool_name": ..., "receipt": ...}}`). A receipt that is not `sent-verified`, and an error after Guardian was asked to perform the call, is reported as "may have run, do not call again", never as "did not run". The tool must be registered on the connection as a call Guardian makes itself, not as a record-only entry: see [Enforced mode](../../docs/guides.md#enforced-mode-guardian-makes-the-call-remote).
+- **Streaming tools** (async generator tools) work in both `agent(...)` and `stream_async`: their events pass through while the tool runs, after the decision. The tool's result follows once Guardian recorded the run.
+- If the tool ran and something fails afterwards (the capability could not be redeemed, or your `on_receipt` raises), the model is told the tool ran, that Guardian's record could not be confirmed, and not to call it again; `on_execution_error` gets the error. It is never reported as a failed call.
+- A tool that raises, or returns a result with `status: "error"`, is reported as the tool reported it, and the capability is not redeemed: Guardian keeps no record that the call was done. A call a hook retries (`AfterToolCallEvent.retry`) is decided again.
+- `tool_names={"refund_order": "billing.refund"}` (or a function) maps Strands tool names to Guardian tool names. Register each tool once in the Guardian console as "My own code (record-only)" and allow it for the agent. Direct calls (`agent.tool.refund_order(...)`) are decided too.
+- Limits:
+  - A hook ordered after `HookOrder.SDK_LAST` that selects another tool takes Guardian's stand-in away, and that tool runs without a decision. Guardian's hook reports it after the fact (an error tool result and an error log); it cannot prevent it. Tool middleware that replaces the tool object does the same and is not detected. Hooks and middleware that only change arguments, rename the call or cancel it are covered.
+  - Every tool call is decided, including the tool Strands adds for `structured_output_model` (named after the output model). Register it like any other tool, or structured output is refused.
+  - A tool that pauses itself with a Strands interrupt after ALLOW has no result yet: its capability is not redeemed, and the call is decided again when the run is resumed.
+  - Strands closes an abandoned tool stream when it is garbage collected; until then a streaming tool is paused where it was, and nothing is redeemed for it.
+  - Not covered: tools the model provider runs itself. Not tested: `BidiAgent`, background tasks, multi-agent graphs and swarms (each agent needs its own `hooks=[guardian]`), and Strands' MCP client tools; put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
+- Tested with `strands-agents` 1.65.0 in a real agent loop (`agent(...)`, `invoke_async`, `stream_async`, the concurrent and the sequential tool executor) with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
 ## Hermes Agent plugin: `odingard_guardian.hermes`
 
