@@ -119,7 +119,7 @@ def send_report(to: str, attachment_path: PinnedFile) -> str: ...
 - **Display only.** The check before the function runs compares the size and SHA-256, as before. Previews count toward the 16 KB arguments limit; over it the call is refused (`CONTENT_PIN_TOO_MANY`).
 - `content_preview(name, data)` returns the preview for bytes you hold; `normalize_file_arg_preview_roots(tool_name, file_args)` returns the folders per argument. `PREVIEW_MAX_LINES` is 20, `PREVIEW_MAX_BYTES` 2,048 and `PREVIEW_MAX_ROOTS` 16.
 
-### Dollar amounts on tools: `amount_args` (unreleased)
+### Dollar amounts on tools: `amount_args` (0.5.0)
 
 An owner can put a dollar limit on a tool in the Guardian console: allow up to an amount, ask a person above it, and block above a maximum. The owner names the argument that holds the amount. Pass the same declaration in `amount_args`, keyed by the tool name:
 
@@ -242,12 +242,14 @@ integrations:
   `failure_error_function=None` so every exception reaches your code. Do not
   use the Agents SDK's default `failure_error_function` with a guarded tool.
 
-- **CrewAI** (example): `@tool("Pay invoice")` on top of
-  `@guard`.
+- **CrewAI**: `@tool("Pay invoice")` on top of `@guard`. A recipe only: this
+  repository has no CrewAI example or test yet.
 - **Microsoft Agent Framework** and **Semantic Kernel**: use the middleware and
   the filter below, which decide every function call the agent makes.
-- **Claude Agent SDK** (example): guard the handler, or put
+- **Claude Agent SDK**: guard the handler of a tool you define, or put
   any MCP server behind `guardian-mcp proxy` (see the [MCP package](../mcp)).
+  A recipe only: this repository has no Python Claude Agent SDK example or
+  test yet.
 
 ### Honest limits
 
@@ -276,7 +278,7 @@ integrations:
   itself; use the console-registered tool with the option off. Denials carry a `hint` with the next
   step, for example `GuardianDenied.hint`.
 
-## Microsoft Agent Framework: `odingard_guardian.agent_framework` (unreleased)
+## Microsoft Agent Framework: `odingard_guardian.agent_framework` (0.5.0)
 
 [Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/overview/)
 runs function middleware around each tool call in its function-calling loop.
@@ -322,7 +324,7 @@ agent = Agent(client=..., tools=[refund_order], middleware=[guardian])
 - Not covered: tools the model provider runs itself (hosted tools), and anything that does not go through Agent Framework's function-calling loop. Put MCP servers behind `guardian-mcp` (see the [MCP package](../mcp)).
 - Tested with `agent-framework-core` 1.26.0 in a real agent loop with a scripted model and a stand-in Guardian. Before relying on it, run one governed tool with your model against your Guardian and check that an Ask waits for approval.
 
-## Semantic Kernel: `odingard_guardian.semantic_kernel` (unreleased)
+## Semantic Kernel: `odingard_guardian.semantic_kernel` (0.5.0)
 
 [Semantic Kernel](https://learn.microsoft.com/semantic-kernel/concepts/enterprise-readiness/filters)
 runs function invocation filters around each kernel function call, including

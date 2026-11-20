@@ -88,6 +88,7 @@
 
 ## Docs (unreleased)
 
+- **README matches what ships.** The "Works with" table no longer lists CrewAI and the Claude Agent SDK for Python as having examples (there are none in this repository; the Python README calls them recipes) and lists Microsoft Agent Framework and Semantic Kernel, which shipped in Python 0.5.0. The Python README headings for Agent Framework, Semantic Kernel and `amount_args` say 0.5.0 instead of "unreleased". `@odingard/guardian` (`guardian init`) is described as not on npm yet, with the steps to build and run it from this repository.
 - **Ask mode label.** `guardian-hook setup` and `python -m odingard_guardian.hermes` print the Ask mode as "Ask me", as in the console, and the guardian-hook, guardian-openclaw and Hermes READMEs say the same. Mode values are unchanged. They ship with each package's next release.
 - **"Signed record" in the READMEs.** The guardian-ap2 README, the agent and payment example READMEs and CONTRIBUTING say "signed record" for what Guardian signs, and "result" for AP2 merchant and processor results. Identifiers, API paths, JSON fields, file names and the `greceipt.v1` format are unchanged.
 - **Package descriptions.** The descriptions of `@odingard/guardian-hook`, `@odingard/guardian-openclaw`, `@odingard/guardian-steel` and `odingard-guardian` say "record". They ship with each package's next release.
