@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: sample decision record verifies again
+
+- `examples/receipts/sample.greceipt.json` is replaced by a newly signed `greceipt.v1` record (an approved sandbox purchase). The previous sample was signed by a key Guardian no longer publishes, so `examples/verify-receipt.mjs` failed with `UNKNOWN_KEY`.
+- A copy of Guardian's public key is bundled at `examples/receipts/verification-keys.json`. With no arguments `examples/verify-receipt.mjs` verifies the sample against it, offline; given your own record it fetches the keys published by the API that signed it, as before. `scripts/sample-receipt.test.mjs` checks the sample in CI, with an opt-in check against published keys (`GUARDIAN_LIVE_KEYS_URL`).
+
 ## guardian-opencommerce 0.1.0, unreleased
 
 ### Added: Guardian for opencommerce

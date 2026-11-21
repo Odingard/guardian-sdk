@@ -1,11 +1,17 @@
 /**
- * verify-receipt.mjs — LIVE, zero credentials, no Guardian account.
+ * verify-receipt.mjs — zero credentials, no Guardian account.
  *
  * Verifies a real portable authority record (greceipt.v1) recorded on
- * Guardian, offline, against the Ed25519 keys Guardian publishes.
- * Then tampers one byte of the bound action and shows verification fail.
+ * Guardian, offline, against Guardian's Ed25519 public keys. Then tampers
+ * one byte of the bound action and shows verification fail.
  *
  *   node verify-receipt.mjs [receipt.json] [baseUrl]
+ *
+ * With no arguments it verifies the bundled sample against the bundled copy
+ * of its signing key (receipts/verification-keys.json), fully offline.
+ * For your own record, pass the file and optionally the base URL of the
+ * Guardian API that signed it (default https://guardian-api.odingard.com);
+ * the script fetches the keys published at /v1/receipts/verification-keys.
  */
 import { readFileSync } from "node:fs";
 import {
@@ -16,23 +22,37 @@ import {
 const file =
   process.argv[2] ??
   new URL("./receipts/sample.greceipt.json", import.meta.url);
-const baseUrl = process.argv[3] ?? "https://guardian-api.odingard.com";
+const baseUrl =
+  process.argv[3] ??
+  (process.argv[2] ? "https://guardian-api.odingard.com" : undefined);
 const receipt = JSON.parse(readFileSync(file, "utf8"));
 
-const keys = await fetchReceiptVerificationKeys(baseUrl);
-if (!keys.ok) {
-  console.error(`could not fetch published keys: ${keys.reasonCode}`);
-  process.exit(1);
+let keys;
+if (baseUrl) {
+  const fetched = await fetchReceiptVerificationKeys(baseUrl);
+  if (!fetched.ok) {
+    console.error(`could not fetch published keys: ${fetched.reasonCode}`);
+    process.exit(1);
+  }
+  keys = fetched.keys;
+  console.log(`[LIVE] keys from ${baseUrl}/v1/receipts/verification-keys`);
+} else {
+  keys = JSON.parse(
+    readFileSync(
+      new URL("./receipts/verification-keys.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  console.log("[bundled] keys from receipts/verification-keys.json");
 }
-console.log(`[LIVE] keys from ${baseUrl}/v1/receipts/verification-keys`);
 // From here on nothing touches the network.
-const result = verifyReceiptOffline(receipt, keys.keys);
+const result = verifyReceiptOffline(receipt, keys);
 console.log("[offline] receipt:", JSON.stringify(result));
 
 const tampered = structuredClone(receipt);
 tampered.action.purpose = `${tampered.action.purpose} (edited)`;
 console.log(
   "[offline] tampered:",
-  JSON.stringify(verifyReceiptOffline(tampered, keys.keys)),
+  JSON.stringify(verifyReceiptOffline(tampered, keys)),
 );
 process.exit(result.valid ? 0 : 1);
