@@ -163,6 +163,8 @@ export function effectiveHookTimeoutMs(
 /** The subset of OpenClaw's plugin API this plugin uses. */
 export type OpenClawPluginApiLike = {
   id?: string;
+  /** The plugin's install directory (OpenClaw 2026.11.x; the copy it loads is elsewhere). */
+  rootDir?: string;
   config?: unknown;
   pluginConfig?: Record<string, unknown>;
   logger?: Logger;
@@ -202,7 +204,13 @@ export function register(
     config: (api.pluginConfig ?? {}) as GuardianPluginConfig,
     env,
     hookTimeoutMs,
-    install: { cwd },
+    install: {
+      cwd,
+      // Only a hint: used if it is a protected tree that matches the copy.
+      ...(typeof api.rootDir === "string" && api.rootDir
+        ? { sourceDirs: [api.rootDir] }
+        : {}),
+    },
     ...(api.logger ? { logger: api.logger } : {}),
   });
   api.on("before_tool_call", handler, {

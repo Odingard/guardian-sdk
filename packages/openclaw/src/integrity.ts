@@ -38,6 +38,14 @@
  *     record it migrates), each tree if it exists, else not creatable;
  *   - the active config file's backups (`<config>.bak`, which OpenClaw
  *     restores from when the config reads as damaged, and `<config>.bak.*`);
+ *   - OpenClaw 2026.11.x loads plugins from a copy it makes at start-up
+ *     (`<state dir>/tmp/plugin-captures/…/openclaw-plugin-build-…`, owned by
+ *     the Gateway user). When the plugin runs from such a copy, the copy is
+ *     not tree-checked; instead it must match, file by file (sha-256), an
+ *     install under `<config dir>/npm/projects` or `<config dir>/extensions`
+ *     at every check, that install gets the plugin-directory checks above,
+ *     and the plugin may import nothing but Node.js builtins (Node.js would
+ *     resolve anything else from the writable copy);
  *   - every ancestor of those paths, lexical and real: a directory the user
  *     can write lets it rename (and so replace) what is inside it, unless the
  *     directory is sticky and the entry belongs to someone else.
@@ -49,9 +57,10 @@
  * writable. Root can change anything, so a Gateway running as uid 0 always
  * fails the check. Any error while checking counts as writable (fail closed).
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { isBuiltin } from "node:module";
-import { homedir as osHomedir } from "node:os";
+import { homedir as osHomedir, tmpdir as osTmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +89,14 @@ export type InstallCheckOptions = Readonly<{
   cwd?: string;
   /** npm's default prefix (global config `<prefix>/etc/npmrc`). Default: from process.execPath. */
   nodePrefix?: string;
+  /** The OS temp directory (OpenClaw's fallback capture place). Default: os.tmpdir(). */
+  tmpDir?: string;
+  /**
+   * Extra directories that may hold the install a plugin copy was made from
+   * (OpenClaw's `api.rootDir`, say). Each is used only if it is a protected
+   * tree and matches the copy byte for byte.
+   */
+  sourceDirs?: readonly string[];
 }>;
 
 export type InstallCheckResult =
@@ -218,6 +235,154 @@ export function npmConfigFiles(
         ),
   ];
   return [...new Set(out)].filter((p) => p !== "/dev/null");
+}
+
+/** OpenClaw 2026.11.x's `resolvePluginSourceCapturesDirectory`. */
+export function openclawPluginCapturesDir(env: Env): string {
+  return path.join(openclawStateDir(env), "tmp", "plugin-captures");
+}
+
+const CAPTURE_BUILD_PREFIX = "openclaw-plugin-build-";
+const CAPTURE_TMP_PREFIX = "openclaw-plugin-captures-";
+
+function inside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function realOrResolved(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/**
+ * Is `dir` (a real path) a copy OpenClaw made of a plugin to load it from?
+ * OpenClaw 2026.11.x copies every plugin at start-up (and on a reload) into
+ * `<state dir>/tmp/plugin-captures/<uuid>/captures/…/openclaw-plugin-build-…/`,
+ * or, if it cannot write there, `<os tmp>/openclaw-plugin-captures-<hash>-…/`,
+ * and imports it from there. The copy is owned by the Gateway user, so it
+ * can never pass the tree check: it is checked against its source instead.
+ */
+export function isPluginCapture(
+  dir: string,
+  env: Env,
+  tmpDir: string = osTmpdir(),
+): boolean {
+  const real = realOrResolved(dir);
+  if (real.split(path.sep).some((s) => s.startsWith(CAPTURE_BUILD_PREFIX))) {
+    return true;
+  }
+  for (const root of [
+    openclawPluginCapturesDir(env),
+    path.join(openclawConfigDir(env), "tmp", "plugin-captures"),
+  ]) {
+    const r = realOrResolved(root);
+    if (inside(real, r) || inside(real, path.resolve(root))) return true;
+  }
+  const tmp = realOrResolved(tmpDir);
+  if (inside(real, tmp)) {
+    const first = path.relative(tmp, real).split(path.sep)[0] ?? "";
+    if (first.startsWith(CAPTURE_TMP_PREFIX)) return true;
+  }
+  return false;
+}
+
+/**
+ * The installs a capture of the package `name` may have been made from:
+ * `<config dir>/npm/projects/<project>/node_modules/<name>` (npm: and
+ * npm-pack: installs), `<config dir>/extensions/<id>` (local installs) and
+ * the `extra` directories, each only if its package.json names `name`.
+ */
+export function captureSourceCandidates(
+  name: string,
+  env: Env,
+  extra: readonly string[] = [],
+): string[] {
+  const configDir = openclawConfigDir(env);
+  const out: string[] = [];
+  const projects = path.join(configDir, "npm", "projects");
+  const list = (d: string) => {
+    try {
+      return fs.readdirSync(d);
+    } catch {
+      return [];
+    }
+  };
+  for (const project of list(projects)) {
+    out.push(path.join(projects, project, "node_modules", ...name.split("/")));
+  }
+  const extensions = path.join(configDir, "extensions");
+  for (const id of list(extensions)) out.push(path.join(extensions, id));
+  out.push(...extra);
+  const seen = new Set<string>();
+  return out.filter((dir) => {
+    let real: string;
+    try {
+      real = fs.realpathSync(dir);
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(real, "package.json"), "utf8"),
+      ) as { name?: unknown };
+      if (pkg.name !== name) return false;
+    } catch {
+      return false;
+    }
+    if (seen.has(real)) return false;
+    seen.add(real);
+    return true;
+  });
+}
+
+const sha256 = (file: string) =>
+  createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+
+/**
+ * Does every entry of the copy `capture` match `source`: each directory a
+ * directory there, each file a file with the same bytes (sha-256)? A link,
+ * socket or other special entry in the copy never matches. Returns the
+ * first difference, or undefined when the copy matches.
+ */
+export function captureDifference(
+  capture: string,
+  source: string,
+): string | undefined {
+  let count = 0;
+  const walk = (rel: string): string | undefined => {
+    if (++count > MAX_ENTRIES) return `${capture} (too many files to check)`;
+    const c = path.join(capture, rel);
+    const s = path.join(source, rel);
+    let cst: fs.Stats;
+    let sst: fs.Stats;
+    try {
+      cst = fs.lstatSync(c);
+    } catch {
+      return `${c} (could not check)`;
+    }
+    try {
+      sst = fs.statSync(s);
+    } catch {
+      return `${c} (not in ${source})`;
+    }
+    if (cst.isDirectory()) {
+      if (!sst.isDirectory()) return `${c} (differs from ${s})`;
+      for (const name of fs.readdirSync(c).sort()) {
+        const d = walk(path.join(rel, name));
+        if (d) return d;
+      }
+      return undefined;
+    }
+    if (!cst.isFile() || !sst.isFile() || cst.size !== sst.size) {
+      return `${c} (differs from ${s})`;
+    }
+    try {
+      return sha256(c) === sha256(s) ? undefined : `${c} (differs from ${s})`;
+    } catch {
+      return `${c} (could not check)`;
+    }
+  };
+  return walk("");
 }
 
 const IMPORT_PATTERNS = [
@@ -500,7 +665,7 @@ class Checker {
    * the plugin's real path: the package found must be an unwritable tree,
    * and no nearer `node_modules` may let a shadowing copy be created.
    */
-  runtimeImports(pluginDir: string) {
+  runtimeImports(pluginDir: string, loadedFrom?: string) {
     const pkg = readPluginPackage(pluginDir);
     const specs = new Set<string>(pkg.deps);
     for (const entry of pkg.entries) {
@@ -521,6 +686,17 @@ class Checker {
         continue;
       }
       for (const spec of externalSpecifiers(source)) specs.add(spec);
+    }
+    if (loadedFrom) {
+      // Node.js resolves these from the copy OpenClaw loaded, whose
+      // node_modules the Gateway user can write: none may be needed.
+      for (const spec of specs) {
+        if (packageName(spec) === pkg.name) continue;
+        this.add(
+          `${spec} (imported by the Guardian plugin, resolved from OpenClaw's Gateway-writable copy ${loadedFrom})`,
+        );
+      }
+      return;
     }
     const lookup = nodeModulesLookup(pluginDir);
     for (const spec of specs) {
@@ -608,9 +784,34 @@ export function checkInstallIntegrity(
       } catch {
         c.problems.push(`${pluginDir} (could not check)`);
       }
-      c.tree(real, "the Guardian plugin");
-      c.ancestors(pluginDir, "the Guardian plugin");
-      c.runtimeImports(real);
+      if (isPluginCapture(real, env, opts.tmpDir)) {
+        // OpenClaw 2026.11.x loads the plugin from a copy it owns. What has
+        // to be protected is the install the copy was made from, and the
+        // copy has to be that install, byte for byte, at every check.
+        const name = readPluginPackage(real).name;
+        const candidates = name
+          ? captureSourceCandidates(name, env, opts.sourceDirs)
+          : [];
+        const source = candidates.find(
+          (dir) => captureDifference(real, dir) === undefined,
+        );
+        if (!source) {
+          const why = candidates.length
+            ? captureDifference(real, candidates[0]!)
+            : "no install of the plugin found";
+          c.problems.push(
+            `${real} (OpenClaw loads the Guardian plugin from this copy, and it does not match a protected install under ${path.join(openclawConfigDir(env), "npm", "projects")} or ${path.join(openclawConfigDir(env), "extensions")}: ${why})`,
+          );
+        } else {
+          c.tree(source, "the Guardian plugin");
+          c.ancestors(source, "the Guardian plugin");
+          c.runtimeImports(source, real);
+        }
+      } else {
+        c.tree(real, "the Guardian plugin");
+        c.ancestors(pluginDir, "the Guardian plugin");
+        c.runtimeImports(real);
+      }
     }
 
     const configDir = openclawConfigDir(env);
