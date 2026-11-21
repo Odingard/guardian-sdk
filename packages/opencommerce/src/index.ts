@@ -733,6 +733,9 @@ function cartChange(
     if (a.length !== b.length || a.some((key, i) => key !== b[i])) {
       return `an item in the cart at ${was.store} changed`;
     }
+    if (cart.totalIsEstimate && !was.totalIsEstimate) {
+      return `the price at ${was.store} is now only an estimate`;
+    }
     if (!(cart.maxChargeCents <= was.maxChargeCents)) {
       return `the price at ${was.store} went above the ${dollars(was.maxChargeCents)} you approved`;
     }

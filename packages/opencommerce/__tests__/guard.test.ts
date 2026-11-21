@@ -517,6 +517,21 @@ describe("guardBuyTool", () => {
       expect(confirmsSent(buy.sent)).toBe(1);
     });
 
+    it("a firm price that becomes an estimate: CART_CHANGED", async () => {
+      const { buy, governed, g } = approveAfter([cart(5000, "h_1")], ([c]) => [
+        estimate(c!, 4500),
+      ]);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "CART_CHANGED",
+        message: expect.stringContaining(
+          "the price at Amazon is now only an estimate",
+        ),
+      });
+      expect(g.execute).not.toHaveBeenCalled();
+      expect(confirmsSent(buy.sent)).toBe(0);
+    });
+
     it("a price that rises above what was approved: CART_CHANGED, in plain words", async () => {
       const { buy, governed, g } = approveAfter([cart(11608, "h_1")], ([c]) => [
         { ...c!, totalCents: 11700 },
