@@ -171,6 +171,21 @@ describe("plugin copies (OpenClaw 2026.11.x)", () => {
     expect(p.join("\n")).toContain(linked);
   });
 
+  it("blocks a named source whose path looks like a copy, with no fallback search", () => {
+    fx = protectedInstall({ npm: true });
+    const dir = join(
+      fx.root,
+      "openclaw-plugin-build-guardian",
+      "guardian-openclaw",
+    );
+    mkdirSync(dir, { recursive: true });
+    cpSync(fx.pluginDir, dir, { recursive: true });
+    chmodSync(join(dir, "dist", "index.js"), 0o666);
+    capture(fx, fx.pluginDir);
+    const p = problems(fx, { sourceDir: dir });
+    expect(p.join("\n")).toMatch(/looks like a start-up copy/);
+  });
+
   it("blocks when two installs match and OpenClaw names no source", () => {
     fx = protectedInstall({ npm: true });
     const ext = join(fx.extensions, "guardian");

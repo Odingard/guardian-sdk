@@ -767,7 +767,24 @@ function captureSource(
   problems: string[],
 ): string | undefined {
   const hint = opts.sourceDir;
-  if (hint && !isPluginCapture(hint, env, opts.tmpDir)) {
+  if (hint && isPluginCapture(hint, env, opts.tmpDir)) {
+    // A named source that looks like a start-up copy is not settled. When it
+    // is this very copy, OpenClaw named no separate source: search below.
+    // Otherwise never fall back to the search, which could match an
+    // identical protected install while OpenClaw loads from the named one.
+    let same = false;
+    try {
+      same = fs.realpathSync(hint) === fs.realpathSync(capture);
+    } catch {
+      same = false;
+    }
+    if (!same) {
+      problems.push(
+        `${hint} (OpenClaw names this as the Guardian plugin's source, but its path looks like a start-up copy, so the source is not known)`,
+      );
+      return undefined;
+    }
+  } else if (hint) {
     let real: string;
     try {
       real = fs.realpathSync(hint);
