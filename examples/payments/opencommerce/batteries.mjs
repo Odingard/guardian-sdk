@@ -71,6 +71,8 @@ const buy = guardBuyTool(
       city: "San Francisco",
       state: "CA",
       zip: "94105",
+      // A reserved fictional number; Amazon requires a phone on the address.
+      phone: "+14155550100",
       country: "US",
     },
     // Agentcard's own links (Vault, approval) still go to the shopper as before.
