@@ -478,6 +478,112 @@ describe("guardBuyTool", () => {
     expect(confirmsSent(buy.sent)).toBe(0);
   });
 
+  describe("carts re-read after a person approved", () => {
+    /** Approve after `change` edits what the conversation holds. */
+    function approveAfter(
+      before: BuyCart[],
+      change: (held: BuyCart[]) => BuyCart[],
+    ) {
+      const g = fakeGuardian({ request: async () => ask() });
+      const s = setup(g);
+      s.buy.ac.conversations.set("conv_1", before);
+      g.claim.mockImplementation(async () => {
+        s.buy.ac.conversations.set("conv_1", change(before));
+        return allow();
+      });
+      const governed = guardBuyTool(s.buy.tool, {
+        client: g.client,
+        connectionId: "con_1",
+        agentcard: s.buy.agentcard,
+        sleep: noSleep,
+        pollIntervalMs: 1,
+      });
+      return { ...s, g, governed };
+    }
+    const estimate = (c: BuyCart, totalCents: number): BuyCart => ({
+      ...c,
+      totalCents,
+      totalIsEstimate: true,
+    });
+
+    it("an estimate that settles lower: the confirm goes through", async () => {
+      const { buy, governed, g } = approveAfter(
+        [estimate(cart(10148, "h_1"), 10148)],
+        ([c]) => [{ ...c!, totalCents: 9900, totalIsEstimate: false }],
+      );
+      await governed.answer(search);
+      await governed.answer(yes);
+      expect(g.execute).toHaveBeenCalledTimes(1);
+      expect(confirmsSent(buy.sent)).toBe(1);
+    });
+
+    it("a price that rises above what was approved: CART_CHANGED, in plain words", async () => {
+      const { buy, governed, g } = approveAfter([cart(11608, "h_1")], ([c]) => [
+        { ...c!, totalCents: 11700 },
+      ]);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "CART_CHANGED",
+        message: expect.stringContaining(
+          "the price at Amazon went above the $116.08 you approved",
+        ),
+      });
+      expect(g.execute).not.toHaveBeenCalled();
+      expect(confirmsSent(buy.sent)).toBe(0);
+    });
+
+    it("an item or quantity that changed: CART_CHANGED", async () => {
+      for (const edit of [
+        (c: BuyCart) => ({ ...c, items: [{ ...c.items[0]!, qty: 3 }] }),
+        (c: BuyCart) => ({
+          ...c,
+          items: [{ ...c.items[0]!, name: "Other batteries" }],
+        }),
+        (c: BuyCart) => ({ ...c, items: [{ ...c.items[0]!, variant: "AAA" }] }),
+      ]) {
+        const { buy, governed } = approveAfter([cart(2000, "h_1")], ([c]) => [
+          edit(c!) as BuyCart,
+        ]);
+        await governed.answer(search);
+        await expect(governed.answer(yes)).rejects.toMatchObject({
+          code: "CART_CHANGED",
+          message: expect.stringContaining(
+            "an item in the cart at Amazon changed",
+          ),
+        });
+        expect(confirmsSent(buy.sent)).toBe(0);
+      }
+    });
+
+    it("a cart added or removed: CART_CHANGED", async () => {
+      const two = [cart(2000, "h_a"), cart(3000, "h_b", "Target")];
+      for (const change of [
+        (held: BuyCart[]) => [held[0]!],
+        (held: BuyCart[]) => [...held, cart(100, "h_c", "Walmart")],
+        (held: BuyCart[]) => [held[0]!, cart(3000, "h_x", "Target")],
+      ]) {
+        const { buy, governed } = approveAfter(two, change);
+        await governed.answer(search);
+        await expect(governed.answer(yes)).rejects.toMatchObject({
+          code: "CART_CHANGED",
+          message: expect.stringContaining("a cart was added or removed"),
+        });
+        expect(confirmsSent(buy.sent)).toBe(0);
+      }
+    });
+
+    it("the same carts listed in another order: the confirm goes through", async () => {
+      const { buy, governed, g } = approveAfter(
+        [cart(2000, "h_a"), cart(3000, "h_b", "Target")],
+        (held) => [...held].reverse(),
+      );
+      await governed.answer(search);
+      await governed.answer(yes);
+      expect(g.execute).toHaveBeenCalledTimes(1);
+      expect(confirmsSent(buy.sent)).toBe(1);
+    });
+  });
+
   it("a confirm with no cart seen is refused", async () => {
     const g = fakeGuardian({ request: async () => allow() });
     const { buy, governed } = setup(g);
