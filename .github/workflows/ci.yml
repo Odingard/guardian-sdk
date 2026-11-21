@@ -27,14 +27,17 @@ jobs:
           node --test scripts/check-skill.test.mjs
       - name: SDK types check in a TypeScript 5 project (skipLibCheck off)
         run: node scripts/check-sdk-types.mjs
-      - name: Sample decision record verifies (bundled Azure key, offline)
-        run: node --test scripts/sample-receipt.test.mjs
-      - name: Sample decision record verifies (keys published by guardian-api-azure.odingard.com)
-        env:
-          GUARDIAN_LIVE_KEYS: "1"
+      - name: Sample decision record verifies (bundled public key, offline)
         run: |
           node --test scripts/sample-receipt.test.mjs
           node examples/verify-receipt.mjs > /dev/null
+      # Opt-in: also verify the sample against the keys Guardian publishes.
+      # Off by default; set the repository variable GUARDIAN_LIVE_KEYS to 1 to turn it on.
+      - name: Sample decision record verifies (published keys, opt-in)
+        if: vars.GUARDIAN_LIVE_KEYS == '1'
+        env:
+          GUARDIAN_LIVE_KEYS: "1"
+        run: node --test scripts/sample-receipt.test.mjs
       - name: Examples run (local demo policy)
         working-directory: examples
         run: |

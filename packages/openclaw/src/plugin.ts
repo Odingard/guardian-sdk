@@ -46,7 +46,7 @@ import {
 type Env = Readonly<Record<string, string | undefined>>;
 
 export const PLUGIN_ID = "guardian";
-export const DEFAULT_BASE_URL = "https://guardian-api-azure.odingard.com";
+export const DEFAULT_BASE_URL = "https://guardian-api.odingard.com";
 /** Guardian's longest request window (SDK GUARDIAN_MAX_REQUEST_TTL_MS). */
 export const REQUEST_TTL_MS = 300_000;
 /**

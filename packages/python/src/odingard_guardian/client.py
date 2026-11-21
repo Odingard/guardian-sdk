@@ -29,7 +29,7 @@ __all__ = [
     "build_proposal",
 ]
 
-DEFAULT_BASE_URL = "https://guardian-api-azure.odingard.com"
+DEFAULT_BASE_URL = "https://guardian-api.odingard.com"
 
 Decision = Literal["ALLOW", "ASK", "DENY"]
 

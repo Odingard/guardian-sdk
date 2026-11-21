@@ -12,7 +12,7 @@
  */
 
 export type EmbeddedApprovalConfig = Readonly<{
-  /** e.g. https://guardian-api-azure.odingard.com */
+  /** e.g. https://guardian-api.odingard.com */
   baseUrl: string;
   /** The human's Guardian session token presented through the partner app. */
   sessionToken: string;

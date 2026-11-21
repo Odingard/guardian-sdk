@@ -33,7 +33,7 @@ import {
 } from "@odingard/guardian-openai-agents";
 
 const guardian = createGuardianClient({
-  baseUrl: "https://guardian-api-azure.odingard.com",
+  baseUrl: "https://guardian-api.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
 });
 

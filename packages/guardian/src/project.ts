@@ -179,7 +179,7 @@ export function wrapExample(framework: Framework, toolName: string): string {
       "",
       "client = GuardianClient(",
       '    credential=os.environ["GUARDIAN_AGENT_CREDENTIAL"],',
-      '    base_url=os.environ.get("GUARDIAN_BASE_URL", "https://guardian-api-azure.odingard.com"),',
+      '    base_url=os.environ.get("GUARDIAN_BASE_URL", "https://guardian-api.odingard.com"),',
       ")",
       'guard = Guard(client, connection_id=os.environ["GUARDIAN_CONNECTION_ID"])',
       "",
@@ -190,7 +190,7 @@ export function wrapExample(framework: Framework, toolName: string): string {
   const lines = [
     'import { createGuard, createGuardianClient } from "@odingard/guardian-sdk";',
     "const client = createGuardianClient({",
-    '  baseUrl: process.env.GUARDIAN_BASE_URL ?? "https://guardian-api-azure.odingard.com",',
+    '  baseUrl: process.env.GUARDIAN_BASE_URL ?? "https://guardian-api.odingard.com",',
     "  credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,",
     "});",
     "const guard = createGuard({ client, connectionId: process.env.GUARDIAN_CONNECTION_ID! });",

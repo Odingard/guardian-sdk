@@ -1,11 +1,10 @@
-// Checks that examples/receipts/sample.greceipt.json verifies against the
-// Azure production signing key.
+// Checks that examples/receipts/sample.greceipt.json verifies.
 //
-// Offline (always): against the bundled copy of the published key,
-// examples/receipts/azure-verification-keys.json.
-// Live (GUARDIAN_LIVE_KEYS=1): against the keys Guardian publishes at
-// https://guardian-api-azure.odingard.com/v1/receipts/verification-keys,
-// and the bundled copy must match them.
+// Offline (always): against the bundled copy of Guardian's public key,
+// examples/receipts/verification-keys.json.
+// Live (opt-in, GUARDIAN_LIVE_KEYS=1): against the keys published at
+// https://guardian-api.odingard.com/v1/receipts/verification-keys, and the
+// bundled copy must match them. GUARDIAN_LIVE_KEYS_URL overrides the host.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -14,16 +13,17 @@ import {
   verifyReceiptOffline,
 } from "../packages/sdk/dist/index.js";
 
-const API = "https://guardian-api-azure.odingard.com";
+const API =
+  process.env.GUARDIAN_LIVE_KEYS_URL ?? "https://guardian-api.odingard.com";
 const read = (p) =>
   JSON.parse(
     readFileSync(new URL(`../examples/receipts/${p}`, import.meta.url), "utf8"),
   );
 const receipt = read("sample.greceipt.json");
 // The key set as published: { keys: [jwk, ...] }.
-const bundled = read("azure-verification-keys.json");
+const bundled = read("verification-keys.json");
 
-test("sample verifies offline against the bundled Azure key", () => {
+test("sample verifies offline against the bundled key", () => {
   assert.equal(receipt.proof.keyId, bundled.keys[0].kid);
   const result = verifyReceiptOffline(receipt, bundled);
   assert.equal(result.valid, true, JSON.stringify(result));
@@ -36,7 +36,7 @@ test("a tampered sample fails offline", () => {
 });
 
 test(
-  "sample verifies against the keys published by the Azure API",
+  "sample verifies against the keys published by Guardian",
   {
     skip: process.env.GUARDIAN_LIVE_KEYS !== "1" && "set GUARDIAN_LIVE_KEYS=1",
   },

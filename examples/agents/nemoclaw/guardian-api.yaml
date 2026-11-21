@@ -16,7 +16,7 @@ network_policies:
   guardian_api:
     name: guardian_api
     endpoints:
-      - host: guardian-api-azure.odingard.com
+      - host: guardian-api.odingard.com
         port: 443
         protocol: rest
         enforcement: enforce

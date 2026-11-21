@@ -44,7 +44,7 @@ Versions this guide was written for:
 | Sandbox image             | `ghcr.io/nvidia/nemoclaw/openclaw-sandbox@sha256:435934d9928e953f2ac8dd2da963eaca9312c9b61501bdd428ec42494bc4def8` (NemoClaw picks it itself)        |
 | Guardian plugin           | `@odingard/guardian-openclaw@0.1.0`, npm integrity `sha512-XM5fHYKJ0Q8sS4F5tpHFWWDmVLdzZJzatSf6GjEf8O/BBvq+QYE/F1I3fF1qQhQkqR7GNbajfCAY7u6Kz1IoiA==` |
 | Guardian plugin 0.1.1     | `@odingard/guardian-openclaw@0.1.1`, npm integrity `sha512-a/tOniv/AxOBLypV/Rf+P72FLhd5gYpaSGMWh7ziQOCzCLSpeeUguC9Xkw/agBdT6sMUgYVs0eGFK3zycex/Dg==` |
-| Guardian API              | `guardian-api-azure.odingard.com`                                                                                                                    |
+| Guardian API              | `guardian-api.odingard.com`                                                                                                                          |
 
 This guide's commands name 0.1.0. To use 0.1.1, put `0.1.1` in place of `0.1.0` in step 5 and check its integrity against the 0.1.1 row above. 0.1.1 differs in three ways that matter here: it keeps the credential placeholder in the Gateway's environment, so every process the Gateway starts inherits it ([step 4](#4-add-the-one-egress-rule)); it logs one more line at start ([step 9](#9-check)); and it survives an in-place Gateway restart ([step 8](#8-stop-and-start-the-sandbox)).
 
@@ -133,7 +133,7 @@ Inside the sandbox, the Gateway's `GUARDIAN_AGENT_CREDENTIAL` holds only a place
 
 ## 4. Add the one egress rule
 
-[`guardian-api.yaml`](guardian-api.yaml) allows one host (`guardian-api-azure.odingard.com:443`), the four Guardian agent API calls the plugin makes (`POST /v1/agent/requests`, `POST /v1/agent/claims`, `POST /v1/agent/execute`, `GET /v1/agent/receipts/**`), and one binary, `/usr/local/bin/node`. Preview, then apply:
+[`guardian-api.yaml`](guardian-api.yaml) allows one host (`guardian-api.odingard.com:443`), the four Guardian agent API calls the plugin makes (`POST /v1/agent/requests`, `POST /v1/agent/claims`, `POST /v1/agent/execute`, `GET /v1/agent/receipts/**`), and one binary, `/usr/local/bin/node`. Preview, then apply:
 
 ```bash
 nemoclaw my-agent policy add --from-file ./guardian-api.yaml --dry-run   # 1 host, 4 rules, 1 binary
@@ -189,7 +189,7 @@ Set the keys from [`openclaw.json`](openclaw.json) with your two `pcn_…` ids:
 nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.hooks.timeouts.before_tool_call 330000
 nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.config.connectionId pcn_…everyday
 nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.config.askConnectionId pcn_…needs-approval
-nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.config.baseUrl https://guardian-api-azure.odingard.com
+nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.config.baseUrl https://guardian-api.odingard.com
 nemoclaw my-agent exec -- openclaw config set plugins.entries.guardian.config.agentName my-nemoclaw-agent
 nemoclaw my-agent exec -- openclaw config validate     # "Config valid: $OPENCLAW_HOME/.openclaw/openclaw.json"
 ```
@@ -276,8 +276,8 @@ Approve in Guardian, not with OpenClaw's `/approve`. Guardian's decision is the 
 Watch the network side with `openshell logs my-agent --source sandbox`. A Guardian call shows lines like these (each line starts with a timestamp and `[sandbox] [OCSF ] [ocsf]`):
 
 ```
-NET:OPEN [INFO] ALLOWED /usr/local/bin/node(…) -> guardian-api-azure.odingard.com:443 [policy:nemoclaw_custom__guardian-api__guardian_api engine:opa]
-HTTP:POST [INFO] ALLOWED POST http://guardian-api-azure.odingard.com:443/v1/agent/requests [policy:nemoclaw_custom__guardian-api__guardian_api engine:l7]
+NET:OPEN [INFO] ALLOWED /usr/local/bin/node(…) -> guardian-api.odingard.com:443 [policy:nemoclaw_custom__guardian-api__guardian_api engine:opa]
+HTTP:POST [INFO] ALLOWED POST http://guardian-api.odingard.com:443/v1/agent/requests [policy:nemoclaw_custom__guardian-api__guardian_api engine:l7]
 ```
 
 then a `POST …/v1/agent/claims` line every few seconds while a call waits for approval, and one `POST …/v1/agent/execute` line when an allowed or approved call is redeemed. A refused call shows only the `requests` line.
@@ -286,7 +286,7 @@ To check the sandbox is still closed:
 
 ```bash
 nemoclaw my-agent exec -- curl -sS -m 10 https://example.com                              # CONNECT tunnel failed, response 403
-nemoclaw my-agent exec -- curl -sS -m 10 https://guardian-api-azure.odingard.com/v1/agent/requests  # 403: curl is not an allowed binary
+nemoclaw my-agent exec -- curl -sS -m 10 https://guardian-api.odingard.com/v1/agent/requests  # 403: curl is not an allowed binary
 nemoclaw my-agent exec -- node -e 'fetch("https://example.com").then(r=>console.log(r.status),()=>console.log("blocked"))'   # blocked
 ```
 
@@ -295,7 +295,7 @@ Each shows as a `DENIED` line in the OpenShell log.
 Download a signed record from the console's Activity page and verify it with [`examples/verify-receipt.mjs`](../../verify-receipt.mjs), from a checkout of this repository after `npm ci && npm run build`:
 
 ```bash
-node examples/verify-receipt.mjs ./receipt.greceipt.json https://guardian-api-azure.odingard.com
+node examples/verify-receipt.mjs ./receipt.greceipt.json https://guardian-api.odingard.com
 ```
 
 It fetches Guardian's published verification keys from that host, then checks the record's signature locally (`"valid":true`) and shows that a copy with one field changed fails (`SIGNATURE_INVALID`). Use the host your records came from. A refused call has a signed record too, with decision `DENY` and no execution.

@@ -15,7 +15,7 @@ Commands below run from `examples/`.
 
 | Example                                                  | What it shows                                                               | Run                              |
 | -------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------- |
-| [`verify-receipt.mjs`](verify-receipt.mjs)               | LIVE, no account: verify a real signed decision record offline, then tamper | `node verify-receipt.mjs`        |
+| [`verify-receipt.mjs`](verify-receipt.mjs)               | No account: verify a real signed decision record offline, then tamper       | `node verify-receipt.mjs`        |
 | [`demo-classes.mjs`](demo-classes.mjs)                   | the 7 demo classes                                                          | `node demo-classes.mjs`          |
 | [`shopping-agent.mjs`](shopping-agent.mjs)               | purchase → ASK, human approves, signed record                               | `node shopping-agent.mjs`        |
 | [`prompt-injection-deny.mjs`](prompt-injection-deny.mjs) | injected "export contacts" → DENY                                           | `node prompt-injection-deny.mjs` |
@@ -69,3 +69,11 @@ Commands below run from `examples/`.
 
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).
+
+To verify the sample against the keys Guardian publishes at
+https://guardian-api.odingard.com/v1/receipts/verification-keys instead of the
+bundled copy (`receipts/verification-keys.json`), pass the API base URL:
+
+```sh
+node verify-receipt.mjs receipts/sample.greceipt.json https://guardian-api.odingard.com
+```

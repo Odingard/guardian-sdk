@@ -22,7 +22,7 @@ import {
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-export const DEFAULT_BASE_URL = "https://guardian-api-azure.odingard.com";
+export const DEFAULT_BASE_URL = "https://guardian-api.odingard.com";
 /**
  * The gateway's longest request window (SDK GUARDIAN_MAX_REQUEST_TTL_MS).
  * The hook asks for all of it and never waits past it.

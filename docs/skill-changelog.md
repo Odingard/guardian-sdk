@@ -10,13 +10,6 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
-## 1.0.17
-
-- Date: 2026-11-21
-- SHA-256: `536e222a97121f47ad82b3fa85f8ff54f2b22ee362594343af174e45ac05dee6`
-- Pins: unchanged from 1.0.16.
-- The API host is `https://guardian-api-azure.odingard.com` and the console is `https://guardian-azure.odingard.com`. 4D points at the tag `skill-v1.0.17`. No other change.
-
 ## 1.0.16
 
 - Date: 2026-11-21

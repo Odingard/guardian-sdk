@@ -34,7 +34,7 @@ import { createGuardianClient } from "@odingard/guardian-sdk";
 import { guardianTools } from "@odingard/guardian-mastra";
 
 const guardian = createGuardianClient({
-  baseUrl: "https://guardian-api-azure.odingard.com",
+  baseUrl: "https://guardian-api.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
 });
 

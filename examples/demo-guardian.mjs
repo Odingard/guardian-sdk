@@ -5,7 +5,7 @@
  * `node <example>.mjs` works out of the box.
  *
  * To run the SAME code against real hosted Guardian instead, set:
- *   GUARDIAN_BASE_URL=https://guardian-api-azure.odingard.com
+ *   GUARDIAN_BASE_URL=https://guardian-api.odingard.com
  *   GUARDIAN_AGENT_CREDENTIAL=gak_…   (issued per agent in the console)
  *   GUARDIAN_CONNECTION_ID=pcn_…
  * and the examples use @odingard/guardian-sdk's real client unchanged.

@@ -16,7 +16,7 @@ This SDK lets an AI agent request governed capabilities and execute
 consequential actions under human authority. Every decision is deterministic (`ALLOW` / `ASK` / `DENY`), and every
 execution produces a signed, tamper-evident decision record you can verify without an account.
 
-Hosted Guardian: [guardian-azure.odingard.com](https://guardian-azure.odingard.com) — free tier for developers
+Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free tier for developers
 (2 connections, 1 agent, 500 protected actions a month), no card required.
 
 ## Install
@@ -36,7 +36,7 @@ import {
 } from "@odingard/guardian-sdk";
 
 const guardian = createGuardianClient({
-  baseUrl: "https://guardian-api-azure.odingard.com",
+  baseUrl: "https://guardian-api.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!, // gak_… issued per agent
 });
 
@@ -84,7 +84,7 @@ import {
 } from "@odingard/guardian-sdk";
 
 const client = createGuardianClient({
-  baseUrl: "https://guardian-api-azure.odingard.com",
+  baseUrl: "https://guardian-api.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
 });
 const guard = createGuard({
@@ -283,7 +283,7 @@ import {
 const client = createGuardianClient(
   withRequestTimeout(
     {
-      baseUrl: "https://guardian-api-azure.odingard.com",
+      baseUrl: "https://guardian-api.odingard.com",
       credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
     },
     { timeoutMs: 10_000, signal: shutdown.signal }, // both optional
@@ -377,7 +377,7 @@ import {
 
 const { receipt } = await guardian.portableReceipt(requestId); // greceipt.v1
 const keys = await fetchReceiptVerificationKeys(
-  "https://guardian-api-azure.odingard.com",
+  "https://guardian-api.odingard.com",
 ); // public
 verifyReceiptOffline(receipt, keys.keys);
 // → { valid: true, decision: "ALLOW", effect: "verified", subject } — or { valid: false, reasonCode }
@@ -392,7 +392,7 @@ Guardian deployment to do the same over the public `POST /v1/receipts/verify`.
 ### From the command line
 
 ```bash
-npx @odingard/guardian-sdk verify record.json                  # keys from guardian-api-azure.odingard.com
+npx @odingard/guardian-sdk verify record.json                  # keys from guardian-api.odingard.com
 npx @odingard/guardian-sdk verify record.json --keys keys.json # no network at all
 ```
 
@@ -417,7 +417,7 @@ import {
   verifyBeforeActing,
 } from "@odingard/guardian-sdk";
 
-const base = "https://guardian-api-azure.odingard.com";
+const base = "https://guardian-api.odingard.com";
 const keys = await fetchReceiptVerificationKeys(base); // cache it
 const verdict = await verifyBeforeActing(
   record, // the signed decision record the agent sent you
@@ -462,7 +462,7 @@ requests made with it need no new approval; sending email still asks.
 import { createMissionClient } from "@odingard/guardian-sdk";
 
 const guardian = createMissionClient({
-  baseUrl: "https://guardian-api-azure.odingard.com",
+  baseUrl: "https://guardian-api.odingard.com",
   agentCredential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
   missionCredential: process.env.GUARDIAN_MISSION_CREDENTIAL!,
 });

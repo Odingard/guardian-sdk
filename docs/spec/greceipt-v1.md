@@ -76,7 +76,7 @@ The domain wrapper prevents a receipt signature from being reused as a signature
 ## 5. Key discovery
 
 ```text
-GET https://guardian-api-azure.odingard.com/v1/receipts/verification-keys
+GET https://guardian-api.odingard.com/v1/receipts/verification-keys
 → { "keys": [ { "kty": "OKP", "crv": "Ed25519", "kid": "rkey_…", "use": "sig", "alg": "EdDSA", "x": "<base64url>" } ] }
 ```
 
@@ -128,7 +128,7 @@ import {
 } from "@odingard/guardian-sdk";
 
 const keys = await fetchReceiptVerificationKeys(
-  "https://guardian-api-azure.odingard.com",
+  "https://guardian-api.odingard.com",
 );
 const result = verifyReceiptOffline(receipt, keys); // { valid, decision, effect, subject } or { valid: false, reasonCode }
 ```
@@ -136,7 +136,7 @@ const result = verifyReceiptOffline(receipt, keys); // { valid, decision, effect
 ```python
 from odingard_guardian import fetch_receipt_verification_keys, verify_receipt_offline
 
-keys = fetch_receipt_verification_keys("https://guardian-api-azure.odingard.com")
+keys = fetch_receipt_verification_keys("https://guardian-api.odingard.com")
 result = verify_receipt_offline(receipt, keys)
 ```
 

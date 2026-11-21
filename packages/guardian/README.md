@@ -25,17 +25,17 @@ Once it is published, the same command is
 
 ## Options
 
-| Option              | Meaning                                                          |
-| ------------------- | ---------------------------------------------------------------- |
-| `--tools <a,b>`     | Tool names your agent runs through Guardian                      |
-| `--name <name>`     | Agent name (default: the project name)                           |
-| `--server <name>`   | Tool server name (default: `<agent name> tools`)                 |
-| `--env-file <path>` | Where to save the credential                                     |
-| `--console <url>`   | Guardian console (default `https://guardian-azure.odingard.com`) |
-| `--api <url>`       | Guardian API (default `https://guardian-api-azure.odingard.com`) |
-| `--no-browser`      | Print the link instead of opening the browser                    |
-| `--no-test`         | Skip the test action                                             |
-| `--yes`             | Answer yes to every question                                     |
+| Option              | Meaning                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| `--tools <a,b>`     | Tool names your agent runs through Guardian                |
+| `--name <name>`     | Agent name (default: the project name)                     |
+| `--server <name>`   | Tool server name (default: `<agent name> tools`)           |
+| `--env-file <path>` | Where to save the credential                               |
+| `--console <url>`   | Guardian console (default `https://guardian.odingard.com`) |
+| `--api <url>`       | Guardian API (default `https://guardian-api.odingard.com`) |
+| `--no-browser`      | Print the link instead of opening the browser              |
+| `--no-test`         | Skip the test action                                       |
+| `--yes`             | Answer yes to every question                               |
 
 ## What it can and cannot do
 
