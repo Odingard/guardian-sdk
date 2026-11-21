@@ -12,10 +12,10 @@ and each decision is a signed record.
 
 `guardBuyTool(buy, options)` returns a tool of the same shape. Swap one line:
 
-- **Search and browsing pass through.** A call with `confirm: false` goes to Agentcard as it is.
-- **The checkout goes to Guardian before Agentcard.** A call with `confirm: true` (the shopper's yes), a wallet's `approve()`, and every call of a turn `nextStep` opens (which can carry an earlier yes) are proposed to Guardian as the money action `opencommerce.checkout` before anything reaches Agentcard.
-- **ALLOW** → the call goes to Agentcard, and Guardian keeps the signed record. **ASK** → the call waits for the person, then goes ahead if they approved. **DENY, a timeout, Guardian unreachable or any error** → nothing reaches Agentcard, and the model reads `Guardian blocked this purchase: …`.
-- **Bound to the exact cart.** If the cart, its amount or its store changes, the next confirm is a new request. A cart that changes while the person decides is refused.
+- **Search and browsing pass through.** A request that does not pay goes to Agentcard as it is, including a `nextStep` turn that only replays the shopper's search once their card is saved.
+- **Every request that pays goes to Guardian before Agentcard.** The gate sits on the Agentcard client the tool was built with (pass it as `agentcard`): any request with a `confirm` or a Link payment, whichever method sent it (the model's yes, a wallet's `approve()`, a `nextStep` turn carrying an earlier yes, or a turn's `handled()` fast path), is proposed to Guardian as the money action `opencommerce.checkout`. A paying request made on that client outside the governed tool is refused (`UNGOVERNED_CALL`).
+- **The carts it pays, as they stand.** The proposal is read from Agentcard's conversation at the moment of the request, for exactly the carts it pays: the one cart a confirm names by its hash, or every cart for a combined approval. A conversation that cannot be read is refused.
+- **Redeem, then buy.** On ALLOW, or ASK and a person approved, the carts are read again and must be unchanged; then Guardian redeems the decision (so revocation, expiry and single use apply), and only then does the request reach Agentcard. **DENY, expiry, a timeout, Guardian unreachable, a failed redemption or any error** → nothing reaches Agentcard, and the model reads `Guardian blocked this purchase: …`.
 
 Agentcard's own steps stay as they are: `sendLink` still hands the shopper the Vault and approval links, and the shopper's approval at Agentcard still applies after Guardian's decision.
 
@@ -53,7 +53,11 @@ const buy = guardBuyTool(
     externalUserId: "shopper-1",
     sendLink: (l) => deliver(l),
   }),
-  { client: guardian, connectionId: process.env.GUARDIAN_CONNECTION_ID! },
+  {
+    client: guardian,
+    connectionId: process.env.GUARDIAN_CONNECTION_ID!,
+    agentcard, // the same client the buy tool was built with
+  },
 );
 
 const final = await new Anthropic().beta.messages.toolRunner({
@@ -67,7 +71,21 @@ const final = await new Anthropic().beta.messages.toolRunner({
 });
 ```
 
-In your own code, `buy.answer(input)` throws `GuardianPurchaseBlocked` (with `code`, `requestId`, `reasonCode` and the `checkout` that was proposed) where the model paths (`run`, `execute`, `handle`) return the refusal as JSON text. `onDecision` hears each decision.
+In your own code, `buy.answer(input)`, `approve()` and a turn's `handled()` reject with `GuardianPurchaseBlocked` (with `code`, `requestId`, `reasonCode`, `outcomeUnknown` and the `checkout` that was proposed) where the model paths (`run`, `execute`, `handle`) return the refusal as JSON text. `onDecision` hears each decision.
+
+### Waiting for a person
+
+A checkout request stays open at Guardian for `requestTtlMs` (default and maximum 5 minutes, the gateway's limit), and an ASK waits for a person at most that long. Codes:
+
+| `code`              | Meaning                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GUARDIAN_DENIED`   | The owner's rules do not allow it                                                                                         |
+| `APPROVAL_DECLINED` | A person declined it                                                                                                      |
+| `APPROVAL_EXPIRED`  | Guardian reports the request expired before anyone decided                                                                |
+| `APPROVAL_TIMEOUT`  | No one decided within `requestTtlMs`; the request is withdrawn                                                            |
+| `CART_CHANGED`      | The carts changed while the person decided                                                                                |
+| `CART_UNREADABLE`   | The conversation, or the cart the request names, could not be read                                                        |
+| `EXECUTE_FAILED`    | Guardian did not redeem the decision (revoked, expired, used). With `outcomeUnknown`, look the request up before retrying |
 
 A runnable version: [`examples/payments/opencommerce/batteries.mjs`](../../examples/payments/opencommerce/batteries.mjs).
 
@@ -75,14 +93,15 @@ A runnable version: [`examples/payments/opencommerce/batteries.mjs`](../../examp
 
 Each checkout is proposed with these arguments, which the approval screen and the signed record show:
 
-| Field            | What it is                                                                                                                                                                       |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `amountMinor`    | The most the card can be charged, in cents: per cart the highest of its total, its hold and its Link charge, summed over the carts on the table                                  |
-| `currency`       | `usd`                                                                                                                                                                            |
-| `stores`         | Each store, such as `Amazon`                                                                                                                                                     |
-| `carts`          | Per cart: store, merchant, Agentcard's cart `hash`, total, the most it can charge, whether the total is an estimate, and every line (name, quantity, price, line total, variant) |
-| `conversationId` | Agentcard's conversation                                                                                                                                                         |
-| `step`           | `confirm`, `approve` or `next_step`                                                                                                                                              |
+| Field            | What it is                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `amountMinor`    | The most the card can be charged, in cents: per cart the highest of its total, its hold and its Link charge, summed over the carts the request pays (or a Link payment's amount, if higher) |
+| `currency`       | `usd`                                                                                                                                                                                       |
+| `stores`         | Each store, such as `Amazon`                                                                                                                                                                |
+| `carts`          | Per cart: store, merchant, Agentcard's cart `hash`, total, the most it can charge, whether the total is an estimate, and every line (name, quantity, price, line total, variant)            |
+| `confirms`       | `one_cart` (a confirm of one cart by its hash) or `every_cart` (one approval for every cart of the conversation)                                                                            |
+| `conversationId` | Agentcard's conversation                                                                                                                                                                    |
+| `step`           | `confirm`, `approve` or `next_step`                                                                                                                                                         |
 
 The purpose line reads like `Buy 2 × Energizer AA batteries, 8 pack at Amazon for up to $11.12 (opencommerce)`. No card data and no Agentcard secret is sent to Guardian or logged.
 
@@ -112,10 +131,11 @@ An allowed checkout ends `declined` with `decline_code: sandbox_mode`; that mean
 - **Steps outside the agent.** Guardian decides what the agent sends. A shopper who opens an Agentcard link (the Vault or an approval page) and pays there, or who buys at Agentcard in another app, is not seen by this package.
 - **Auto-approval at Agentcard.** A shopper's auto-approval rule or your app's auto-approval permission can pay a confirm without an approval link. Guardian still decides the confirm before it reaches Agentcard, so such a purchase goes ahead after Guardian allows it and not before; keep Guardian's limits at or below those rules.
 - **Cards added out of band.** Which card pays is the shopper's choice in the Vault or Link. Guardian decides the purchase, not the card.
-- **Calls that bypass the wrapped tool.** `AgentcardClient` used directly (`buy(...)`, the HTTP Purchase API, the Commerce MCP server) is not governed. Give the agent the governed tool and nothing else that can confirm.
-- **A cart Guardian has not seen.** The wrapper decides on the carts it saw in Agentcard's last answer. A confirm with none (for example after a process restart that loaded saved state) is refused; a call that shows the cart again lets the next confirm through Guardian.
+- **Calls that bypass the gated client.** A confirm on the client passed as `agentcard` is refused outside the governed tool, but another `AgentcardClient`, the HTTP Purchase API or the Commerce MCP server is not governed. Give the agent the governed tool and nothing else that can confirm.
+- **A shopper's own words.** Guardian governs the requests that carry a `confirm` or a Link payment. Words the buy tool sends as an `ask` are the shopper's message, and Agentcard reads them; keep Agentcard's own approval step (the approval link) on.
+- **No conversation known.** A confirm when the wrapper has seen no conversation (for example after a process restart that loaded saved state) is refused; a call that shows the cart again lets the next confirm through Guardian.
 - **Currencies other than US dollars** are refused, since Guardian's amount rules are in dollars.
 - **What the store charges later.** Agentcard confirms the cart by its hash and refuses it if the cart changed; a store that charges a saved token later (as some Shopify checkouts do) can charge what its order says. The approved amount is the most the card can be held for, as Agentcard reports it.
-- **The signed record after the purchase.** If the purchase reached Agentcard but Guardian's record of it failed, the result is returned and `onRecordError` is called; the purchase is not undone.
+- **What Agentcard does after the redemption.** Guardian redeems the decision before the request goes out. If Agentcard then fails or refuses the request, its error is returned as usual; the decision is spent, and a retry needs a new one.
 
 Peer dependencies: `@agent-cards/commerce-sdk` `>=0.31.3 <0.32.0` (tested with 0.31.3) and `@odingard/guardian-sdk` `^0.6.0`.

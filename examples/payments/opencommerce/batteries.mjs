@@ -6,6 +6,7 @@
  * Run (from examples/):
  *   AGENTCARD_CLIENT_ID=... AGENTCARD_CLIENT_SECRET=...   (sandbox: npx agent-cards credentials --mode sandbox)
  *   GUARDIAN_AGENT_CREDENTIAL=gak_... GUARDIAN_CONNECTION_ID=pcn_... GUARDIAN_BASE_URL=https://...
+ *   SHOPPER_ID=...   (optional: reuse a shopper whose card is saved; the script prints the id it used)
  *   node payments/opencommerce/batteries.mjs
  *
  * It refuses production Agentcard credentials unless ALLOW_LIVE_PURCHASE=1.
@@ -59,11 +60,20 @@ console.log(
   `Agentcard mode: ${agentcard.sandbox === true ? "sandbox" : "LIVE"}`,
 );
 
+// The shopper's id at Agentcard. A card saved in the Vault belongs to it, so a
+// rerun with the same SHOPPER_ID finds the card instead of asking again.
+const shopperId =
+  env.SHOPPER_ID ?? `guardian-example-${Date.now().toString(36)}`;
+console.log(
+  env.SHOPPER_ID
+    ? `Shopper: ${shopperId}`
+    : `Shopper: ${shopperId} (new). To keep its saved card on a rerun, set SHOPPER_ID=${shopperId}`,
+);
+
 const buy = guardBuyTool(
   buyTool({
     agentcard,
-    externalUserId:
-      env.SHOPPER_ID ?? `guardian-example-${Date.now().toString(36)}`,
+    externalUserId: shopperId,
     // A test address; the model never sets it.
     deliveryAddress: {
       name: "Test Shopper",
@@ -85,6 +95,8 @@ const buy = guardBuyTool(
       credential: env.GUARDIAN_AGENT_CREDENTIAL,
     }),
     connectionId: env.GUARDIAN_CONNECTION_ID,
+    // The same client the buy tool was built with: its confirms go through Guardian.
+    agentcard,
     onDecision: (e) =>
       console.log(
         `  Guardian: ${e.decision}${e.requestId ? ` (${e.requestId})` : ""}${e.reasonCode ? ` ${e.reasonCode}` : ""}` +
@@ -126,7 +138,8 @@ try {
       result.next_action === "store_login"
     ) {
       console.log(
-        "Open the link above, finish that step, then run the script again.",
+        `Open the link above, finish that step, then run the script again with SHOPPER_ID=${shopperId} ` +
+          "(the same shopper, so Agentcard finds the saved card).",
       );
       process.exit(0);
     } else {

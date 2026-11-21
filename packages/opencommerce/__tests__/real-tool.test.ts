@@ -23,6 +23,7 @@ describe("with the real @agent-cards/commerce-sdk buy tool", () => {
         execute: vi.fn(),
       } as unknown as GuardianClient,
       connectionId: "con_1",
+      agentcard,
     });
     expect(JSON.stringify(governed)).toBe(JSON.stringify(buy));
     expect(governed.definition).toEqual(buy.definition);
@@ -38,6 +39,36 @@ describe("with the real @agent-cards/commerce-sdk buy tool", () => {
       }),
     );
     expect(view.decline_code).toBe("guardian_blocked");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("gates the real client's confirm on every path: a turn's handled() and direct use", async () => {
+    const fetch = vi.fn(async () => {
+      throw new Error("no network in tests");
+    });
+    const agentcard = new AgentcardClient({
+      clientId: "id",
+      clientSecret: "secret",
+      fetch: fetch as never,
+    });
+    const buy = buyTool({ agentcard, externalUserId: "shopper-1" });
+    const request = vi.fn();
+    const governed = guardBuyTool(buy, {
+      client: {
+        request,
+        claim: vi.fn(),
+        execute: vi.fn(),
+      } as unknown as GuardianClient,
+      connectionId: "con_1",
+      agentcard,
+    });
+    const turn = governed.turn("yes");
+    expect(typeof turn.handled).toBe("function");
+    expect(Object.keys(turn)).not.toContain("handled");
+    await expect(
+      agentcard.buy({ resume: true, confirm: true }),
+    ).rejects.toMatchObject({ code: "UNGOVERNED_CALL" });
     expect(fetch).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
