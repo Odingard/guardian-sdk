@@ -810,10 +810,11 @@ function executeOutcomeUnknown(executed: {
 async function lookUpExecution(
   client: GuardianClient,
   requestId: string,
+  callTimeoutMs: number,
 ): Promise<"verified" | "not-sent" | "unknown"> {
   let answer: unknown;
   try {
-    answer = await client.receipts(requestId);
+    answer = await withTimeout(() => client.receipts(requestId), callTimeoutMs);
   } catch {
     return "unknown";
   }
@@ -950,7 +951,13 @@ async function checkout(
       if (now() >= deadline) {
         notify({ decision: "TIMEOUT", requestId });
         try {
-          await options.client.withdraw?.(requestId);
+          const withdraw = options.client.withdraw;
+          if (withdraw) {
+            await withTimeout(
+              () => withdraw.call(options.client, requestId),
+              callTimeoutMs,
+            );
+          }
         } catch {
           // best effort: the request ends with its TTL anyway
         }
@@ -1061,7 +1068,7 @@ async function checkout(
         (ex.ok === true && receipt?.status === "not-sent"));
     const found = definitive
       ? "not-sent"
-      : await lookUpExecution(options.client, requestId);
+      : await lookUpExecution(options.client, requestId, callTimeoutMs);
     if (found !== "verified") {
       const unknown = found === "unknown";
       notify({ decision: "ERROR", requestId, reasonCode });
