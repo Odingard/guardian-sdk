@@ -70,10 +70,10 @@ Commands below run from `examples/`.
 Recipes that need a real Guardian agent: [ZeroClaw](agents/zeroclaw/README.md) ·
 [your own container: CrewAI, LangGraph, AutoGen](mcp/byo/README.md).
 
-To verify the sample against the keys Guardian publishes at
-https://guardian-api.odingard.com/v1/receipts/verification-keys instead of the
-bundled copy (`receipts/verification-keys.json`), pass the API base URL:
+To verify a decision record against the keys a Guardian API publishes at
+`/v1/receipts/verification-keys` instead of the bundled copy
+(`receipts/verification-keys.json`), pass that API's base URL:
 
 ```sh
-node verify-receipt.mjs receipts/sample.greceipt.json https://guardian-api.odingard.com
+node verify-receipt.mjs path/to/record.greceipt.json https://<your-guardian-api>
 ```
