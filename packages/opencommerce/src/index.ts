@@ -14,6 +14,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
+  AgentcardApiError,
   forModelError,
   parseBuyToolInput,
   type BuyCart,
@@ -164,9 +165,16 @@ export type CheckoutFacts = Readonly<{
   step: "confirm" | "approve" | "next_step";
 }>;
 
-/** Guardian did not let this purchase go ahead; nothing was sent to Agentcard. */
-export class GuardianPurchaseBlocked extends Error {
-  readonly code: string;
+/**
+ * Guardian did not let this purchase go ahead; nothing was sent to Agentcard.
+ *
+ * It is an `AgentcardApiError` with status 403, so the buy tool reads it as a
+ * refusal answered before anything was sent (a Stripe Link confirm releases
+ * its payment and frees the cart) and never as a lost answer. Its `code` is
+ * Guardian's own (`GUARDIAN_DENIED`, `APPROVAL_TIMEOUT`, ...); the model reads
+ * `decline_code: "guardian_blocked"`.
+ */
+export class GuardianPurchaseBlocked extends AgentcardApiError {
   readonly requestId: string | undefined;
   readonly reasonCode: string | undefined;
   readonly checkout: CheckoutFacts | undefined;
@@ -180,9 +188,11 @@ export class GuardianPurchaseBlocked extends Error {
     checkout?: CheckoutFacts;
     outcomeUnknown?: boolean;
   }) {
-    super(`Guardian blocked this purchase: ${args.detail}`);
+    super(403, args.code, `Guardian blocked this purchase: ${args.detail}`, {
+      error_code: "guardian_blocked",
+      decline_code: "guardian_blocked",
+    });
     this.name = "GuardianPurchaseBlocked";
-    this.code = args.code;
     this.requestId = args.requestId;
     this.reasonCode = args.reasonCode;
     this.checkout = args.checkout;
@@ -220,8 +230,16 @@ type Scope = Readonly<{
   table: Table;
   step: CheckoutFacts["step"];
   /** Set when a paying request went through the gate in this call. */
-  run: { paid: boolean };
+  run: Run;
 }>;
+
+/** What the gate did in one call of the tool. */
+type Run = {
+  /** A paying request went through the gate. */
+  paid: boolean;
+  /** The gate refused a paying request: the result answers that refusal. */
+  blocked?: GuardianPurchaseBlocked;
+};
 
 const scope = new AsyncLocalStorage<Scope>();
 
@@ -367,11 +385,17 @@ function installGate(agentcard: GuardedAgentcard): void {
           "a purchase request reached the Agentcard client outside the governed buy tool, so it was not sent.",
       });
     }
-    const turn = await checkout(current, agentcard, body, () => {
-      current.run.paid = true;
-      current.table.paid = true;
-      return original(...args);
-    });
+    let turn: unknown;
+    try {
+      turn = await checkout(current, agentcard, body, () => {
+        current.run.paid = true;
+        current.table.paid = true;
+        return original(...args);
+      });
+    } catch (error) {
+      if (error instanceof GuardianPurchaseBlocked) current.run.blocked = error;
+      throw error;
+    }
     observe(current.table, turn);
     return turn;
   };
@@ -444,11 +468,11 @@ const ungoverned = () =>
  * that says a confirm was sent while no paying request went through the
  * gate in this call, or an order placed while none ever did for this tool.
  */
-function checkGoverned(
-  table: Table,
-  run: { paid: boolean },
-  result: unknown,
-): void {
+function checkGoverned(table: Table, run: Run, result: unknown): void {
+  // The gate refused a request in this call and nothing paid: the buy tool
+  // answered Guardian's refusal in its own words (a Stripe Link confirm says
+  // "not charged"), so the refusal itself is the answer, on every path.
+  if (run.blocked && !run.paid) throw run.blocked;
   if (!isRecord(result) || run.paid) return;
   if (result.confirm_sent === true) throw ungoverned();
   const placed =
@@ -459,7 +483,7 @@ function checkGoverned(
 }
 
 /** Runs `out`'s result (awaited when it is a promise) through checkGoverned. */
-function governed<R>(table: Table, run: { paid: boolean }, out: R): R {
+function governed<R>(table: Table, run: Run, out: R): R {
   if (out instanceof Promise) {
     return out.then((value: unknown) => {
       checkGoverned(table, run, value);
@@ -481,7 +505,7 @@ function wrap<T extends AnyTool>(
 ): T {
   const original = buy as unknown as Record<string, unknown> & BuyTool;
   const inScope = <R>(step: CheckoutFacts["step"], fn: () => R): R => {
-    const run = { paid: false };
+    const run: Run = { paid: false };
     return governed(table, run, scope.run({ options, table, step, run }, fn));
   };
   const answerOf = original.answer.bind(original) as (

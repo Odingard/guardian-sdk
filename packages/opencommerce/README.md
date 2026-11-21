@@ -73,7 +73,7 @@ const final = await new Anthropic().beta.messages.toolRunner({
 });
 ```
 
-In your own code, `buy.answer(input)`, `approve()` and a turn's `handled()` reject with `GuardianPurchaseBlocked` (with `code`, `requestId`, `reasonCode`, `outcomeUnknown` and the `checkout` that was proposed) where the model paths (`run`, `execute`, `handle`) return the refusal as JSON text. `onDecision` hears each decision.
+In your own code, `buy.answer(input)`, `approve()` and a turn's `handled()` reject with `GuardianPurchaseBlocked` (with `code`, `requestId`, `reasonCode`, `outcomeUnknown` and the `checkout` that was proposed) where the model paths (`run`, `execute`, `handle`) return the refusal as JSON text. A Stripe Link payment's `awaitWallet()` rejects the same way. `GuardianPurchaseBlocked` is an `AgentcardApiError` with status 403, so the buy tool reads it as a refusal that sent nothing: a Link payment is released and its cart stays payable, never held as an order that may have gone through. `onDecision` hears each decision.
 
 ### Waiting for a person
 

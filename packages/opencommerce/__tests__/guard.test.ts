@@ -5,6 +5,7 @@ import type {
   BuyToolInput,
   BuyToolResult,
 } from "@agent-cards/commerce-sdk";
+import { AgentcardApiError } from "@agent-cards/commerce-sdk";
 import type { GuardianClient } from "@odingard/guardian-sdk";
 
 import {
@@ -544,7 +545,15 @@ describe("guardBuyTool", () => {
     }));
     const { buy, governed } = setup(g);
     await governed.answer(search);
-    await expect(governed.answer(yes)).rejects.toMatchObject({
+    // Nothing reached Agentcard, so to the buy tool it is a definite refusal
+    // (an AgentcardApiError with status 403), never a lost answer.
+    const refused = await governed.answer(yes).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(AgentcardApiError);
+    expect(refused).toMatchObject({
+      status: 403,
       code: "EXECUTE_FAILED",
       outcomeUnknown: true,
       requestId: "req_1",
