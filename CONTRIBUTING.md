@@ -15,7 +15,7 @@ Thanks for helping build Human Authority Infrastructure for Autonomous AI.
 
 ### Payment guards (exception)
 
-`packages/x402`, `packages/ap2` and `packages/link` call `request` /
+`packages/x402`, `packages/ap2`, `packages/link` and `packages/opencommerce` call `request` /
 `claim` / `execute` themselves instead of `runThroughGuardian`, because the
 shared triad cannot give them these guarantees today:
 
@@ -39,7 +39,10 @@ shared triad cannot give them these guarantees today:
 
 A payment guard must still keep the triad's conventions. The link guard
 sends `adapterId` when set and refuses the reserved `guardianContentPins`
-argument. x402 and ap2 do not do either yet. Move a guard onto the triad
+argument. The opencommerce guard sends `adapterId` when set, builds its
+arguments itself (so never carries the content-pin argument), and after a
+lost redemption answer looks the request up with the same rules as the
+triad (`executeOutcomeUnknown` and `lookUpExecution`). x402 and ap2 do not do either yet. Move a guard onto the triad
 once it covers these points.
 
 ### Coding-agent hooks (exception)

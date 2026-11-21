@@ -1,5 +1,15 @@
 # Changelog
 
+## guardian-opencommerce 0.1.0, unreleased
+
+### Added: Guardian for opencommerce
+
+- **`@odingard/guardian-opencommerce`** (new package, not on npm yet): `guardBuyTool(buy, { client, connectionId })` puts Guardian in front of the step of Agentcard's opencommerce buy tool (`buyTool` from `@agent-cards/commerce-sdk`) that commits money, and returns a tool of the same shape (name, description, schemas, `run` / `execute` / `handle` / `answer`, `turn`, `nextStep`).
+  - Calls with `confirm: false` (search, picks, questions) go to Agentcard without Guardian. A call with `confirm: true`, a wallet's `approve()`, and every call of a turn `nextStep` opens are proposed to Guardian, before Agentcard, as the record tool `opencommerce.checkout`, with the amount in cents (`amountMinor`, the most the card can be charged), the currency, the stores, each cart's hash and every line.
+  - ALLOW: the call goes to Agentcard and Guardian keeps its signed record. ASK: the call waits for the person (claiming the held request), then goes ahead if they approved, and not otherwise. DENY, a timeout, Guardian unreachable or any error: nothing reaches Agentcard, and the model reads "Guardian blocked this purchase: …".
+  - The approval is for the exact checkout: a changed cart, amount or store is a new request; a cart that changes while the person decides is refused. A confirm with no cart the wrapper saw, and a cart in a currency other than US dollars, are refused.
+  - Peer dependencies `@agent-cards/commerce-sdk` `>=0.31.3 <0.32.0` (tested with 0.31.3) and `@odingard/guardian-sdk` `^0.6.0`. Example: `examples/payments/opencommerce/batteries.mjs` (Agentcard sandbox credentials and a Guardian connection).
+
 ## guardian-mastra 0.1.0, unreleased
 
 ### Added: Mastra adapter

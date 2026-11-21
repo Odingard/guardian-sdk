@@ -15,7 +15,8 @@
     "remote-mcp": "node mcp/remote-mcp.mjs",
     "codex-hook": "node agents/agent-hooks.mjs codex",
     "dsh-hook": "node agents/agent-hooks.mjs dsh",
-    "mastra-agent": "node agents/mastra-agent.mjs"
+    "mastra-agent": "node agents/mastra-agent.mjs",
+    "opencommerce-batteries": "node payments/opencommerce/batteries.mjs"
   },
   "dependencies": {
     "@odingard/guardian-sdk": "^0.6.0",
@@ -26,6 +27,8 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@odingard/guardian-mastra": "^0.1.0",
     "@mastra/core": "1.85.0",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "@odingard/guardian-opencommerce": "^0.1.0",
+    "@agent-cards/commerce-sdk": "0.31.3"
   }
 }

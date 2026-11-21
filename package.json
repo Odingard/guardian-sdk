@@ -17,6 +17,7 @@
     "packages/x402",
     "packages/ap2",
     "packages/link",
+    "packages/opencommerce",
     "examples"
   ],
   "scripts": {

@@ -46,6 +46,7 @@ create the account, the agent or the credential for you. Versions are listed in
 | [`@odingard/guardian-hook`](https://www.npmjs.com/package/@odingard/guardian-hook)                   | Your coding agent runs shell commands and edits files (Claude Code, Claude Agent SDK, Codex CLI, DeepSeek Harness)                                                                                                                                                     | [packages/hook](packages/hook)                   |
 | [`@odingard/guardian-openai-agents`](https://www.npmjs.com/package/@odingard/guardian-openai-agents) | You build with the OpenAI Agents SDK (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs                                                                                                                                       | [packages/openai-agents](packages/openai-agents) |
 | [`@odingard/guardian-mastra`](packages/mastra) (unreleased, not on npm yet) | You build with Mastra (TypeScript): every tool you wrap with `guardianTool` is decided by Guardian before it runs | [packages/mastra](packages/mastra) |
+| [`@odingard/guardian-opencommerce`](packages/opencommerce) (unreleased, not on npm yet) | Your agent buys at real stores with Agentcard's opencommerce buy tool: Guardian decides each checkout (exact cart, store and amount) before the confirm reaches Agentcard | [packages/opencommerce](packages/opencommerce) |
 | [`@odingard/guardian-openclaw`](https://www.npmjs.com/package/@odingard/guardian-openclaw)           | You run an OpenClaw agent: a native plugin governs exec, file edits, messages and MCP tools                                                                                                                                                                            | [packages/openclaw](packages/openclaw)           |
 | [`@odingard/guardian-x402`](https://www.npmjs.com/package/@odingard/guardian-x402)                   | Your agent pays over x402: Guardian decides payments made through the guarded official x402 TypeScript clients, before the wallet signs. Supports USDC on Base Sepolia (testnet). Base mainnet is off by default; run your flow on Base Sepolia before you turn it on. | [packages/x402](packages/x402)                   |
 | [`@odingard/guardian-ap2`](https://www.npmjs.com/package/@odingard/guardian-ap2)                     | Your agent pays over AP2 v0.2: Guardian decides closed Checkout and Payment Mandates before the agent key signs them (pinned merchant keys, USD)                                                                                                                       | [packages/ap2](packages/ap2)                     |
@@ -107,6 +108,7 @@ document.
 | Vercel AI SDK                                   | `@odingard/guardian-vercel-ai`                                    |
 | OpenAI Agents SDK (TypeScript)                  | `@odingard/guardian-openai-agents`                                |
 | Mastra (TypeScript)                             | `@odingard/guardian-mastra` (unreleased)                          |
+| Agentcard opencommerce buy tool                 | `@odingard/guardian-opencommerce` (unreleased)                    |
 | OpenAI Agents SDK (Python)                      | `odingard-guardian[openai-agents]`                                |
 | LangChain / LangGraph (Python)                  | `odingard-guardian[langchain]`                                    |
 | Microsoft Agent Framework (Python)              | `odingard-guardian`                                               |
@@ -152,6 +154,7 @@ packages/steel          @odingard/guardian-steel
 packages/openclaw       @odingard/guardian-openclaw       OpenClaw plugin
 packages/x402           @odingard/guardian-x402           x402 payment guard
 packages/ap2            @odingard/guardian-ap2            AP2 mandate guard
+packages/opencommerce   @odingard/guardian-opencommerce   opencommerce checkout guard (unreleased)
 packages/python         odingard-guardian (PyPI)          Python SDK
 examples/               runnable demos, grouped by topic (index: examples/README.md)
 docs/                   guides, greceipt.v1 spec, skill.md changelog
