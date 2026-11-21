@@ -18,7 +18,7 @@
  *     connectionId     [GUARDIAN_CONNECTION_ID]           everyday tools (Allow)
  *     askConnectionId  [GUARDIAN_HOOK_ASK_CONNECTION_ID]  deploys, destructive,
  *                      pushes, messages, MCP and other tools (Ask)
- *     baseUrl          [GUARDIAN_BASE_URL]  default https://guardian-api.odingard.com
+ *     baseUrl          [GUARDIAN_BASE_URL]  default https://guardian-api-azure.odingard.com
  *     agentName        [GUARDIAN_HOOK_AGENT_NAME]  label approvers see
  *     approvalTimeoutMs  how long an ASK waits (max and default 300000)
  *     allowTierTools   extra Guardian tool names for the everyday connection

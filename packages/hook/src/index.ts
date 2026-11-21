@@ -16,7 +16,7 @@
  * agent (the `guardian-hook` command is dist/cli.js; see fail-closed.ts).
  *
  * Environment (same names as guardian-mcp):
- *   GUARDIAN_BASE_URL          default https://guardian-api.odingard.com
+ *   GUARDIAN_BASE_URL          default https://guardian-api-azure.odingard.com
  *   GUARDIAN_AGENT_CREDENTIAL  required, the agent credential from the console
  *   GUARDIAN_CONNECTION_ID     required, the record-only tool-server
  *                              connection for the Allow-tier tools

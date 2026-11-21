@@ -213,7 +213,7 @@ describe("the env file", () => {
   const values = {
     GUARDIAN_AGENT_CREDENTIAL: CREDENTIAL,
     GUARDIAN_CONNECTION_ID: CONNECTION,
-    GUARDIAN_BASE_URL: "https://guardian-api.odingard.com",
+    GUARDIAN_BASE_URL: "https://guardian-api-azure.odingard.com",
   };
 
   it("replaces Guardian's lines and keeps the rest", () => {
@@ -227,7 +227,7 @@ describe("the env file", () => {
         "# note",
         `export GUARDIAN_AGENT_CREDENTIAL=${CREDENTIAL}`,
         `export GUARDIAN_CONNECTION_ID=${CONNECTION}`,
-        "export GUARDIAN_BASE_URL=https://guardian-api.odingard.com",
+        "export GUARDIAN_BASE_URL=https://guardian-api-azure.odingard.com",
         "",
       ].join("\n"),
     );

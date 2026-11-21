@@ -104,7 +104,7 @@ Guardian sets modes **per connection**, not per tool. So the hook uses two recor
    - `GUARDIAN_AGENT_CREDENTIAL`;
    - `GUARDIAN_CONNECTION_ID`: the everyday connection;
    - `GUARDIAN_HOOK_ASK_CONNECTION_ID`: the needs-approval connection;
-   - `GUARDIAN_BASE_URL`: optional, defaults to `https://guardian-api.odingard.com`.
+   - `GUARDIAN_BASE_URL`: optional, defaults to `https://guardian-api-azure.odingard.com`.
 
    With only `GUARDIAN_CONNECTION_ID` set, every tool shares that one connection and its single mode.
 

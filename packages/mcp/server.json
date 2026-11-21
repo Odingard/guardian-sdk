@@ -30,10 +30,10 @@
       "environmentVariables": [
         {
           "name": "GUARDIAN_BASE_URL",
-          "description": "Guardian API base URL, e.g. https://guardian-api.odingard.com",
+          "description": "Guardian API base URL, e.g. https://guardian-api-azure.odingard.com",
           "isRequired": true,
           "format": "string",
-          "default": "https://guardian-api.odingard.com"
+          "default": "https://guardian-api-azure.odingard.com"
         },
         {
           "name": "GUARDIAN_AGENT_CREDENTIAL",

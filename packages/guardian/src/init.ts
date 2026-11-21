@@ -43,8 +43,8 @@ import {
 } from "./project.js";
 import { runSetupTest, SETUP_TEST_TOOL } from "./setup-test.js";
 
-export const DEFAULT_CONSOLE = "https://guardian.odingard.com";
-export const DEFAULT_API = "https://guardian-api.odingard.com";
+export const DEFAULT_CONSOLE = "https://guardian-azure.odingard.com";
+export const DEFAULT_API = "https://guardian-api-azure.odingard.com";
 /** How long the command waits for the browser. */
 export const BROWSER_WAIT_MS = 10 * 60_000;
 
@@ -65,8 +65,8 @@ export const INIT_WORDS = Object.freeze({
     "  --name <name>       agent name (default: the project name)",
     "  --server <name>     tool server name (default: <agent name> tools)",
     "  --env-file <path>   where to save the credential (default ~/.config/guardian/env)",
-    "  --console <url>     Guardian console (default https://guardian.odingard.com)",
-    "  --api <url>         Guardian API (default https://guardian-api.odingard.com)",
+    "  --console <url>     Guardian console (default https://guardian-azure.odingard.com)",
+    "  --api <url>         Guardian API (default https://guardian-api-azure.odingard.com)",
     "  --no-browser        print the link instead of opening the browser",
     "  --no-test           skip the test action",
     "  --yes               answer yes to every question",

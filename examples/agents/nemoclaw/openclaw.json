@@ -7,7 +7,7 @@
         "config": {
           "connectionId": "pcn_REPLACE_everyday",
           "askConnectionId": "pcn_REPLACE_needs_approval",
-          "baseUrl": "https://guardian-api.odingard.com",
+          "baseUrl": "https://guardian-api-azure.odingard.com",
           "agentName": "my-nemoclaw-agent"
         }
       }

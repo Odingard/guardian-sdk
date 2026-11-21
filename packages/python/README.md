@@ -9,7 +9,7 @@ Every action your agent wants to take gets a deterministic
 waits for a human, and every execution produces a signed, tamper-evident
 decision record you can verify offline.
 
-Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com). The
+Hosted Guardian: [guardian-azure.odingard.com](https://guardian-azure.odingard.com). The
 free tier needs no card.
 
 ```bash
@@ -1154,7 +1154,7 @@ Hermes does not pin the contents of files its tools read. The path is bound; the
 ```python
 from odingard_guardian import GuardianClient, classify_request_result
 
-client = GuardianClient(credential=..., base_url="https://guardian-api.odingard.com")
+client = GuardianClient(credential=..., base_url="https://guardian-api-azure.odingard.com")
 result = client.request({
     "action": "tool.invoke",
     "connection_id": "pcn_…",
@@ -1180,7 +1180,7 @@ published keys:
 ```python
 from odingard_guardian import fetch_receipt_verification_keys, verify_receipt_offline
 
-keys = fetch_receipt_verification_keys("https://guardian-api.odingard.com")["keys"]
+keys = fetch_receipt_verification_keys("https://guardian-api-azure.odingard.com")["keys"]
 record = client.portable_receipt(request_id).receipt    # client: your GuardianClient
 verify_receipt_offline(record, keys)
 # {"valid": True, "decision": "ALLOW", "effect": "verified", "subject": {...}}
@@ -1205,7 +1205,7 @@ allowed, unchanged?
 ```python
 from odingard_guardian import fetch_receipt_status, verify_before_acting
 
-base = "https://guardian-api.odingard.com"
+base = "https://guardian-api-azure.odingard.com"
 verdict = verify_before_acting(
     record,                                 # the signed decision record the agent sent you
     keys,                                   # fetch_receipt_verification_keys(base)

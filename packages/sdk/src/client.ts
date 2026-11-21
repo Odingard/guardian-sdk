@@ -26,7 +26,7 @@ import {
  */
 
 export type GuardianClientConfig = Readonly<{
-  /** Production: https://guardian-api.odingard.com */
+  /** Production: https://guardian-api-azure.odingard.com */
   baseUrl: string;
   /** Agent credential (gak_…). */
   credential: string;

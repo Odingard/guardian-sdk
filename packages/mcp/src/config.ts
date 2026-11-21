@@ -82,7 +82,7 @@ Remote upstreams:
   (plain http:// only for localhost).
 
 Environment:
-  GUARDIAN_BASE_URL          required, e.g. https://guardian-api.odingard.com
+  GUARDIAN_BASE_URL          required, e.g. https://guardian-api-azure.odingard.com
   GUARDIAN_AGENT_CREDENTIAL  required, the agent credential (gak_…) from the Guardian console
   GUARDIAN_CONNECTION_ID     tool connection id (required for proxy mode)
   GUARDIAN_ADAPTER_ID        optional adapter override

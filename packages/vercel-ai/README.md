@@ -74,7 +74,7 @@ import {
 } from "@odingard/guardian-vercel-ai";
 
 const guardian = createGuardianClient({
-  baseUrl: "https://guardian-api.odingard.com",
+  baseUrl: "https://guardian-api-azure.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
 });
 

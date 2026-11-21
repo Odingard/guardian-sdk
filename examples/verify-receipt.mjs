@@ -16,7 +16,7 @@ import {
 const file =
   process.argv[2] ??
   new URL("./receipts/sample.greceipt.json", import.meta.url);
-const baseUrl = process.argv[3] ?? "https://guardian-api.odingard.com";
+const baseUrl = process.argv[3] ?? "https://guardian-api-azure.odingard.com";
 const receipt = JSON.parse(readFileSync(file, "utf8"));
 
 const keys = await fetchReceiptVerificationKeys(baseUrl);

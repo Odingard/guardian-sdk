@@ -17,7 +17,7 @@
       },
       "baseUrl": {
         "type": "string",
-        "description": "Guardian API base URL (https). Default https://guardian-api.odingard.com."
+        "description": "Guardian API base URL (https). Default https://guardian-api-azure.odingard.com."
       },
       "agentName": {
         "type": "string",

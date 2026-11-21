@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed: production API is on Azure
+
+- **Default API host is `https://guardian-api-azure.odingard.com`** and the console is `https://guardian-azure.odingard.com`. Every default base URL (TypeScript SDK CLI, hook, OpenClaw plugin, `@odingard/guardian` init, MCP server metadata, Python `DEFAULT_BASE_URL`), README, guide, example and `skill.md` now point there. `GUARDIAN_BASE_URL` and `--api` still override it.
+- **Sample decision record.** `examples/receipts/sample.greceipt.json` is replaced by a record signed by the Azure production key `rkey_f72bf48fd0cc93ea71e10f2cefc48fbd` (an approved sandbox purchase). The previous sample was signed by a key the old host no longer publishes, so `examples/verify-receipt.mjs` failed with `UNKNOWN_KEY`. A copy of the public key is bundled at `examples/receipts/azure-verification-keys.json`, and `scripts/sample-receipt.test.mjs` (run in CI) verifies the sample offline against it and against the live published keys.
+
 ## guardian-opencommerce 0.1.0, unreleased
 
 ### Added: Guardian for opencommerce

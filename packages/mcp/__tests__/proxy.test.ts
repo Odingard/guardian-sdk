@@ -643,7 +643,7 @@ describe("governed MCP proxy", () => {
 
 describe("guardian-mcp CLI config", () => {
   const env = {
-    GUARDIAN_BASE_URL: "https://guardian-api.odingard.com",
+    GUARDIAN_BASE_URL: "https://guardian-api-azure.odingard.com",
     GUARDIAN_AGENT_CREDENTIAL: "gac1.x",
     GUARDIAN_CONNECTION_ID: CONNECTION,
   };

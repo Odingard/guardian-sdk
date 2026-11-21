@@ -22,7 +22,7 @@ npm i -g @odingard/guardian-mcp
     "guardian": {
       "command": "guardian-mcp",
       "env": {
-        "GUARDIAN_BASE_URL": "https://guardian-api.odingard.com",
+        "GUARDIAN_BASE_URL": "https://guardian-api-azure.odingard.com",
         "GUARDIAN_AGENT_CREDENTIAL": "gak_…",
         "GUARDIAN_CONNECTION_ID": "pcn_…"
       }
@@ -74,7 +74,7 @@ upstream server's tools unchanged, and every call is decided first:
       "command": "guardian-mcp",
       "args": ["proxy", "--", "npx", "-y", "your-whatsapp-mcp-server"],
       "env": {
-        "GUARDIAN_BASE_URL": "https://guardian-api.odingard.com",
+        "GUARDIAN_BASE_URL": "https://guardian-api-azure.odingard.com",
         "GUARDIAN_AGENT_CREDENTIAL": "gak_…",
         "GUARDIAN_CONNECTION_ID": "pcn_…",
         "WHATSAPP_TOKEN": "…"
@@ -204,7 +204,7 @@ connection waits for approval.
         "x-api-key: ${COMPOSIO_API_KEY}"
       ],
       "env": {
-        "GUARDIAN_BASE_URL": "https://guardian-api.odingard.com",
+        "GUARDIAN_BASE_URL": "https://guardian-api-azure.odingard.com",
         "GUARDIAN_AGENT_CREDENTIAL": "gak_…",
         "GUARDIAN_CONNECTION_ID": "pcn_…",
         "COMPOSIO_API_KEY": "…"

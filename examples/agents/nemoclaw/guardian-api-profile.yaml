@@ -22,7 +22,7 @@ credentials:
     auth_style: bearer
     header_name: authorization
 endpoints:
-  - host: guardian-api.odingard.com
+  - host: guardian-api-azure.odingard.com
     port: 443
     protocol: rest
     enforcement: enforce

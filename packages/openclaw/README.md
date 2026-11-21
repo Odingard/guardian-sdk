@@ -547,7 +547,7 @@ ignored (see above).
 | ------------------------------------------ | --------------------------------- | --------------------------------------- |
 | `connectionId` (required)                  | `GUARDIAN_CONNECTION_ID`          |                                         |
 | `askConnectionId`                          | `GUARDIAN_HOOK_ASK_CONNECTION_ID` | `connectionId`                          |
-| `baseUrl` (https only)                     | `GUARDIAN_BASE_URL`               | `https://guardian-api.odingard.com`     |
+| `baseUrl` (https only)                     | `GUARDIAN_BASE_URL`               | `https://guardian-api-azure.odingard.com`     |
 | `agentName`                                | `GUARDIAN_HOOK_AGENT_NAME`        | `OpenClaw` (plus the OpenClaw agent id) |
 | `approvalTimeoutMs`                        |                                   | `300000` (also the maximum)             |
 | `allowTierTools`                           |                                   | `[]`                                    |
@@ -607,7 +607,7 @@ network_policies:
   guardian_api:
     name: guardian_api
     endpoints:
-      - host: guardian-api.odingard.com   # your Guardian API host
+      - host: guardian-api-azure.odingard.com   # your Guardian API host
         port: 443
         protocol: rest
         enforcement: enforce

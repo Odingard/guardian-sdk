@@ -53,7 +53,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const guard = createX402Guard({
   guardian: createGuardianClient({
-    baseUrl: "https://guardian-api.odingard.com",
+    baseUrl: "https://guardian-api-azure.odingard.com",
     credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
   }),
   connectionId: "pcn_…", // the connection holding x402.pay and x402.pay.above_cap

@@ -66,7 +66,7 @@ import { createAp2Guard, nodeKeySigner } from "@odingard/guardian-ap2";
 
 const guard = createAp2Guard({
   guardian: createGuardianClient({
-    baseUrl: "https://guardian-api.odingard.com",
+    baseUrl: "https://guardian-api-azure.odingard.com",
     credential: process.env.GUARDIAN_AGENT_CREDENTIAL!,
   }),
   connectionId: "pcn_…", // the connection holding the ap2.* entries

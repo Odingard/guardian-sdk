@@ -201,7 +201,7 @@ function guardian(invoke: GuardianRequestResult | (() => never)) {
 }
 
 const ENV = {
-  GUARDIAN_BASE_URL: "https://guardian-api.odingard.com",
+  GUARDIAN_BASE_URL: "https://guardian-api-azure.odingard.com",
   GUARDIAN_AGENT_CREDENTIAL: GUARDIAN_CREDENTIAL,
   GUARDIAN_CONNECTION_ID: CONNECTION,
   COMPOSIO_API_KEY: API_KEY,

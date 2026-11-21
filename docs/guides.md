@@ -356,7 +356,7 @@ In these Python integrations a `mode` other than `"in_process"` or `"remote"` ra
     "guardian": {
       "command": "guardian-mcp",
       "env": {
-        "GUARDIAN_BASE_URL": "https://guardian-api.odingard.com",
+        "GUARDIAN_BASE_URL": "https://guardian-api-azure.odingard.com",
         "GUARDIAN_AGENT_CREDENTIAL": "gak_…",
         "GUARDIAN_CONNECTION_ID": "pcn_…"
       }

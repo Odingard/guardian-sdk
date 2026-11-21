@@ -15,7 +15,7 @@ Every tool call an agent makes gets a deterministic
 `ALLOW` / `ASK` / `DENY` decision before it runs, and every execution produces a
 signed, tamper-evident decision record you can verify without an account. The record format is an open specification: [`greceipt.v1`](docs/spec/greceipt-v1.md).
 
-Hosted Guardian: [guardian.odingard.com](https://guardian.odingard.com) — free
+Hosted Guardian: [guardian-azure.odingard.com](https://guardian-azure.odingard.com) — free
 tier, no card required. [Pricing](https://odingard.com/guardian#gd-pricing): Free, Developer $99/month with 25,000 billable executions included, Enterprise: talk to us.
 
 ## Set up with your coding agent
@@ -64,7 +64,7 @@ import {
 } from "@odingard/guardian-sdk";
 
 const guardian = createGuardianClient({
-  baseUrl: "https://guardian-api.odingard.com",
+  baseUrl: "https://guardian-api-azure.odingard.com",
   credential: process.env.GUARDIAN_AGENT_CREDENTIAL!, // gak_… issued per agent
 });
 

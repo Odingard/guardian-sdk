@@ -22,7 +22,7 @@ import {
   verifyReceiptOffline,
 } from "./receipts.js";
 
-export const DEFAULT_BASE_URL = "https://guardian-api.odingard.com";
+export const DEFAULT_BASE_URL = "https://guardian-api-azure.odingard.com";
 
 /** How long the key download may take before the command gives up (exit 2). */
 export const KEY_FETCH_TIMEOUT_MS = 15_000;
