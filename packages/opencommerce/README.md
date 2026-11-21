@@ -107,7 +107,7 @@ Each checkout is proposed with these arguments, which the approval screen and th
 | `conversationId` | Agentcard's conversation                                                                                                                                                                    |
 | `step`           | `confirm`, `approve` or `next_step`                                                                                                                                                         |
 
-The purpose line reads like `Buy 2 × Energizer AA batteries, 8 pack at Amazon for up to $11.12 (opencommerce)`. No card data and no Agentcard secret is sent to Guardian or logged.
+The purpose line reads like `Buy 2 x Energizer AA batteries, 8 pack at Amazon for up to $11.12 (opencommerce)`. No card data and no Agentcard secret is sent to Guardian or logged. The purpose's fixed text is plain ASCII; item and store names are passed through as the store gives them.
 
 ## Set the rules in the Guardian console
 
