@@ -866,6 +866,10 @@ export function checkInstallIntegrity(
         if (source) {
           c.tree(source, "the Guardian plugin");
           c.ancestors(source, "the Guardian plugin");
+          // The path OpenClaw named may reach the source through a link in
+          // a folder the agent can change: check that path's folders too.
+          if (opts.sourceDir)
+            c.ancestors(opts.sourceDir, "the Guardian plugin");
           c.runtimeImports(source, real);
         }
       } else {

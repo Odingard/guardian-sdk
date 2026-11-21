@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  symlinkSync,
   chownSync,
   cpSync,
   mkdirSync,
@@ -184,6 +185,18 @@ describe("plugin copies (OpenClaw 2026.11.x)", () => {
     capture(fx, fx.pluginDir);
     const p = problems(fx, { sourceDir: dir });
     expect(p.join("\n")).toMatch(/looks like a start-up copy/);
+  });
+
+  it("blocks a named source reached through a link in a writable folder", () => {
+    fx = protectedInstall({ npm: true });
+    capture(fx, fx.pluginDir);
+    const open = join(fx.root, "open-folder");
+    mkdirSync(open, { recursive: true });
+    chmodSync(open, 0o777);
+    const link = join(open, "guardian");
+    symlinkSync(fx.pluginDir, link);
+    const p = problems(fx, { sourceDir: link });
+    expect(p.join("\n")).toContain(open);
   });
 
   it("blocks when two installs match and OpenClaw names no source", () => {
