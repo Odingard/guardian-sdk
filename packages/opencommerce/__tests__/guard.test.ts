@@ -359,7 +359,7 @@ describe("guardBuyTool", () => {
       ],
     });
     expect(String(sentToGuardian.purpose)).toContain(
-      "2 × Energizer AA batteries, 8 pack at Amazon",
+      "2 x Energizer AA batteries, 8 pack at Amazon",
     );
     expect(g.execute).toHaveBeenCalledTimes(1); // signed record
     // Redeemed before the confirm reached Agentcard.

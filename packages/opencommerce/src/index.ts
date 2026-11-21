@@ -324,7 +324,7 @@ function purposeOf(facts: CheckoutFacts): string {
   const lines = facts.carts
     .map(
       (cart) =>
-        `${cart.items.map((i) => `${i.qty} × ${i.name}`).join(", ")} at ${cart.store}`,
+        `${cart.items.map((i) => `${i.qty} x ${i.name}`).join(", ")} at ${cart.store}`,
     )
     .join("; ");
   return `Buy ${lines} for up to ${dollars(facts.amountMinor)} (opencommerce)`.slice(
