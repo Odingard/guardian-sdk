@@ -7,10 +7,11 @@
  *
  *   node verify-receipt.mjs [receipt.json] [baseUrl]
  *
- * With no baseUrl it uses the bundled copy of the published keys
- * (receipts/verification-keys.json). Pass a base URL, for example
- * https://guardian-api.odingard.com, to fetch the keys it publishes at
- * /v1/receipts/verification-keys instead.
+ * With no arguments it verifies the bundled sample against the bundled copy
+ * of its signing key (receipts/verification-keys.json), fully offline.
+ * For your own record, pass the file and optionally the base URL of the
+ * Guardian API that signed it (default https://guardian-api.odingard.com);
+ * the script fetches the keys published at /v1/receipts/verification-keys.
  */
 import { readFileSync } from "node:fs";
 import {
@@ -21,7 +22,9 @@ import {
 const file =
   process.argv[2] ??
   new URL("./receipts/sample.greceipt.json", import.meta.url);
-const baseUrl = process.argv[3];
+const baseUrl =
+  process.argv[3] ??
+  (process.argv[2] ? "https://guardian-api.odingard.com" : undefined);
 const receipt = JSON.parse(readFileSync(file, "utf8"));
 
 let keys;
