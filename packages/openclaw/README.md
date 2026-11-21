@@ -184,12 +184,16 @@ user can change any of:
   (or, if it cannot write there, `<os tmp>/openclaw-plugin-captures-…`) and
   imports that copy. The copy belongs to the Gateway user, so it cannot be
   made unwritable for it. When the plugin finds it is running from such a copy, it
-  compares every file of the copy, byte for byte (sha-256), with the
-  installs under `<state dir>/npm/projects/*/node_modules/@odingard/guardian-openclaw`
-  and `<state dir>/extensions/*` (and OpenClaw's `rootDir` for the plugin,
-  for a `--link` install), at every check. A copy that matches no install,
-  or that changes after start-up, blocks every call; the install it matches
-  gets all the checks of the plugin directory below. In this layout the
+  compares every file of the copy, byte for byte (sha-256), at every check,
+  with the install OpenClaw loads it from: the plugin's `rootDir` as
+  OpenClaw reports it (for a `--link` install, the linked directory). Only
+  if OpenClaw reports none does it search the installs under
+  `<state dir>/npm/projects/*/node_modules/@odingard/guardian-openclaw`
+  and `<state dir>/extensions/*`, and then exactly one may match. A copy
+  that does not match its source, a source that is writable (even if an
+  identical protected copy exists elsewhere), two matching installs with
+  no `rootDir`, or a copy that changes after start-up, blocks every call;
+  the source gets all the checks of the plugin directory below. In this layout the
   plugin may import nothing but Node.js builtins (Node.js would resolve
   anything else from the copy's own `node_modules`), which is what the
   bundled `dist` does;

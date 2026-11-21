@@ -41,9 +41,12 @@
  *   - OpenClaw 2026.11.x loads plugins from a copy it makes at start-up
  *     (`<state dir>/tmp/plugin-captures/…/openclaw-plugin-build-…`, owned by
  *     the Gateway user). When the plugin runs from such a copy, the copy is
- *     not tree-checked; instead it must match, file by file (sha-256), an
+ *     not tree-checked; instead it must match, file by file (sha-256), the
+ *     install it was made from at every check: the directory OpenClaw names
+ *     as the plugin's root (`api.rootDir`) when it names one, else the one
  *     install under `<config dir>/npm/projects` or `<config dir>/extensions`
- *     at every check, that install gets the plugin-directory checks above,
+ *     that matches (two matching installs block: either could be the
+ *     source). That install gets the plugin-directory checks above,
  *     and the plugin may import nothing but Node.js builtins (Node.js would
  *     resolve anything else from the writable copy);
  *   - every ancestor of those paths, lexical and real: a directory the user
@@ -92,11 +95,12 @@ export type InstallCheckOptions = Readonly<{
   /** The OS temp directory (OpenClaw's fallback capture place). Default: os.tmpdir(). */
   tmpDir?: string;
   /**
-   * Extra directories that may hold the install a plugin copy was made from
-   * (OpenClaw's `api.rootDir`, say). Each is used only if it is a protected
-   * tree and matches the copy byte for byte.
+   * The directory OpenClaw loads the plugin from (its `api.rootDir`: the
+   * install a start-up copy is made from). When given, a copy must match
+   * this exact directory, and this directory must be protected; no other
+   * install is accepted in its place.
    */
-  sourceDirs?: readonly string[];
+  sourceDir?: string;
 }>;
 
 export type InstallCheckResult =
@@ -293,14 +297,10 @@ export function isPluginCapture(
 /**
  * The installs a capture of the package `name` may have been made from:
  * `<config dir>/npm/projects/<project>/node_modules/<name>` (npm: and
- * npm-pack: installs), `<config dir>/extensions/<id>` (local installs) and
- * the `extra` directories, each only if its package.json names `name`.
+ * npm-pack: installs) and `<config dir>/extensions/<id>` (local installs),
+ * each only if its package.json names `name`.
  */
-export function captureSourceCandidates(
-  name: string,
-  env: Env,
-  extra: readonly string[] = [],
-): string[] {
+export function captureSourceCandidates(name: string, env: Env): string[] {
   const configDir = openclawConfigDir(env);
   const out: string[] = [];
   const projects = path.join(configDir, "npm", "projects");
@@ -316,7 +316,6 @@ export function captureSourceCandidates(
   }
   const extensions = path.join(configDir, "extensions");
   for (const id of list(extensions)) out.push(path.join(extensions, id));
-  out.push(...extra);
   const seen = new Set<string>();
   return out.filter((dir) => {
     let real: string;
@@ -753,6 +752,64 @@ const exists = (p: string) => {
 };
 
 /**
+ * The install the copy `capture` was made from, which is what OpenClaw
+ * loads the plugin from on every start. When OpenClaw names it
+ * (`sourceDir`), that exact directory has to match the copy: an identical
+ * copy elsewhere proves nothing about it. Only when no source is named are
+ * the protected install places searched, and then exactly one install may
+ * match: with two, either could be the source. Pushes a problem and returns
+ * undefined when the source is not settled.
+ */
+function captureSource(
+  capture: string,
+  env: Env,
+  opts: InstallCheckOptions,
+  problems: string[],
+): string | undefined {
+  const hint = opts.sourceDir;
+  if (hint && !isPluginCapture(hint, env, opts.tmpDir)) {
+    let real: string;
+    try {
+      real = fs.realpathSync(hint);
+    } catch {
+      problems.push(
+        `${hint} (OpenClaw loads the Guardian plugin from this directory, and it could not be checked)`,
+      );
+      return undefined;
+    }
+    const why = captureDifference(capture, real);
+    if (why !== undefined) {
+      problems.push(
+        `${capture} (OpenClaw loads the Guardian plugin from this copy of ${real}, and it does not match it: ${why})`,
+      );
+      return undefined;
+    }
+    return real;
+  }
+  const name = readPluginPackage(capture).name;
+  const candidates = name ? captureSourceCandidates(name, env) : [];
+  const matches = candidates.filter(
+    (dir) => captureDifference(capture, dir) === undefined,
+  );
+  if (matches.length === 1) return fs.realpathSync(matches[0]!);
+  const configDir = openclawConfigDir(env);
+  const places = `${path.join(configDir, "npm", "projects")} or ${path.join(configDir, "extensions")}`;
+  if (matches.length > 1) {
+    problems.push(
+      `${capture} (OpenClaw loads the Guardian plugin from this copy, and more than one install matches it, so which one OpenClaw loads from is not known: ${matches.join(", ")}; remove all but one)`,
+    );
+    return undefined;
+  }
+  const why = candidates.length
+    ? captureDifference(capture, candidates[0]!)
+    : "no install of the plugin found";
+  problems.push(
+    `${capture} (OpenClaw loads the Guardian plugin from this copy, and it does not match a protected install under ${places}: ${why})`,
+  );
+  return undefined;
+}
+
+/**
  * Can the OpenClaw process user change the Guardian plugin, the OpenClaw
  * config or the plugin directory? Never throws: a failure is a problem.
  */
@@ -788,21 +845,8 @@ export function checkInstallIntegrity(
         // OpenClaw 2026.11.x loads the plugin from a copy it owns. What has
         // to be protected is the install the copy was made from, and the
         // copy has to be that install, byte for byte, at every check.
-        const name = readPluginPackage(real).name;
-        const candidates = name
-          ? captureSourceCandidates(name, env, opts.sourceDirs)
-          : [];
-        const source = candidates.find(
-          (dir) => captureDifference(real, dir) === undefined,
-        );
-        if (!source) {
-          const why = candidates.length
-            ? captureDifference(real, candidates[0]!)
-            : "no install of the plugin found";
-          c.problems.push(
-            `${real} (OpenClaw loads the Guardian plugin from this copy, and it does not match a protected install under ${path.join(openclawConfigDir(env), "npm", "projects")} or ${path.join(openclawConfigDir(env), "extensions")}: ${why})`,
-          );
-        } else {
+        const source = captureSource(real, env, opts, c.problems);
+        if (source) {
           c.tree(source, "the Guardian plugin");
           c.ancestors(source, "the Guardian plugin");
           c.runtimeImports(source, real);

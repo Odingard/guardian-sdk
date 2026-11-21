@@ -8,7 +8,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { register } from "../src/index.js";
 
 import {
   captureDifference,
@@ -67,6 +69,16 @@ function capture(f: Fixture, source: string, base?: string): string {
   }
   chmodSync(join(dir, "dist", "index.js"), 0o600);
   (f.install as { pluginDir?: string }).pluginDir = dir;
+  return dir;
+}
+
+/** A Gateway-writable copy of the install (as a `--link` target might be). */
+function writableCopy(f: Fixture): string {
+  const dir = join(f.root, "linked", "guardian-openclaw");
+  mkdirSync(dir, { recursive: true });
+  cpSync(f.pluginDir, dir, { recursive: true });
+  chmodTree(join(f.root, "linked"));
+  chmodSync(join(dir, "dist", "index.js"), 0o666);
   return dir;
 }
 
@@ -133,15 +145,39 @@ describe("plugin copies (OpenClaw 2026.11.x)", () => {
     expect(problems(fx).join("\n")).toMatch(/no install of the plugin found/);
   });
 
-  it("uses a source hint (a --link install) only if it matches", () => {
+  it("checks OpenClaw's source (a --link install) and only if it matches", () => {
     fx = protectedInstall();
     const source = fx.pluginDir;
     const dir = capture(fx, source);
-    expect(problems(fx, { sourceDirs: [source] })).toEqual([]);
+    expect(problems(fx, { sourceDir: source })).toEqual([]);
     writeFileSync(join(dir, "README.md"), "changed");
-    expect(problems(fx, { sourceDirs: [source] }).join("\n")).toMatch(
-      /does not match/,
+    expect(problems(fx, { sourceDir: source }).join("\n")).toMatch(
+      /does not match it/,
     );
+  });
+
+  it("passes when OpenClaw's source is the protected install", () => {
+    fx = protectedInstall({ npm: true });
+    capture(fx, fx.pluginDir);
+    expect(problems(fx, { sourceDir: fx.pluginDir })).toEqual([]);
+  });
+
+  it("blocks a writable --link source even if a protected install is identical", () => {
+    fx = protectedInstall({ npm: true });
+    const linked = writableCopy(fx);
+    capture(fx, fx.pluginDir);
+    const p = problems(fx, { sourceDir: linked });
+    expect(p.length).toBeGreaterThan(0);
+    expect(p.join("\n")).toContain(linked);
+  });
+
+  it("blocks when two installs match and OpenClaw names no source", () => {
+    fx = protectedInstall({ npm: true });
+    const ext = join(fx.extensions, "guardian");
+    cpSync(fx.pluginDir, ext, { recursive: true });
+    chmodTree(fx.root);
+    capture(fx, fx.pluginDir);
+    expect(problems(fx).join("\n")).toMatch(/more than one install matches/);
   });
 
   it("blocks when the install the copy was made from is writable", () => {
@@ -194,5 +230,45 @@ describe("plugin copies (OpenClaw 2026.11.x)", () => {
     expect(problems(fx)).toEqual([]);
     chmodSync(join(fx.pluginDir, "dist", "index.js"), 0o666);
     expect(problems(fx)).toContain(join(fx.pluginDir, "dist", "index.js"));
+  });
+});
+
+describe("register() on OpenClaw 2026.11.x", () => {
+  const run = async (f: Fixture, rootDir: string) => {
+    const on = vi.fn();
+    const warn = vi.fn();
+    register(
+      { id: "guardian", config: {}, rootDir, logger: { warn }, on },
+      {
+        cwd: f.cwd,
+        env: { ...f.install.env, GUARDIAN_AGENT_CREDENTIAL: "" },
+        slot: {},
+        install: f.install,
+      },
+    );
+    const handler = on.mock.calls[0]![1] as (
+      e: unknown,
+      c: unknown,
+    ) => Promise<{ block?: boolean; blockReason?: string } | undefined>;
+    return handler({ toolName: "exec", params: { command: "ls" } }, {});
+  };
+
+  it("does not block the first call on the install check when rootDir is the protected install", async () => {
+    fx = protectedInstall({ npm: true });
+    capture(fx, fx.pluginDir);
+    const r = await run(fx, fx.pluginDir);
+    // Not configured, so it blocks, but not because of the install.
+    expect(r?.blockReason).toMatch(/not configured|credential/i);
+    expect(r?.blockReason ?? "").not.toMatch(/install is not protected/);
+  });
+
+  it("blocks the first call when rootDir is a writable copy", async () => {
+    fx = protectedInstall({ npm: true });
+    const linked = writableCopy(fx);
+    capture(fx, fx.pluginDir);
+    const r = await run(fx, linked);
+    expect(r?.block).toBe(true);
+    expect(r?.blockReason).toMatch(/install is not protected/);
+    expect(r?.blockReason).toContain(linked);
   });
 });
