@@ -63,7 +63,7 @@ const MUTATIONS = [
   ["gac1", "It starts with `gak_`.", "It starts with `gac1.`.", /gac1/],
   ["con_", "export GUARDIAN_CONNECTION_ID=pcn_...", "export GUARDIAN_CONNECTION_ID=con_...", /con_/],
   ["a different canonical URL", "canonical: https://odingard.com/guardian/skill.md", "canonical: https://odingard.com/skill.md", /canonical is/],
-  ["a check-copy at another tag", "guardian-sdk/skill-v1.0.15/skill.md", "guardian-sdk/main/skill.md", /check-copy is/],
+  ["a check-copy at another tag", "guardian-sdk/skill-v1.0.16/skill.md", "guardian-sdk/main/skill.md", /check-copy is/],
   ["an environment variable no package reads", "export GUARDIAN_BASE_URL=https://guardian-api.odingard.com", "export GUARDIAN_MADE_UP=1\nexport GUARDIAN_BASE_URL=https://guardian-api.odingard.com", /GUARDIAN_MADE_UP is not read/],
   ["a hook subcommand that does not exist", "Do not run `guardian-hook setup`", "Do not run `guardian-hook install`", /guardian-hook install is not a subcommand/],
   ["a hook tool name not in HOOK_TOOLS", "`shell_deploy`, `shell_destructive`, `git_push`, `shell_session`)", "`shell_deploy`, `shell_destructive`, `git_push`, `shell_interactive`)", /shell_interactive is not in HOOK_TOOLS/],
@@ -73,7 +73,7 @@ const MUTATIONS = [
   ["a proof status", "### 4C. Codex CLI\n", "### 4C. Codex CLI — proven on production\n", /line \d+: a proof status belongs in internal tracking/],
   ["a test status", "### 4D. DeepSeek Harness\n", "### 4D. DeepSeek Harness — tested locally against a real Guardian\n", /line \d+: a test status belongs in internal tracking/],
   ["a staging host", "export GUARDIAN_BASE_URL=https://guardian-api.odingard.com", "export GUARDIAN_BASE_URL=https://guardian.staging.example.test", /line \d+: staging belongs in internal tracking/],
-  ["a version with no changelog entry", "guardian-skill-version: 1.0.15\n", "guardian-skill-version: 9.9.9\n", /no entry for 9\.9\.9/],
+  ["a version with no changelog entry", "guardian-skill-version: 1.0.16\n", "guardian-skill-version: 9.9.9\n", /no entry for 9\.9\.9/],
   ["a file whose hash is not in the changelog", "## 9. Finish", "## 9. Finish\n\nOne more line.", /does not record the SHA-256/],
   ["HTML in the body", "## 9. Finish", "<script>alert(1)</script>\n\n## 9. Finish", /HTML outside code/],
 ];
