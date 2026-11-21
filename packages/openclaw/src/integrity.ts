@@ -868,8 +868,19 @@ export function checkInstallIntegrity(
           c.ancestors(source, "the Guardian plugin");
           // The path OpenClaw named may reach the source through a link in
           // a folder the agent can change: check that path's folders too.
-          if (opts.sourceDir)
+          // (Not when the named path is this copy itself: then no separate
+          // source was named, and the copy's own folders belong to OpenClaw.)
+          let namedIsCopy = false;
+          if (opts.sourceDir) {
+            try {
+              namedIsCopy = fs.realpathSync(opts.sourceDir) === real;
+            } catch {
+              namedIsCopy = false;
+            }
+          }
+          if (opts.sourceDir && !namedIsCopy) {
             c.ancestors(opts.sourceDir, "the Guardian plugin");
+          }
           c.runtimeImports(source, real);
         }
       } else {

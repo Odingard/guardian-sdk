@@ -7,7 +7,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -197,6 +197,13 @@ describe("plugin copies (OpenClaw 2026.11.x)", () => {
     symlinkSync(fx.pluginDir, link);
     const p = problems(fx, { sourceDir: link });
     expect(p.join("\n")).toContain(open);
+  });
+
+  it("passes when OpenClaw names the copy itself and one protected install matches", () => {
+    fx = protectedInstall({ npm: true });
+    const dir = capture(fx, fx.pluginDir);
+    chmodSync(dirname(dir), 0o777);
+    expect(problems(fx, { sourceDir: dir })).toEqual([]);
   });
 
   it("blocks when two installs match and OpenClaw names no source", () => {
