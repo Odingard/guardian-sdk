@@ -688,6 +688,64 @@ async function readCheckout(
   return facts;
 }
 
+/** The identity of a line: what is bought, not what it costs. */
+function lineKey(line: CheckoutLine): string {
+  return JSON.stringify([line.name, line.qty, line.variant]);
+}
+
+/**
+ * Why the carts re-read after the decision are not the ones Guardian decided
+ * on, in plain words, or `undefined` when they still are. The conversation,
+ * currency, carts (hash, store, merchant) and items (name, quantity, variant)
+ * must be the same; the order carts are listed in does not matter. Prices may
+ * move only down to or within what was decided: no cart may now charge more
+ * than its approved maximum, nor the whole checkout more than the approved
+ * amount.
+ */
+function cartChange(
+  approved: CheckoutFacts,
+  now: CheckoutFacts,
+): string | undefined {
+  if (
+    now.conversationId !== approved.conversationId ||
+    now.confirms !== approved.confirms ||
+    now.step !== approved.step
+  ) {
+    return "it is no longer the same checkout";
+  }
+  if (now.currency !== approved.currency) return "the currency changed";
+  const before = new Map(approved.carts.map((c) => [c.cartHash, c]));
+  if (
+    before.size !== approved.carts.length ||
+    now.carts.length !== approved.carts.length ||
+    new Set(now.carts.map((c) => c.cartHash)).size !== now.carts.length ||
+    now.carts.some((c) => !before.has(c.cartHash))
+  ) {
+    return "a cart was added or removed";
+  }
+  for (const cart of now.carts) {
+    const was = before.get(cart.cartHash) as CheckoutCart;
+    if (cart.store !== was.store || cart.merchant !== was.merchant) {
+      return `the store of the cart at ${was.store} changed`;
+    }
+    const a = cart.items.map(lineKey).sort();
+    const b = was.items.map(lineKey).sort();
+    if (a.length !== b.length || a.some((key, i) => key !== b[i])) {
+      return `an item in the cart at ${was.store} changed`;
+    }
+    if (cart.totalIsEstimate && !was.totalIsEstimate) {
+      return `the price at ${was.store} is now only an estimate`;
+    }
+    if (!(cart.maxChargeCents <= was.maxChargeCents)) {
+      return `the price at ${was.store} went above the ${dollars(was.maxChargeCents)} you approved`;
+    }
+  }
+  if (!(now.amountMinor <= approved.amountMinor)) {
+    return `the price went above the ${dollars(approved.amountMinor)} you approved`;
+  }
+  return undefined;
+}
+
 /** Stable JSON of plain data, keys sorted, for comparing arguments. */
 function canonical(value: unknown, depth = 0): string {
   if (depth > 32) throw new TypeError("too deep");
@@ -1024,13 +1082,16 @@ async function checkout(
 
   // The carts must still be the ones Guardian decided on.
   const again = await readCheckout(current, agentcard, body, step);
-  if (JSON.stringify(again) !== JSON.stringify(facts)) {
+  const changed = cartChange(facts, again);
+  if (changed) {
     throw block(
       "CART_CHANGED",
-      "the cart changed after Guardian decided. Show the shopper the new cart and confirm again.",
+      `the cart changed after Guardian decided: ${changed}. Show the shopper the new cart and confirm again.`,
       { requestId },
     );
   }
+  // From here on `facts`, the arguments Guardian decided on, stay what the
+  // signed record is checked against; the re-read only had to fit inside them.
 
   // After a person approved: the portable signed record must name this
   // request, tool, connection and exactly these arguments.
