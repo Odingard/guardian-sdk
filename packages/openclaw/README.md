@@ -27,6 +27,11 @@ blocked until the install is protected: see
 OpenClaw itself must write is not covered: see
 [What is not governed](#what-is-not-governed).
 
+**Supported OpenClaw versions:** 2026.7.1 and later; tested on 2026.7.1
+and 2026.11.6. On 2026.11.6, `openclaw plugins install npm-pack:…` needs
+`--force --accept-capabilities` to get past its consent prompt when run
+without a terminal.
+
 The OpenClaw plugin does not pin the contents of files its tools read or patch. The path is bound; the file's bytes are not.
 
 ## How it works
@@ -172,6 +177,26 @@ user can change any of:
   a local directory or `.tgz` (`openclaw plugins install ./dir`) is copied to
   `<state dir>/extensions/guardian`; `--link` loads it from the source
   directory itself, which then must be protected the same way;
+- **OpenClaw 2026.11.x: the copy OpenClaw loads.** OpenClaw 2026.11.6 does
+  not import the plugin from its install directory: at start-up (and on a
+  plugin reload) it copies the install to
+  `<state dir>/tmp/plugin-captures/<id>/captures/…/openclaw-plugin-build-…/`
+  (or, if it cannot write there, `<os tmp>/openclaw-plugin-captures-…`) and
+  imports that copy. The copy belongs to the Gateway user, so it cannot be
+  made unwritable for it. When the plugin finds it is running from such a copy, it
+  compares every file of the copy, byte for byte (sha-256), at every check,
+  with the install OpenClaw loads it from: the plugin's `rootDir` as
+  OpenClaw reports it (for a `--link` install, the linked directory). Only
+  if OpenClaw reports none does it search the installs under
+  `<state dir>/npm/projects/*/node_modules/@odingard/guardian-openclaw`
+  and `<state dir>/extensions/*`, and then exactly one may match. A copy
+  that does not match its source, a source that is writable (even if an
+  identical protected copy exists elsewhere), two matching installs with
+  no `rootDir`, or a copy that changes after start-up, blocks every call;
+  the source gets all the checks of the plugin directory below. In this layout the
+  plugin may import nothing but Node.js builtins (Node.js would resolve
+  anything else from the copy's own `node_modules`), which is what the
+  bundled `dist` does;
 - every package the plugin imports at runtime. There should be none: `dist`
   is bundled (the Guardian SDK and zod included) and imports only Node.js
   builtins, so the plugin directory is self-contained. As a second line, the
@@ -312,7 +337,24 @@ state directory, creating a hook in `hooks/` or a catalog in `mpm/` or
 `$S/.env`, `gateway.env`, `/data/.npmrc` or a `.env` in the working
 directory. The upkeep below was run the same way, with a Gateway-user
 `.npmrc` naming another registry in place. It has not been run on a hosted
-deployment.
+deployment. The same recipe, with the start step above, was run on OpenClaw
+2026.11.6 and 2026.7.1 (Gateway as an unprivileged user, plugin installed
+with `npm-pack:`): on both, the check passed and calls reached Guardian;
+on 2026.11.6, changing the loaded copy as the Gateway user, or making the
+installed `dist/index.js` the Gateway user's, blocked the next call.
+
+**OpenClaw 2026.11.x: one more step at every start.** The copy OpenClaw
+loads the plugin from is written by the Gateway user at start-up, so a
+process running as that user while the Gateway starts (for example one the
+agent left running in the background before a restart) could change the
+copy before OpenClaw imports it. The plugin checks the copy against the
+protected install at every check, but code that replaced it before import
+would not run that check. So stop every process of the Gateway user before
+you start the Gateway (`pkill -u node` and wait until `pgrep -u node` is
+empty, or restart the container; a systemd service with the default
+`KillMode=control-group` does this on restart), and do not give the Gateway
+user a shell or a scheduler (cron, `systemd --user`, `at`) that outlives the
+Gateway. Nothing in the state directory needs another owner for this.
 
 Then restart the agent. The Gateway log must not say "the install is not
 protected", and an everyday call (`ls`) must reach Guardian. OpenClaw itself
@@ -693,7 +735,11 @@ Say this plainly to anyone relying on it.
     in the `installed_plugin_index` table to a directory the agent made made
     `openclaw plugins inspect guardian --runtime` load that copy instead
     (status `loaded`, no `before_tool_call` hook), with the real plugin
-    untouched. So an agent that can write the database and get the Gateway
+    untouched. OpenClaw 2026.11.6 keeps the same index (with the install
+    records) in that database's `config_machine_state` table, key
+    `plugins.installedIndex`, so the same applies there; the copy check above
+    compares with the protected installs, not with this index, so it holds
+    while the Gateway runs, but a restart reads the index. So an agent that can write the database and get the Gateway
     restarted can swap Guardian out, and the check (running inside the
     plugin) cannot see it. **Mitigation:** do not let the agent's tools run
     as the user that owns the state directory: run `exec` and the file tools

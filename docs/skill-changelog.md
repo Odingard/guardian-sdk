@@ -10,6 +10,13 @@ sha256sum skill.md
 
 The hash must equal the one recorded below for its version.
 
+## 1.0.16
+
+- Date: 2026-11-21
+- SHA-256: `b24fdb1dd2cd27caf86a47a1f523d3b73845cf6f9095668d94d7d602ae8f48d9`
+- Pins: `@odingard/guardian-openclaw` 0.1.4. The other pins are unchanged from 1.0.15.
+- Pins the OpenClaw plugin release that works on OpenClaw 2026.11.x with the install check on. 4D points at the tag `skill-v1.0.16`. No other change.
+
 ## 1.0.15
 
 - Date: 2026-11-18

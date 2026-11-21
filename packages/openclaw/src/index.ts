@@ -74,7 +74,10 @@ export {
   type InstallCheckOptions,
   type InstallCheckResult,
 } from "./integrity.js";
-import { workspaceDotEnvGuardianKeys } from "./integrity.js";
+import {
+  type InstallCheckOptions,
+  workspaceDotEnvGuardianKeys,
+} from "./integrity.js";
 
 /**
  * The credential is read from the Gateway's environment once and then
@@ -163,6 +166,8 @@ export function effectiveHookTimeoutMs(
 /** The subset of OpenClaw's plugin API this plugin uses. */
 export type OpenClawPluginApiLike = {
   id?: string;
+  /** The plugin's install directory (OpenClaw 2026.11.x; the copy it loads is elsewhere). */
+  rootDir?: string;
   config?: unknown;
   pluginConfig?: Record<string, unknown>;
   logger?: Logger;
@@ -181,6 +186,8 @@ export function register(
     env?: Record<string, string | undefined>;
     /** Tests: the per-process credential slot (default `globalThis`). */
     slot?: Record<symbol, unknown>;
+    /** Tests: install-check options (the plugin directory, say). */
+    install?: InstallCheckOptions;
   } = {},
 ): void {
   if (typeof api?.on !== "function") return;
@@ -202,7 +209,15 @@ export function register(
     config: (api.pluginConfig ?? {}) as GuardianPluginConfig,
     env,
     hookTimeoutMs,
-    install: { cwd },
+    install: {
+      cwd,
+      ...host.install,
+      // Where OpenClaw loads the plugin from: the copy must match exactly
+      // this directory, and it must be protected.
+      ...(typeof api.rootDir === "string" && api.rootDir
+        ? { sourceDir: api.rootDir }
+        : {}),
+    },
     ...(api.logger ? { logger: api.logger } : {}),
   });
   api.on("before_tool_call", handler, {
