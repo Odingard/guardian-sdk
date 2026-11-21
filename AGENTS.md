@@ -26,6 +26,7 @@ Install the narrowest adapter that matches the user's stack:
 | Mastra (TypeScript)                     | `@odingard/guardian-mastra` (unreleased: not on npm yet; build it from this repository, `packages/mastra`) |
 | x402 payments                           | `npm i @odingard/guardian-x402`                                                                        |
 | AP2 payments                            | `npm i @odingard/guardian-ap2`                                                                         |
+| Agentcard opencommerce buy tool         | `@odingard/guardian-opencommerce` (unreleased: not on npm yet; build it from this repository, `packages/opencommerce`) |
 | OpenClaw                                | `npm i @odingard/guardian-openclaw`                                                                    |
 | Steel browser checkout                  | `npm i @odingard/guardian-steel`                                                                       |
 | Custom JS/TS agent                      | `npm i @odingard/guardian-sdk`                                                                         |

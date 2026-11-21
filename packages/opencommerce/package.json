@@ -1,0 +1,60 @@
+{
+  "name": "@odingard/guardian-opencommerce",
+  "version": "0.1.0",
+  "description": "Guardian for opencommerce: Guardian decides each checkout the Agentcard buy tool would place (ALLOW/ASK/DENY on the exact cart, store and amount) before the confirm reaches Agentcard.",
+  "license": "Apache-2.0",
+  "author": "Odingard Security LLC",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-dts/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-dts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:@odingard/guardian-sdk --external:@agent-cards/commerce-sdk --outdir=dist && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "peerDependencies": {
+    "@agent-cards/commerce-sdk": ">=0.31.3 <0.32.0",
+    "@odingard/guardian-sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@agent-cards/commerce-sdk": "0.31.3",
+    "@odingard/guardian-sdk": "^0.6.0",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "guardian",
+    "opencommerce",
+    "agentcard",
+    "agent-commerce",
+    "ai-agents",
+    "authorization",
+    "human-in-the-loop",
+    "agent-payments"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Odingard/guardian-sdk.git",
+    "directory": "packages/opencommerce"
+  },
+  "homepage": "https://odingard.com/guardian"
+}
