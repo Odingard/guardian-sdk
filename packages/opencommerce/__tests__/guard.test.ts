@@ -205,6 +205,10 @@ const deny = (code = "POLICY_DENIED", id = "req_1"): Answer => ({
 function fakeGuardian(opts: {
   request: (invocation?: unknown) => Promise<Answer>;
   claims?: Answer[];
+  record?: (receipt: {
+    subject: Answer;
+    action: Answer & { materialParameters: Answer };
+  }) => void;
 }) {
   const claims = [...(opts.claims ?? [])];
   const request = vi.fn(opts.request);
@@ -223,15 +227,44 @@ function fakeGuardian(opts: {
   const receipts = vi.fn(
     async (): Promise<Answer> => ({ ok: true, receipts: [] }),
   );
+  // The signed record of the last request, as Guardian keeps it; `record` edits it.
+  const portableReceipt = vi.fn(async (requestId: string): Promise<Answer> => {
+    const calls = request.mock.calls;
+    const invocation = (calls[calls.length - 1]?.[0] ?? {}) as Answer;
+    const receipt = {
+      subject: { requestId },
+      action: {
+        requestId,
+        action: "tool.invoke",
+        materialParameters: {
+          toolName: invocation.toolName,
+          connectionId: invocation.connectionId,
+          arguments: JSON.parse(JSON.stringify(invocation.arguments ?? null)),
+        },
+      },
+      decision: { decision: "ASK" },
+      approval: { state: "approved" },
+    };
+    opts.record?.(receipt);
+    return { ok: true, receipt };
+  });
   const client = {
     request,
     claim,
     execute,
     withdraw,
     receipts,
-    portableReceipt: vi.fn(),
+    portableReceipt,
   } as unknown as GuardianClient;
-  return { client, request, claim, execute, withdraw, receipts };
+  return {
+    client,
+    request,
+    claim,
+    execute,
+    withdraw,
+    receipts,
+    portableReceipt,
+  };
 }
 
 const search: BuyToolInput = {
@@ -797,5 +830,129 @@ describe("guardBuyTool", () => {
     ).rejects.toMatchObject({ code: "UNGOVERNED_CALL" });
     expect(g.request).not.toHaveBeenCalled();
     expect(buy.sent).toHaveLength(0);
+  });
+
+  describe("after a person approved, the signed record", () => {
+    const approved = (record?: Parameters<typeof fakeGuardian>[0]["record"]) =>
+      fakeGuardian({
+        request: async () => ask(),
+        claims: [allow()],
+        ...(record ? { record } : {}),
+      });
+
+    it("matching: the confirm goes through, read before execute", async () => {
+      const g = approved();
+      const { buy, governed } = setup(g);
+      await governed.answer(search);
+      await governed.answer(yes);
+      expect(g.portableReceipt).toHaveBeenCalledWith("req_1");
+      expect(g.portableReceipt.mock.invocationCallOrder[0]).toBeLessThan(
+        g.execute.mock.invocationCallOrder[0]!,
+      );
+      expect(confirmsSent(buy.sent)).toBe(1);
+    });
+
+    it("naming other arguments: refused, nothing sent, not redeemed", async () => {
+      const g = approved((r) => {
+        (r.action.materialParameters.arguments as Answer).amountMinor = 1;
+      });
+      const { buy, governed } = setup(g);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "RECORD_MISMATCH",
+      });
+      expect(confirmsSent(buy.sent)).toBe(0);
+      expect(g.execute).not.toHaveBeenCalled();
+    });
+
+    it("naming another tool: refused", async () => {
+      const g = approved((r) => {
+        r.action.materialParameters.toolName = "other.tool";
+      });
+      const { buy, governed } = setup(g);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "RECORD_MISMATCH",
+      });
+      expect(confirmsSent(buy.sent)).toBe(0);
+    });
+
+    it("naming another connection: refused", async () => {
+      const g = approved((r) => {
+        r.action.materialParameters.connectionId = "con_other";
+      });
+      const { buy, governed } = setup(g);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "RECORD_MISMATCH",
+      });
+      expect(confirmsSent(buy.sent)).toBe(0);
+    });
+
+    it("naming another request: refused", async () => {
+      const g = approved((r) => {
+        r.subject.requestId = "req_old";
+      });
+      const { buy, governed } = setup(g);
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "RECORD_MISMATCH",
+      });
+      expect(confirmsSent(buy.sent)).toBe(0);
+    });
+
+    it("that does not verify against the given keys: refused", async () => {
+      const g = approved();
+      const { buy, governed } = setup(g, {
+        receiptVerificationKeys: { keys: [] },
+      });
+      await governed.answer(search);
+      await expect(governed.answer(yes)).rejects.toMatchObject({
+        code: "RECORD_MISMATCH",
+      });
+      expect(confirmsSent(buy.sent)).toBe(0);
+      expect(g.execute).not.toHaveBeenCalled();
+    });
+
+    it("is not read on ALLOW", async () => {
+      const g = fakeGuardian({ request: async () => allow() });
+      const { governed } = setup(g);
+      await governed.answer(search);
+      await governed.answer(yes);
+      expect(g.portableReceipt).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a tool built on another Agentcard client fails closed (UNGOVERNED_CLIENT)", async () => {
+    const g = fakeGuardian({ request: async () => allow() });
+    const shown = { cart: cart(1112, "h_1") };
+    // The tool sends through its own client; another one is passed as agentcard.
+    const own = fakeAgentcard(shown);
+    const buy = fakeBuy(shown, own);
+    const other = fakeAgentcard(shown);
+    const governed = guardBuyTool(buy.tool, {
+      client: g.client,
+      connectionId: "con_1",
+      agentcard: other.agentcard,
+      sleep: noSleep,
+    });
+    await governed.answer(search);
+    await expect(governed.answer(yes)).rejects.toMatchObject({
+      code: "UNGOVERNED_CLIENT",
+    });
+    const view = JSON.parse(await governed.run(yes));
+    expect(view.guardian.code).toBe("UNGOVERNED_CLIENT");
+    expect(g.request).not.toHaveBeenCalled();
+  });
+
+  it("a result showing an order placed with no governed payment fails closed", async () => {
+    const g = fakeGuardian({ request: async () => allow() });
+    const { buy, governed } = setup(g);
+    buy.answer.mockImplementationOnce(async () =>
+      result({ status: "order_placed", order_id: "ord_1" }),
+    );
+    await expect(governed.answer(search)).rejects.toMatchObject({
+      code: "UNGOVERNED_CLIENT",
+    });
   });
 });

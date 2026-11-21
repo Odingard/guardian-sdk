@@ -27,6 +27,7 @@ import {
   GUARDIAN_MAX_REQUEST_TTL_MS,
   type GuardianClient,
   type GuardianInvocation,
+  verifyReceiptOffline,
 } from "@odingard/guardian-sdk";
 
 /** The Guardian tool name a checkout is proposed under, unless `toolName` says otherwise. */
@@ -98,6 +99,11 @@ export type GuardianOpencommerceOptions = Readonly<{
   pollIntervalMs?: number;
   /** The longest each call to Guardian or the conversation read may take. Default 15 s. */
   callTimeoutMs?: number;
+  /**
+   * Receipt verification keys (`fetchReceiptVerificationKeys`). When given,
+   * the signed record of a person's approval must verify against them.
+   */
+  receiptVerificationKeys?: unknown;
   /** Each Guardian decision on a checkout (no card data, no Agentcard secrets). */
   onDecision?: (event: CheckoutDecisionEvent) => void;
   /** For tests. */
@@ -201,13 +207,20 @@ export function blockedForModel(error: GuardianPurchaseBlocked): string {
 type AnyTool = BuyTool | BuyToolTurn;
 
 /** What the wrapper last saw on the table, shared by the tool and every turn it opens. */
-type Table = { carts: BuyCart[]; conversationId: string | null };
+type Table = {
+  carts: BuyCart[];
+  conversationId: string | null;
+  /** True once a paying request went through the gate for this tool. */
+  paid: boolean;
+};
 
 /** The tool call a request to Agentcard is made inside. */
 type Scope = Readonly<{
   options: GuardianOpencommerceOptions;
   table: Table;
   step: CheckoutFacts["step"];
+  /** Set when a paying request went through the gate in this call. */
+  run: { paid: boolean };
 }>;
 
 const scope = new AsyncLocalStorage<Scope>();
@@ -354,9 +367,11 @@ function installGate(agentcard: GuardedAgentcard): void {
           "a purchase request reached the Agentcard client outside the governed buy tool, so it was not sent.",
       });
     }
-    const turn = await checkout(current, agentcard, body, () =>
-      original(...args),
-    );
+    const turn = await checkout(current, agentcard, body, () => {
+      current.run.paid = true;
+      current.table.paid = true;
+      return original(...args);
+    });
     observe(current.table, turn);
     return turn;
   };
@@ -414,7 +429,45 @@ export function guardBuyTool<T extends AnyTool>(
     );
   }
   installGate(agentcard);
-  return wrap(buy, options, { carts: [], conversationId: null });
+  return wrap(buy, options, { carts: [], conversationId: null, paid: false });
+}
+
+const ungoverned = () =>
+  new GuardianPurchaseBlocked({
+    code: "UNGOVERNED_CLIENT",
+    detail:
+      "Agentcard reports a purchase that did not go through Guardian. The buy tool was built on another Agentcard client than the one passed as agentcard; build it with buyTool({ agentcard }) and pass that same client.",
+  });
+
+/**
+ * Fail closed when the tool's own client is not the gated one: a result
+ * that says a confirm was sent while no paying request went through the
+ * gate in this call, or an order placed while none ever did for this tool.
+ */
+function checkGoverned(
+  table: Table,
+  run: { paid: boolean },
+  result: unknown,
+): void {
+  if (!isRecord(result) || run.paid) return;
+  if (result.confirm_sent === true) throw ungoverned();
+  const placed =
+    (typeof result.order_id === "string" && result.order_id !== "") ||
+    result.status === "placing" ||
+    result.status === "order_placed";
+  if (placed && !table.paid) throw ungoverned();
+}
+
+/** Runs `out`'s result (awaited when it is a promise) through checkGoverned. */
+function governed<R>(table: Table, run: { paid: boolean }, out: R): R {
+  if (out instanceof Promise) {
+    return out.then((value: unknown) => {
+      checkGoverned(table, run, value);
+      return value;
+    }) as R;
+  }
+  checkGoverned(table, run, out);
+  return out;
 }
 
 const isTool = (value: unknown): value is AnyTool =>
@@ -427,8 +480,10 @@ function wrap<T extends AnyTool>(
   defaultStep: CheckoutFacts["step"] = "confirm",
 ): T {
   const original = buy as unknown as Record<string, unknown> & BuyTool;
-  const inScope = <R>(step: CheckoutFacts["step"], fn: () => R): R =>
-    scope.run({ options, table, step }, fn);
+  const inScope = <R>(step: CheckoutFacts["step"], fn: () => R): R => {
+    const run = { paid: false };
+    return governed(table, run, scope.run({ options, table, step, run }, fn));
+  };
   const answerOf = original.answer.bind(original) as (
     input: BuyToolInput,
   ) => Promise<BuyToolResult>;
@@ -607,6 +662,106 @@ async function readCheckout(
     if (cents > facts.amountMinor) return { ...facts, amountMinor: cents };
   }
   return facts;
+}
+
+/** Stable JSON of plain data, keys sorted, for comparing arguments. */
+function canonical(value: unknown, depth = 0): string {
+  if (depth > 32) throw new TypeError("too deep");
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("non-finite number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonical(v, depth + 1)).join(",")}]`;
+  }
+  if (!isRecord(value)) throw new TypeError("not plain data");
+  return `{${Object.keys(value)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${canonical(value[k], depth + 1)}`)
+    .join(",")}}`;
+}
+
+function sameData(a: unknown, b: unknown): boolean {
+  try {
+    return canonical(a) === canonical(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The portable signed record must show a person approved this exact
+ * request, on this tool and connection, with these exact arguments. A
+ * record for an earlier request (a replayed approval) or other terms is
+ * refused, and so is one that does not verify against the given keys.
+ */
+async function checkApprovedRecord(
+  options: GuardianOpencommerceOptions,
+  requestId: string,
+  toolName: string,
+  facts: CheckoutFacts,
+  refuse: (detail: string) => GuardianPurchaseBlocked,
+): Promise<void> {
+  const fail = (why: string) =>
+    refuse(`the signed record of the approval does not match (${why}).`);
+  let got: unknown;
+  try {
+    got = await withTimeout(
+      () => options.client.portableReceipt(requestId),
+      options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
+    );
+  } catch {
+    throw fail("no record");
+  }
+  if (!isRecord(got) || got.ok !== true) throw fail("no record");
+  const receipt = got.receipt;
+  if (options.receiptVerificationKeys !== undefined) {
+    let valid = false;
+    try {
+      valid =
+        verifyReceiptOffline(
+          receipt as Parameters<typeof verifyReceiptOffline>[0],
+          options.receiptVerificationKeys as Parameters<
+            typeof verifyReceiptOffline
+          >[1],
+        ).valid === true;
+    } catch {
+      valid = false;
+    }
+    if (!valid) throw fail("record does not verify");
+  }
+  if (!isRecord(receipt)) throw fail("malformed record");
+  const { subject, action, decision, approval } = receipt;
+  if (!isRecord(subject) || subject.requestId !== requestId) {
+    throw fail("other request");
+  }
+  if (!isRecord(action) || action.requestId !== requestId) {
+    throw fail("other request");
+  }
+  if (action.action !== "tool.invoke") throw fail("action");
+  const params = action.materialParameters;
+  const args = JSON.parse(JSON.stringify(facts)) as unknown;
+  if (
+    !isRecord(params) ||
+    params.toolName !== toolName ||
+    params.connectionId !== options.connectionId ||
+    !sameData(params.arguments, args)
+  ) {
+    throw fail("terms differ");
+  }
+  if (!isRecord(decision) || decision.decision !== "ASK") {
+    throw fail("not an ASK");
+  }
+  if (
+    !isRecord(approval) ||
+    (approval.state !== "approved" && approval.state !== "consumed")
+  ) {
+    throw fail("not approved");
+  }
 }
 
 /** True when an execute failure may hide a redemption. Same rule as the SDK's triad. */
@@ -843,6 +998,14 @@ async function checkout(
       "CART_CHANGED",
       "the cart changed after Guardian decided. Show the shopper the new cart and confirm again.",
       { requestId },
+    );
+  }
+
+  // After a person approved: the portable signed record must name this
+  // request, tool, connection and exactly these arguments.
+  if (viaAsk) {
+    await checkApprovedRecord(options, requestId, toolName, facts, (detail) =>
+      block("RECORD_MISMATCH", detail, { requestId }),
     );
   }
 
