@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const cwd = fileURLToPath(new URL(".", import.meta.url));
+const runtimeEnv = new Set([
+  "PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
+]);
 const env = Object.fromEntries(
-  Object.entries(process.env).filter(([name]) =>
-    !name.startsWith("GUARDIAN_") && !name.startsWith("REMOTE_MCP_"),
-  ),
+  Object.entries(process.env).filter(([name]) => runtimeEnv.has(name.toUpperCase())),
 );
 const node = process.execPath;
 const python = process.env.PYTHON || "python3";

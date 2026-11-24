@@ -29,7 +29,8 @@ PYTHON="$PWD/.venv/bin/python" node examples/smoke.mjs
 ```
 
 The smoke command runs the published, no-account demos and reports each exit
-status. It ignores live Guardian and remote MCP settings. The x402 pins match
+status. Child processes receive only runtime environment settings, not
+Guardian, Stripe or other provider credentials. The x402 pins match
 the peers declared by published `@odingard/guardian-x402@0.1.1`; the checkout
 uses x402 2.31 instead. Review those pins when the adapter releases.
 
