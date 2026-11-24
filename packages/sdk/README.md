@@ -29,21 +29,29 @@ Requires Node.js >= 22 (offline verification uses `node:crypto` Ed25519; browser
 
 ## Quickstart
 
+Set `GUARDIAN_AGENT_CREDENTIAL` and `GUARDIAN_CONNECTION_ID` for a Guardian
+connection where this agent may request `refund_order`.
+
 ```ts
 import {
   classifyRequestResult,
   createGuardianClient,
 } from "@odingard/guardian-sdk";
 
+const { GUARDIAN_AGENT_CREDENTIAL, GUARDIAN_CONNECTION_ID } = process.env;
+if (!GUARDIAN_AGENT_CREDENTIAL || !GUARDIAN_CONNECTION_ID) {
+  throw new Error("Set GUARDIAN_AGENT_CREDENTIAL and GUARDIAN_CONNECTION_ID first.");
+}
+
 const guardian = createGuardianClient({
   baseUrl: "https://guardian-api.odingard.com",
-  credential: process.env.GUARDIAN_AGENT_CREDENTIAL!, // gak_… issued per agent
+  credential: GUARDIAN_AGENT_CREDENTIAL,
 });
 
 // 1. The agent asks for a capability — it never holds real credentials.
 const result = await guardian.request({
   action: "tool.invoke",
-  connectionId: "pcn_…",
+  connectionId: GUARDIAN_CONNECTION_ID,
   toolName: "refund_order",
   arguments: { orderId: "ord_123" },
 });

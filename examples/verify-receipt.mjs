@@ -29,7 +29,7 @@ const receipt = JSON.parse(readFileSync(file, "utf8"));
 
 let keys;
 if (baseUrl) {
-  const fetched = await fetchReceiptVerificationKeys(baseUrl);
+  const fetched = await fetchReceiptVerificationKeys(baseUrl, { forReceipt: receipt });
   if (!fetched.ok) {
     console.error(`could not fetch published keys: ${fetched.reasonCode}`);
     process.exit(1);
@@ -51,8 +51,6 @@ console.log("[offline] receipt:", JSON.stringify(result));
 
 const tampered = structuredClone(receipt);
 tampered.action.purpose = `${tampered.action.purpose} (edited)`;
-console.log(
-  "[offline] tampered:",
-  JSON.stringify(verifyReceiptOffline(tampered, keys)),
-);
-process.exit(result.valid ? 0 : 1);
+const tamperedResult = verifyReceiptOffline(tampered, keys);
+console.log("[offline] tampered:", JSON.stringify(tamperedResult));
+process.exitCode = result.valid && !tamperedResult.valid ? 0 : 1;

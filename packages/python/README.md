@@ -25,6 +25,10 @@ function that performs the action (your Stripe call, your WhatsApp send,
 your production deploy, your database write) and Guardian decides whether it may
 run.
 
+Set `GUARDIAN_AGENT_CREDENTIAL` and `GUARDIAN_CONNECTION_ID` for an agent
+allowed to request the record-only `pay_invoice` tool. The function below
+simulates the payment; replace it with your own provider call.
+
 ```python
 import os
 from odingard_guardian import (
@@ -36,16 +40,15 @@ guard = Guard(client, connection_id=os.environ["GUARDIAN_CONNECTION_ID"])
 
 @guard("pay_invoice")
 def pay_invoice(invoice_id: str, amount_cents: int, payee_id: str):
-    return stripe.PaymentIntent.create(amount=amount_cents, currency="usd", ...)  # your code
+    return f"Simulated payment: {invoice_id}, {amount_cents} cents to {payee_id}"
 
 try:
-    pay_invoice("INV-1002", 1_240_000, "acme-supplies")
+    print(pay_invoice("INV-1002", 1_240_000, "acme-supplies"))
 except GuardianApprovalPending as held:      # ASK: nothing ran
-    notify_approver(held.request_id)
-    ...                                      # after the human approves:
-    result = held.resume()                   # runs your function, records the decision
+    input(f"Approve {held.request_id} in Guardian, then press Enter.")
+    print(held.resume().output)              # runs your function, records the decision
 except GuardianDenied as denied:             # DENY: your function never ran
-    log.warning("blocked: %s", denied.reason_code)
+    print(f"Blocked: {denied.reason_code}")
 ```
 
 | Decision  | What happens to your function                                                                                     |

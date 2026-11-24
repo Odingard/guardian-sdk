@@ -42,8 +42,12 @@ other networks and assets, and terms the guard cannot read exactly.
    rule ALLOW for it.
 
 ```bash
-npm install @odingard/guardian-x402 @odingard/guardian-sdk @x402/core @x402/evm @x402/fetch
+npm install @odingard/guardian-x402@0.1.1 @odingard/guardian-sdk \
+  @x402/core@~2.30.0 @x402/evm@~2.30.0 @x402/fetch@~2.30.0 viem
 ```
+
+The published Guardian adapter 0.1.1 requires x402 2.30.x. If you are
+working from this repository, use the versions in the workspace lockfile.
 
 ```ts
 import { createGuardianClient } from "@odingard/guardian-sdk";

@@ -8,7 +8,11 @@
 // There is no default host: point it at the API that signed the sample.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   fetchReceiptVerificationKeys,
   verifyReceiptOffline,
@@ -35,13 +39,33 @@ test("a tampered sample fails offline", () => {
   assert.equal(verifyReceiptOffline(tampered, bundled).valid, false);
 });
 
+test("the example requests the signing key for an older receipt", async (t) => {
+  const expectedPath = `/v1/receipts/verification-keys?kid=${receipt.proof.keyId}`;
+  const server = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(req.url === expectedPath ? bundled : { keys: [] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const example = fileURLToPath(new URL("../examples/verify-receipt.mjs", import.meta.url));
+  const sample = fileURLToPath(new URL("../examples/receipts/sample.greceipt.json", import.meta.url));
+  const { stdout } = await promisify(execFile)(process.execPath, [
+    example,
+    sample,
+    `http://127.0.0.1:${server.address().port}`,
+  ], { timeout: 5000 });
+  assert.match(stdout, /\[offline\] receipt: \{"valid":true/);
+  assert.match(stdout, /\[offline\] tampered: \{"valid":false/);
+});
+
 test(
   "sample verifies against the keys published by Guardian",
   {
     skip: !API && "set GUARDIAN_LIVE_KEYS_URL to run",
   },
   async () => {
-    const keys = await fetchReceiptVerificationKeys(API);
+    const keys = await fetchReceiptVerificationKeys(API, { forReceipt: receipt });
     assert.equal(keys.ok, true, JSON.stringify(keys));
     const result = verifyReceiptOffline(receipt, keys.keys);
     assert.equal(result.valid, true, JSON.stringify(result));

@@ -5,7 +5,8 @@ Guardian's plugin deciding every tool call before it runs.
     $12,400 to a known supplier         → ASK:   held; the same call after approval runs
     $9,000 to a payee nobody approved   → DENY:  the tool never runs
 
-Run:  pip install "odingard-guardian[google-adk]" && python google_adk_agent.py
+From the repo root: pip install -e "./packages/python[google-adk]"
+                    python examples/python/google_adk_agent.py
 
 The agent loop is ADK's own (LlmAgent, App, Runner, InMemorySessionService).
 Labels are honest: [SCRIPTED model] stands in for the LLM, so no API key is

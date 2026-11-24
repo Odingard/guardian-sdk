@@ -57,21 +57,29 @@ create the account, the agent or the credential for you. Versions are listed in
 npm install @odingard/guardian-sdk
 ```
 
+Set `GUARDIAN_AGENT_CREDENTIAL` and `GUARDIAN_CONNECTION_ID` for a Guardian
+connection where this agent may request `refund_order`.
+
 ```ts
 import {
   classifyRequestResult,
   createGuardianClient,
 } from "@odingard/guardian-sdk";
 
+const { GUARDIAN_AGENT_CREDENTIAL, GUARDIAN_CONNECTION_ID } = process.env;
+if (!GUARDIAN_AGENT_CREDENTIAL || !GUARDIAN_CONNECTION_ID) {
+  throw new Error("Set GUARDIAN_AGENT_CREDENTIAL and GUARDIAN_CONNECTION_ID first.");
+}
+
 const guardian = createGuardianClient({
   baseUrl: "https://guardian-api.odingard.com",
-  credential: process.env.GUARDIAN_AGENT_CREDENTIAL!, // gak_… issued per agent
+  credential: GUARDIAN_AGENT_CREDENTIAL,
 });
 
 const d = classifyRequestResult(
   await guardian.request({
     action: "tool.invoke",
-    connectionId: "pcn_…",
+    connectionId: GUARDIAN_CONNECTION_ID,
     toolName: "refund_order",
     arguments: { orderId: "ord_123" },
   }),
