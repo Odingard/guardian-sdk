@@ -7,7 +7,8 @@ with Guardian deciding every tool call before it runs.
                                                  approves in Guardian, then pays
     $9,000 to a payee nobody approved   → DENY:  the tool never runs
 
-Run:  pip install "odingard-guardian[openai-agents]" && python openai_agents_agent.py
+From the repo root: pip install -e "./packages/python[openai-agents]"
+                    python examples/python/openai_agents_agent.py
 
 The agent, Runner.run, the tool call loop and the pause/resume are the Agents
 SDK's own. Labels are honest: [SCRIPTED model] asks for the three payments in

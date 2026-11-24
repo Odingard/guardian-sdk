@@ -12,7 +12,8 @@ A tool written in Python (@tool + create_sdk_mcp_server) goes through GuardianTo
     refund_order $48                       → ALLOW: the handler runs, receipt recorded
     refund_order $12,400                   → ASK:   held; the same call runs after approval
 
-Run:  pip install "odingard-guardian[claude-agent-sdk]" && python claude_agent_sdk_agent.py
+From the repo root: pip install -e "./packages/python[claude-agent-sdk]"
+                    python examples/python/claude_agent_sdk_agent.py
 
 No account, no API key and no Claude Code CLI are needed, and labels say what is real:
 

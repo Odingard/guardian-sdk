@@ -5,7 +5,8 @@ Guardian deciding before any money moves (the crewAI version of invoice_agent.py
     $12,400 to a known supplier         → ASK:   held; after a human approves, the same call runs
     $9,000 to a payee nobody approved   → DENY:  the tool never runs
 
-Run:  pip install "odingard-guardian[crewai]" && python crewai_agent.py   (Python 3.10+)
+From the repo root: pip install -e "./packages/python[crewai]"
+                    python examples/python/crewai_agent.py
 
 The agent, the task, the crew and the tool-calling loop are crewAI's own. A
 scripted model stands in for the LLM, so no API key is needed: it asks for one

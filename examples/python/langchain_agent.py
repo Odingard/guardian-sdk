@@ -6,7 +6,8 @@ pays supplier invoices, with Guardian deciding before each tool call runs.
                                                  request id; resuming runs it only after approval
     $9,000 to a payee nobody approved   → DENY:  the tool never runs; the model is told
 
-Run:  pip install "odingard-guardian[langchain]" && python langchain_agent.py
+From the repo root: pip install -e "./packages/python[langchain]"
+                    python examples/python/langchain_agent.py
 
 The agent loop, the ToolNode, the checkpointer and the interrupt are LangChain's and
 LangGraph's own. The model is scripted (no API key): it asks for the three payments in

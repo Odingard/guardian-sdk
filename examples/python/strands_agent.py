@@ -5,7 +5,8 @@ deciding before any tool runs.
     $12,400 to a known supplier         → ASK:   the agent run pauses until a human approves
     $9,000 to a payee nobody approved   → DENY:  the tool never runs
 
-Run:  pip install "odingard-guardian[strands]" && python strands_agent.py
+From the repo root: pip install -e "./packages/python[strands]"
+                    python examples/python/strands_agent.py
 
 The agent, its event loop and its hooks are Strands' own. Labels are honest:
 [SCRIPTED model] stands in for a model provider, so no model API key or
