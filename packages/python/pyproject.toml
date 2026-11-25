@@ -35,7 +35,7 @@ semantic-kernel = ["semantic-kernel>=1.47,<2"]
 crewai = ["crewai>=1.15.44,<2"]
 # Python 3.11+ (LangChain's own minimum). Tested with langchain 1.5.2,
 # langchain-core 1.8.4 and langgraph 1.2.24.
-langchain = ["langchain>=1.5,<2", "langchain-core>=1.8,<2", "langgraph>=1.2,<2"]
+langchain = ["langchain>=1.5,<2", "langchain-core>=1.8,<2", "langgraph>=1.2.24,<2"]
 # Python 3.10+ (the Agents SDK's own minimum). Tested with openai-agents 0.25.0.
 openai-agents = ["openai-agents>=0.25,<1"]
 # Python 3.11+. Tested with google-adk 2.15.0.
