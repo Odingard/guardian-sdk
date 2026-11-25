@@ -167,11 +167,11 @@ describe("portable receipt verification", () => {
     const result = verifyReceiptOffline(receipt, keys);
     expect(result).toMatchObject({
       valid: true,
-      decision: "ALLOW",
+      decision: "ASK",
       effect: "verified",
       subject: {
-        tenantId: "ten_ec02b245b1cf621e14a51314e9fa2bc2",
-        requestId: "req_6afe9ef1155c8897f3e508f1009b3fa9",
+        tenantId: "ten_327cf3967b43fb05b1ee1a3004da0fb4",
+        requestId: "req_ed115664fb4a077ea375d69081bc4619",
       },
     });
   });
@@ -186,10 +186,7 @@ describe("portable receipt verification", () => {
     const onePurposeByte = structuredClone(receipt) as {
       action: { purpose: string };
     };
-    onePurposeByte.action.purpose = onePurposeByte.action.purpose.replace(
-      /t$/,
-      "T",
-    );
+    onePurposeByte.action.purpose = `${onePurposeByte.action.purpose} (edited)`;
     expect(onePurposeByte.action.purpose).not.toBe(
       (receipt as { action: { purpose: string } }).action.purpose,
     );
