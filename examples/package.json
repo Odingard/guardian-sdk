@@ -21,7 +21,7 @@
   "dependencies": {
     "@odingard/guardian-sdk": "^0.6.0",
     "@odingard/guardian-steel": "^0.1.1",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.327",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.330",
     "@odingard/guardian-hook": "^0.4.0",
     "@odingard/guardian-mcp": "^0.5.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -29,6 +29,6 @@
     "@mastra/core": "1.85.0",
     "zod": "^4.6.7",
     "@odingard/guardian-opencommerce": "^0.1.0",
-    "@agent-cards/commerce-sdk": "0.31.3"
+    "@agent-cards/commerce-sdk": "0.31.7"
   }
 }
