@@ -31,13 +31,11 @@ jobs:
         run: |
           node --test scripts/sample-receipt.test.mjs
           node examples/verify-receipt.mjs > /dev/null
-      # Opt-in: also verify the sample against the keys Guardian publishes.
-      # Off by default; set the repository variable GUARDIAN_LIVE_KEYS_URL to the
-      # API base URL that publishes the bundled key to turn it on.
-      - name: Sample decision record verifies (published keys, opt-in)
-        if: vars.GUARDIAN_LIVE_KEYS_URL != ''
+      # Verify the sample against the keys Guardian publishes. Override the
+      # target API base URL with the GUARDIAN_LIVE_KEYS_URL repository variable.
+      - name: Sample decision record verifies (published keys)
         env:
-          GUARDIAN_LIVE_KEYS_URL: ${{ vars.GUARDIAN_LIVE_KEYS_URL }}
+          GUARDIAN_LIVE_KEYS_URL: ${{ vars.GUARDIAN_LIVE_KEYS_URL || 'https://guardian-api.odingard.com' }}
         run: node --test scripts/sample-receipt.test.mjs
       - name: Examples run (local demo policy)
         working-directory: examples
